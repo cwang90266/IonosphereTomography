@@ -1,0 +1,14 @@
+numpy
+xarray
+python-dateutil
+
+[lint]
+flake8
+flake8-bugbear
+flake8-builtins
+flake8-blind-except
+mypy
+types-python-dateutil
+
+[tests]
+pytest

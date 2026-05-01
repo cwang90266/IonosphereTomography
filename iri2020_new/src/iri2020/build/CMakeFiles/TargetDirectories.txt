@@ -1,0 +1,9 @@
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles/iri2020_driver.dir
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles/iri2020_namelist_driver.dir
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles/test.dir
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles/edit_cache.dir
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles/rebuild_cache.dir
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/test.dir
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/edit_cache.dir
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/rebuild_cache.dir

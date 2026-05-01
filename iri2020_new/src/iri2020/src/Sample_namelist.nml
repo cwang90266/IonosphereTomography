@@ -1,0 +1,29 @@
+&EDPSamples
+  npts = 2
+  nheight = 10
+  nSample = 2
+  height_grid = 100.0,120.0,140.0,150.0,200.0,250.0,500.0,750.0,900.0,1000.0
+  latitude(1) = 50.0
+  longitude(1) = -70.
+  latitude(2) = 30.0
+  longitude(2) = -80.
+  idxF107D = 1
+  idxIG12 = 2
+  idxRz12 = 3
+  idxfoF2 = -1
+  idxHmF2 = -1
+  idxB0 = -1
+  idxB1 = -1
+  year =2003
+  month = 11 
+  day = 12 
+  hour = 12 
+  minute = 0
+  second = 0
+  phy_inputs(1,1) = 172.8
+  phy_inputs(2,1) = 60.6
+  phy_inputs(3,1) = 56.3
+  phy_inputs(1,2) = 123.4
+  phy_inputs(2,2) = 69.6
+  phy_inputs(3,2) = 85.2
+/

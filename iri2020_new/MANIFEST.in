@@ -1,0 +1,3 @@
+include src/iri2020/CMakeLists.txt
+graft src/iri2020/src
+graft src/iri2020/data
