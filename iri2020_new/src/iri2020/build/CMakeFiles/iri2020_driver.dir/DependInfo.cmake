@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
   )
 # The set of files for implicit dependencies of each language:
 set(CMAKE_DEPENDS_CHECK_Fortran
-  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iri_driver.f90" "/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o"
+  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iri_driver.f90" "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o"
   )
 set(CMAKE_Fortran_COMPILER_ID "GNU")
 set(CMAKE_Fortran_SUBMODULE_SEP "@")
@@ -24,12 +24,12 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
 
 # Targets to which this target links which contain Fortran sources.
 set(CMAKE_Fortran_TARGET_LINKED_INFO_FILES
-  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/DependInfo.cmake"
+  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/DependInfo.cmake"
   )
 
 # Targets to which this target links which contain Fortran sources.
 set(CMAKE_Fortran_TARGET_FORWARD_LINKED_INFO_FILES
-  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/DependInfo.cmake"
+  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/DependInfo.cmake"
   )
 
 # Fortran module output directory.

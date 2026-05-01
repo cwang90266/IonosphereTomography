@@ -53,10 +53,10 @@ RM = /opt/homebrew/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020
+CMAKE_SOURCE_DIR = /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build
+CMAKE_BINARY_DIR = /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build
 
 # Include any dependencies generated for this target.
 include src/CMakeFiles/iri.dir/depend.make
@@ -73,121 +73,121 @@ src/CMakeFiles/iri.dir/codegen:
 .PHONY : src/CMakeFiles/iri.dir/codegen
 
 src/CMakeFiles/iri.dir/irisub.for.o: src/CMakeFiles/iri.dir/flags.make
-src/CMakeFiles/iri.dir/irisub.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irisub.for
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building Fortran object src/CMakeFiles/iri.dir/irisub.for.o"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irisub.for -o CMakeFiles/iri.dir/irisub.for.o
+src/CMakeFiles/iri.dir/irisub.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irisub.for
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building Fortran object src/CMakeFiles/iri.dir/irisub.for.o"
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irisub.for -o CMakeFiles/iri.dir/irisub.for.o
 
 src/CMakeFiles/iri.dir/irisub.for.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing Fortran source to CMakeFiles/iri.dir/irisub.for.i"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irisub.for > CMakeFiles/iri.dir/irisub.for.i
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irisub.for > CMakeFiles/iri.dir/irisub.for.i
 
 src/CMakeFiles/iri.dir/irisub.for.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling Fortran source to assembly CMakeFiles/iri.dir/irisub.for.s"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irisub.for -o CMakeFiles/iri.dir/irisub.for.s
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irisub.for -o CMakeFiles/iri.dir/irisub.for.s
 
 src/CMakeFiles/iri.dir/irifun.for.o: src/CMakeFiles/iri.dir/flags.make
-src/CMakeFiles/iri.dir/irifun.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irifun.for
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building Fortran object src/CMakeFiles/iri.dir/irifun.for.o"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irifun.for -o CMakeFiles/iri.dir/irifun.for.o
+src/CMakeFiles/iri.dir/irifun.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irifun.for
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building Fortran object src/CMakeFiles/iri.dir/irifun.for.o"
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irifun.for -o CMakeFiles/iri.dir/irifun.for.o
 
 src/CMakeFiles/iri.dir/irifun.for.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing Fortran source to CMakeFiles/iri.dir/irifun.for.i"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irifun.for > CMakeFiles/iri.dir/irifun.for.i
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irifun.for > CMakeFiles/iri.dir/irifun.for.i
 
 src/CMakeFiles/iri.dir/irifun.for.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling Fortran source to assembly CMakeFiles/iri.dir/irifun.for.s"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irifun.for -o CMakeFiles/iri.dir/irifun.for.s
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irifun.for -o CMakeFiles/iri.dir/irifun.for.s
 
 src/CMakeFiles/iri.dir/iritec.for.o: src/CMakeFiles/iri.dir/flags.make
-src/CMakeFiles/iri.dir/iritec.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iritec.for
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building Fortran object src/CMakeFiles/iri.dir/iritec.for.o"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iritec.for -o CMakeFiles/iri.dir/iritec.for.o
+src/CMakeFiles/iri.dir/iritec.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iritec.for
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building Fortran object src/CMakeFiles/iri.dir/iritec.for.o"
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iritec.for -o CMakeFiles/iri.dir/iritec.for.o
 
 src/CMakeFiles/iri.dir/iritec.for.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing Fortran source to CMakeFiles/iri.dir/iritec.for.i"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iritec.for > CMakeFiles/iri.dir/iritec.for.i
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iritec.for > CMakeFiles/iri.dir/iritec.for.i
 
 src/CMakeFiles/iri.dir/iritec.for.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling Fortran source to assembly CMakeFiles/iri.dir/iritec.for.s"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iritec.for -o CMakeFiles/iri.dir/iritec.for.s
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iritec.for -o CMakeFiles/iri.dir/iritec.for.s
 
 src/CMakeFiles/iri.dir/iridreg.for.o: src/CMakeFiles/iri.dir/flags.make
-src/CMakeFiles/iri.dir/iridreg.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iridreg.for
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building Fortran object src/CMakeFiles/iri.dir/iridreg.for.o"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iridreg.for -o CMakeFiles/iri.dir/iridreg.for.o
+src/CMakeFiles/iri.dir/iridreg.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iridreg.for
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building Fortran object src/CMakeFiles/iri.dir/iridreg.for.o"
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iridreg.for -o CMakeFiles/iri.dir/iridreg.for.o
 
 src/CMakeFiles/iri.dir/iridreg.for.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing Fortran source to CMakeFiles/iri.dir/iridreg.for.i"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iridreg.for > CMakeFiles/iri.dir/iridreg.for.i
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iridreg.for > CMakeFiles/iri.dir/iridreg.for.i
 
 src/CMakeFiles/iri.dir/iridreg.for.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling Fortran source to assembly CMakeFiles/iri.dir/iridreg.for.s"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iridreg.for -o CMakeFiles/iri.dir/iridreg.for.s
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iridreg.for -o CMakeFiles/iri.dir/iridreg.for.s
 
 src/CMakeFiles/iri.dir/iriflip.for.o: src/CMakeFiles/iri.dir/flags.make
-src/CMakeFiles/iri.dir/iriflip.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iriflip.for
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building Fortran object src/CMakeFiles/iri.dir/iriflip.for.o"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iriflip.for -o CMakeFiles/iri.dir/iriflip.for.o
+src/CMakeFiles/iri.dir/iriflip.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iriflip.for
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building Fortran object src/CMakeFiles/iri.dir/iriflip.for.o"
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iriflip.for -o CMakeFiles/iri.dir/iriflip.for.o
 
 src/CMakeFiles/iri.dir/iriflip.for.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing Fortran source to CMakeFiles/iri.dir/iriflip.for.i"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iriflip.for > CMakeFiles/iri.dir/iriflip.for.i
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iriflip.for > CMakeFiles/iri.dir/iriflip.for.i
 
 src/CMakeFiles/iri.dir/iriflip.for.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling Fortran source to assembly CMakeFiles/iri.dir/iriflip.for.s"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iriflip.for -o CMakeFiles/iri.dir/iriflip.for.s
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iriflip.for -o CMakeFiles/iri.dir/iriflip.for.s
 
 src/CMakeFiles/iri.dir/igrf.for.o: src/CMakeFiles/iri.dir/flags.make
-src/CMakeFiles/iri.dir/igrf.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/igrf.for
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building Fortran object src/CMakeFiles/iri.dir/igrf.for.o"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/igrf.for -o CMakeFiles/iri.dir/igrf.for.o
+src/CMakeFiles/iri.dir/igrf.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/igrf.for
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building Fortran object src/CMakeFiles/iri.dir/igrf.for.o"
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/igrf.for -o CMakeFiles/iri.dir/igrf.for.o
 
 src/CMakeFiles/iri.dir/igrf.for.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing Fortran source to CMakeFiles/iri.dir/igrf.for.i"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/igrf.for > CMakeFiles/iri.dir/igrf.for.i
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/igrf.for > CMakeFiles/iri.dir/igrf.for.i
 
 src/CMakeFiles/iri.dir/igrf.for.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling Fortran source to assembly CMakeFiles/iri.dir/igrf.for.s"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/igrf.for -o CMakeFiles/iri.dir/igrf.for.s
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/igrf.for -o CMakeFiles/iri.dir/igrf.for.s
 
 src/CMakeFiles/iri.dir/cira.for.o: src/CMakeFiles/iri.dir/flags.make
-src/CMakeFiles/iri.dir/cira.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/cira.for
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building Fortran object src/CMakeFiles/iri.dir/cira.for.o"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/cira.for -o CMakeFiles/iri.dir/cira.for.o
+src/CMakeFiles/iri.dir/cira.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/cira.for
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building Fortran object src/CMakeFiles/iri.dir/cira.for.o"
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/cira.for -o CMakeFiles/iri.dir/cira.for.o
 
 src/CMakeFiles/iri.dir/cira.for.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing Fortran source to CMakeFiles/iri.dir/cira.for.i"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/cira.for > CMakeFiles/iri.dir/cira.for.i
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/cira.for > CMakeFiles/iri.dir/cira.for.i
 
 src/CMakeFiles/iri.dir/cira.for.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling Fortran source to assembly CMakeFiles/iri.dir/cira.for.s"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/cira.for -o CMakeFiles/iri.dir/cira.for.s
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/cira.for -o CMakeFiles/iri.dir/cira.for.s
 
 src/CMakeFiles/iri.dir/rocdrift.for.o: src/CMakeFiles/iri.dir/flags.make
-src/CMakeFiles/iri.dir/rocdrift.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/rocdrift.for
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building Fortran object src/CMakeFiles/iri.dir/rocdrift.for.o"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/rocdrift.for -o CMakeFiles/iri.dir/rocdrift.for.o
+src/CMakeFiles/iri.dir/rocdrift.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/rocdrift.for
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building Fortran object src/CMakeFiles/iri.dir/rocdrift.for.o"
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/rocdrift.for -o CMakeFiles/iri.dir/rocdrift.for.o
 
 src/CMakeFiles/iri.dir/rocdrift.for.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing Fortran source to CMakeFiles/iri.dir/rocdrift.for.i"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/rocdrift.for > CMakeFiles/iri.dir/rocdrift.for.i
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/rocdrift.for > CMakeFiles/iri.dir/rocdrift.for.i
 
 src/CMakeFiles/iri.dir/rocdrift.for.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling Fortran source to assembly CMakeFiles/iri.dir/rocdrift.for.s"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/rocdrift.for -o CMakeFiles/iri.dir/rocdrift.for.s
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/rocdrift.for -o CMakeFiles/iri.dir/rocdrift.for.s
 
 src/CMakeFiles/iri.dir/irisub_height_grid.for.o: src/CMakeFiles/iri.dir/flags.make
-src/CMakeFiles/iri.dir/irisub_height_grid.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irisub_height_grid.for
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building Fortran object src/CMakeFiles/iri.dir/irisub_height_grid.for.o"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irisub_height_grid.for -o CMakeFiles/iri.dir/irisub_height_grid.for.o
+src/CMakeFiles/iri.dir/irisub_height_grid.for.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irisub_height_grid.for
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building Fortran object src/CMakeFiles/iri.dir/irisub_height_grid.for.o"
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irisub_height_grid.for -o CMakeFiles/iri.dir/irisub_height_grid.for.o
 
 src/CMakeFiles/iri.dir/irisub_height_grid.for.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing Fortran source to CMakeFiles/iri.dir/irisub_height_grid.for.i"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irisub_height_grid.for > CMakeFiles/iri.dir/irisub_height_grid.for.i
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irisub_height_grid.for > CMakeFiles/iri.dir/irisub_height_grid.for.i
 
 src/CMakeFiles/iri.dir/irisub_height_grid.for.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling Fortran source to assembly CMakeFiles/iri.dir/irisub_height_grid.for.s"
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/irisub_height_grid.for -o CMakeFiles/iri.dir/irisub_height_grid.for.s
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && /opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/irisub_height_grid.for -o CMakeFiles/iri.dir/irisub_height_grid.for.s
 
 iri: src/CMakeFiles/iri.dir/irisub.for.o
 iri: src/CMakeFiles/iri.dir/irifun.for.o
@@ -206,10 +206,10 @@ src/CMakeFiles/iri.dir/build: iri
 .PHONY : src/CMakeFiles/iri.dir/build
 
 src/CMakeFiles/iri.dir/clean:
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src && $(CMAKE_COMMAND) -P CMakeFiles/iri.dir/cmake_clean.cmake
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src && $(CMAKE_COMMAND) -P CMakeFiles/iri.dir/cmake_clean.cmake
 .PHONY : src/CMakeFiles/iri.dir/clean
 
 src/CMakeFiles/iri.dir/depend:
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020 /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/DependInfo.cmake "--color=$(COLOR)" iri
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020 /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/DependInfo.cmake "--color=$(COLOR)" iri
 .PHONY : src/CMakeFiles/iri.dir/depend
 

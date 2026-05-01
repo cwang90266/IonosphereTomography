@@ -468,7 +468,8 @@ c      CHARACTER FILNAM*53
      &  NOTEM,NOION,TENEOP,OLD79,JF(50),URSIFO,igin,igino,mess,
      &  dnight,enight,fnight,fstorm_on,estorm_on,B0IN,B1IN,
      &  fof2ino,hmf2ino,f107in,f107ino,f107_81in,f107_81ino,
-     &  sam_moye
+     &  sam_moye, apIN
+      real ap_current_IN
 
       COMMON /CONST/UMR,PI  /const1/humr,dumr   /ARGEXP/ARGMAX
      &   /IGRF1/ERA,AQUAD,BQUAD,DIMO	/BLOCK2/B0,B1,C1
@@ -485,7 +486,13 @@ c      CHARACTER FILNAM*53
       DATA icalls/0/, dplas/100,150,10,10/
 	  DATA DTE/5.,5.,10.,20.,20./, DTI/5.,5.,10.,20.,20./
 
-        save
+      save
+      apIN=(.not.jf(49))
+      IF(apIN) THEN
+          ap_current_IN=OARR(51)
+      else
+          oarr(51)=-1.
+      ENDIF
 
         mess=jf(34)
 
@@ -1123,6 +1130,9 @@ C observed (at the ground) value.
         f107365=cov
         call APF_ONLY(iyear,month,iday,F107_daily,F107PD,F107_81,
      &      F107_365,IAP_daily,isdate)
+        IF(apIN) THEN
+          IAP_daily=ap_current_IN
+        endif
         if(.not.f107in.or..not.f107_81in) then
         	if(F107_daily.gt.-11.1) then
             	f107d=f107_daily
@@ -1371,6 +1381,11 @@ c
 c        if(fstorm_on.or.jf(33).or.estorm_on) then
 c           if(.not.sam_date.or..not.sam_ut) then
         call apf(isdate,hourut,indap)
+        IF(apIN) THEN
+          do ki =1,13
+             indap(ki)=ap_current_IN
+          enddo
+        endif
 c            endif
 c            endif
 		index_3h_ap=indap(13)
@@ -1934,6 +1949,11 @@ C
       IF(NOTEM.and.(NOION.or..not.RBTT)) GOTO 240
       SEC=hourut*3600.
       CALL APFMSIS(ISDATE,HOURUT,IAPO)
+      IF(apIN) THEN
+        do ki =1,7
+           indap(ki)=ap_current_IN
+        enddo
+      endif
       if(iapo(2).lt.0.0) then
            SWMI(9)=0.
            IAPO(1)=0.
