@@ -1,0 +1,8 @@
+numpy
+xarray
+netcdf4
+matplotlib
+tensorflow
+scikit-learn
+scipy
+graphviz
