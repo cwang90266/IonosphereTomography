@@ -7,10 +7,10 @@ set(CMAKE_DEPENDS_GENERATOR "Unix Makefiles")
 # The top level Makefile was generated from the following files:
 set(CMAKE_MAKEFILE_DEPENDS
   "CMakeCache.txt"
-  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/CMakeLists.txt"
+  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/CMakeLists.txt"
   "CMakeFiles/4.2.3/CMakeFortranCompiler.cmake"
   "CMakeFiles/4.2.3/CMakeSystem.cmake"
-  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/CMakeLists.txt"
+  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/CMakeLists.txt"
   "/opt/homebrew/share/cmake/Modules/CMakeCommonLanguageInclude.cmake"
   "/opt/homebrew/share/cmake/Modules/CMakeFortranInformation.cmake"
   "/opt/homebrew/share/cmake/Modules/CMakeGenericSystem.cmake"

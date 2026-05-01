@@ -17,6 +17,7 @@ real :: tecbo, tecto
 real, allocatable :: altkm(:)
 character(1024) :: argv
 integer :: i
+integer :: iParam_Switch
 
 !> jf switch description: https://irimodel.org/IRI-Switches-options.pdf
 
@@ -39,8 +40,10 @@ jf(39:40) = .false.
 jf(47) = .false.
 
 ! --- command line input
-if (command_argument_count() /= 11) then
+if ((command_argument_count() /= 11) .and. (command_argument_count() /= 16)) then
   write(stderr,*) 'need input parameters: year month day hour minute second glat glon min_alt_km max_alt_km step_alt_km'
+  write(stderr,*) 'or need input parameters: year month day hour minute second glat glon min_alt_km max_alt_km step_alt_km 1 f0F2 HmF2 B0 B1'
+  write(stderr,*) 'or need input parameters: year month day hour minute second glat glon min_alt_km max_alt_km step_alt_km 2 f107D 107_81 IG Rz'
   stop 1
 endif
 
@@ -59,6 +62,43 @@ do i = 1,3
   call get_command_argument(8+i, argv)
   read(argv,*) alt_km_range(i)
 enddo
+
+if (command_argument_count() == 16) then
+! Processing optional inputs
+  call get_command_argument(12, argv)
+  read(argv,*) iParam_Switch
+  if (iParam_Switch == 1) then
+! User defined foF2, hmF2,B0,B1
+    call get_command_argument(13, argv)
+    jf(8) = .false.
+    read(argv,*) OARR(1)
+    call get_command_argument(14, argv)
+    jf(9) = .false.
+    read(argv,*) OARR(2)
+    jf(4) = .false.
+    jf(31) = .false.
+    call get_command_argument(15, argv)
+    jf(43) = .false.
+    read(argv,*) OARR(10)
+    call get_command_argument(16, argv)
+    jf(44) = .false.
+    read(argv,*) OARR(35)
+  else
+! User defined f107D, F107_81, IG12, Rz12
+    call get_command_argument(13, argv)
+    jf(25) = .false.
+    read(argv,*) OARR(41)
+    call get_command_argument(14, argv)
+    jf(49) = .false.
+    read(argv,*) OARR(51)
+    call get_command_argument(15, argv)
+    jf(27) = .false.
+    read(argv,*) OARR(39)
+    call get_command_argument(16, argv)
+    jf(17) = .false.
+    read(argv,*) OARR(33)
+  endif
+endif
 
 ! --- parse
 Nalt = int((alt_km_range(2) - alt_km_range(1)) / alt_km_range(3)) + 1

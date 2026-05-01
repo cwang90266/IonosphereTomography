@@ -1,6 +1,6 @@
 file(REMOVE_RECURSE
-  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver"
-  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver.pdb"
+  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver"
+  "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver.pdb"
   "CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o"
 )
 

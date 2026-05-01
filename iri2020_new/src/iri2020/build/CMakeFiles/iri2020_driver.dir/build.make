@@ -53,10 +53,10 @@ RM = /opt/homebrew/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020
+CMAKE_SOURCE_DIR = /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build
+CMAKE_BINARY_DIR = /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build
 
 # Include any dependencies generated for this target.
 include CMakeFiles/iri2020_driver.dir/depend.make
@@ -73,17 +73,17 @@ CMakeFiles/iri2020_driver.dir/codegen:
 .PHONY : CMakeFiles/iri2020_driver.dir/codegen
 
 CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o: CMakeFiles/iri2020_driver.dir/flags.make
-CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iri_driver.f90
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building Fortran object CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o"
-	/opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iri_driver.f90 -o CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o
+CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iri_driver.f90
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building Fortran object CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o"
+	/opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -c /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iri_driver.f90 -o CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o
 
 CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing Fortran source to CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.i"
-	/opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iri_driver.f90 > CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.i
+	/opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -E /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iri_driver.f90 > CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.i
 
 CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling Fortran source to assembly CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.s"
-	/opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/src/iri_driver.f90 -o CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.s
+	/opt/homebrew/bin/gfortran $(Fortran_DEFINES) $(Fortran_INCLUDES) $(Fortran_FLAGS) -S /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/src/iri_driver.f90 -o CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.s
 
 # Object files for target iri2020_driver
 iri2020_driver_OBJECTS = \
@@ -91,33 +91,33 @@ iri2020_driver_OBJECTS = \
 
 # External object files for target iri2020_driver
 iri2020_driver_EXTERNAL_OBJECTS = \
-"/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/irisub.for.o" \
-"/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/irifun.for.o" \
-"/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/iritec.for.o" \
-"/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/iridreg.for.o" \
-"/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/iriflip.for.o" \
-"/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/igrf.for.o" \
-"/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/cira.for.o" \
-"/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/rocdrift.for.o" \
-"/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/src/CMakeFiles/iri.dir/irisub_height_grid.for.o"
+"/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/irisub.for.o" \
+"/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/irifun.for.o" \
+"/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/iritec.for.o" \
+"/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/iridreg.for.o" \
+"/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/iriflip.for.o" \
+"/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/igrf.for.o" \
+"/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/cira.for.o" \
+"/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/rocdrift.for.o" \
+"/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir/irisub_height_grid.for.o"
 
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/irisub.for.o
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/irifun.for.o
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/iritec.for.o
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/iridreg.for.o
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/iriflip.for.o
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/igrf.for.o
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/cira.for.o
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/rocdrift.for.o
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/irisub_height_grid.for.o
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: CMakeFiles/iri2020_driver.dir/build.make
-/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver: CMakeFiles/iri2020_driver.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking Fortran executable /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver"
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: CMakeFiles/iri2020_driver.dir/src/iri_driver.f90.o
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/irisub.for.o
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/irifun.for.o
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/iritec.for.o
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/iridreg.for.o
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/iriflip.for.o
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/igrf.for.o
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/cira.for.o
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/rocdrift.for.o
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: src/CMakeFiles/iri.dir/irisub_height_grid.for.o
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: CMakeFiles/iri2020_driver.dir/build.make
+/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver: CMakeFiles/iri2020_driver.dir/link.txt
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking Fortran executable /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/iri2020_driver.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.
-CMakeFiles/iri2020_driver.dir/build: /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/iri2020_driver
+CMakeFiles/iri2020_driver.dir/build: /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/iri2020_driver
 .PHONY : CMakeFiles/iri2020_driver.dir/build
 
 CMakeFiles/iri2020_driver.dir/clean:
@@ -125,6 +125,6 @@ CMakeFiles/iri2020_driver.dir/clean:
 .PHONY : CMakeFiles/iri2020_driver.dir/clean
 
 CMakeFiles/iri2020_driver.dir/depend:
-	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020 /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020 /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build /Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/build/CMakeFiles/iri2020_driver.dir/DependInfo.cmake "--color=$(COLOR)" iri2020_driver
+	cd /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020 /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020 /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build /Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles/iri2020_driver.dir/DependInfo.cmake "--color=$(COLOR)" iri2020_driver
 .PHONY : CMakeFiles/iri2020_driver.dir/depend
 

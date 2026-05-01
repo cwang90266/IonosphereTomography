@@ -1979,6 +1979,11 @@ C
       IF(NOTEM.and.(NOION.or..not.RBTT)) GOTO 240
       SEC=hourut*3600.
       CALL APFMSIS(ISDATE,HOURUT,IAPO)
+      IF(apIN) THEN
+        do ki =1,7
+           indap(ki)=ap_current_IN
+        enddo
+      endif
       if(iapo(2).lt.0.0) then
            SWMI(9)=0.
            IAPO(1)=0.
