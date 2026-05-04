@@ -46,7 +46,7 @@ read(argv,*) output_filename
 OPEN(UNIT=10,FILE=namelist_filename,status='OLD')
 READ(10,EDPSamples)
 CLOSE(UNIT=10)
-! write(*,*) 'Completed reading namelist'
+!write(*,*) 'Completed reading namelist'
 ! Set inputs to irisub that are common to all spatial points and samples
 mmdd = month * 100 + day
 dhour_default = hour + minute / 60. + second / 3600.

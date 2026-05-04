@@ -254,8 +254,8 @@ C**************** ALL-IN-ONE SUBROUTINE  *************************
 C*****************************************************************
 C
 C
-       SUBROUTINE IRISUB_height_grid(JF,JMAG,ALATI,ALONG,IYYYY,MMDD,DHOUR,
-     &    NHeight,HEIGHT_Input,OUTF,OARR)
+       SUBROUTINE IRISUB_height_grid(JF,JMAG,ALATI,ALONG,
+     &    IYYYY,MMDD,DHOUR,NHeight,HEIGHT_Input,OUTF,OARR)
 C-----------------------------------------------------------------
 C
 C INPUT:  JF(1:50)      true/false switches for several options
@@ -2215,7 +2215,7 @@ c        jfirste=0
         jfirsta=1
         jfirste=1
 
-        write(*,*) 'Loop at 300'
+!        write(*,*) 'Loop at 300'
 
 300     CALL SOCO(daynr,HOUR,LATI,LONGI,height,SUNDEC,XHI,SAX,SUX)
 c no longer calculating invdip for each height

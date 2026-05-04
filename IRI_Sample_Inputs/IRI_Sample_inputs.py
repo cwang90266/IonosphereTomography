@@ -30,7 +30,7 @@ def get_apf107():
     response.raise_for_status()
     input_lines = response.text.splitlines()
     
-    local_file = "f107_data.dat"
+    local_file = "apf107_data.dat"
     
     urllib.request.urlretrieve(url, local_file)
 
