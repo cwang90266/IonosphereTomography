@@ -19,7 +19,7 @@ __all__ = ["IRI"]
 
 def IRI(time: str | datetime, altkmrange: list[float], glat: float, glon: float,
         foF2: float = None, hmF2: float = None, B0: float = None, B1: float = None,
-        f107D: float=None, f107_81:float = None, IG12: float = None, Rz12: float = None) -> xarray.Dataset:
+        f107D: float=None, ap:float = None, IG12: float = None, Rz12: float = None) -> xarray.Dataset:
     if isinstance(time, str):
         time = parse(time)
 
@@ -42,7 +42,7 @@ def IRI(time: str | datetime, altkmrange: list[float], glat: float, glon: float,
             build()
 
         if foF2 is not None and hmF2 is not None and B0 is not None and B1 is not None:
-            print(f"foF2= {foF2}, hmF2={hmF2}, B0={B0}, B1={B1}")
+            #print(f"foF2= {foF2}, hmF2={hmF2}, B0={B0}, B1={B1}")
             cmd = [
                 str(exe),
                 str(time.year),
@@ -62,8 +62,8 @@ def IRI(time: str | datetime, altkmrange: list[float], glat: float, glon: float,
                 str(B0),
                 str(B1)
             ]
-        elif f107D is not None and f107_81 is not None and IG12 is not None and Rz12 is not None:
-            print(f"f107D= {f107D}, f107_81={f107_81}, IG12={IG12}, Rz12={Rz12}")
+        elif f107D is not None and ap is not None and IG12 is not None and Rz12 is not None:
+            #print(f"f107D= {f107D}, ap={ap}, IG12={IG12}, Rz12={Rz12}")
             cmd = [
                 str(exe),
                 str(time.year),
@@ -79,7 +79,7 @@ def IRI(time: str | datetime, altkmrange: list[float], glat: float, glon: float,
                 str(altkmrange[2]),
                 str(0),
                 str(f107D),
-                str(f107_81),
+                str(ap),
                 str(IG12),
                 str(Rz12)
             ]
@@ -133,5 +133,5 @@ def IRI(time: str | datetime, altkmrange: list[float], glat: float, glon: float,
     iono["foF2"] = (("time"), [arr[99]])
     iono["B0"] = (("time"), [arr[9]])
     iono["B1"] = (("time"), [arr[34]])
-    print(iono)
+    #print(iono)
     return iono
