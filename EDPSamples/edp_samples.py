@@ -109,7 +109,7 @@ def get_IRI2020_EDP(DateTime: str,
         iri_name += ".exe"
 
     # %% run IRI with hard coded path to IRI2020 directory
-    IRIPath = "/Users/cwang/Documents/Consulting/PlanetIQ/Code/iri2020/src/iri2020/"
+    IRIPath = "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/"
     exe = IRIPath+"iri2020_namelist_driver"
     IRIDataPath = IRIPath+"Data"
     data_path = IRIDataPath+"/mcsat*.dat"
@@ -444,8 +444,8 @@ def find_containing_triangles(
         max_k = n_tri
 
     # 3D unit vectors
-    V = latlon_to_xyz(geolocation[:, 0], geolocation[:, 1], degrees=degrees)  # (N, 3)
-    Q = latlon_to_xyz(query_latlon[:, 0], query_latlon[:, 1], degrees=degrees)  # (M, 3)
+    V = _geodetic_to_ecef(geolocation[:, 0], geolocation[:, 1], degrees=degrees)  # (N, 3)
+    Q = _geodetic_to_ecef(query_latlon[:, 0], query_latlon[:, 1], degrees=degrees)  # (M, 3)
     M = Q.shape[0]
 
     # Triangle corners
@@ -886,10 +886,9 @@ class EDPSamples(xr.Dataset):
             raise ValueError("geolocation must have shape (n_geo, 2) for lat, lon")
         n_geo = geolocation.shape[0]
         
-        if edps == None :
+        if edps.all() == None :
             if evaluate_iri == 1:
-                #edps=self.get_IRI2020_EDP(DateTime,altitude,geolocation,sampling_parameters)
-                edps=np.ndarray((n_height,n_geo,n_sample))
+                edps=self.get_IRI2020_EDP(DateTime,altitude,geolocation,sampling_parameters)
             else:
                 edps=np.ndarray((n_height,n_geo,n_sample))
         else:
