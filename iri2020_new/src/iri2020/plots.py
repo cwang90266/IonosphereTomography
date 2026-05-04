@@ -157,15 +157,15 @@ def altprofile_sensitivity(iParam_Switch:int,iono_initial: xarray.Dataset,
         pn.plot(iono["ne"], iono.alt_km,color=(0,0,1), label=f"max hmF2: {iono.hmF2.item()}")
     else:
         pn.plot(iono_initial["ne"], iono_initial.alt_km,linewidth=3,color=(0,0,0),
-             label=f"Nominal, f107_81: {iono_initial.f107_81.item()}")
+             label=f"Nominal, ap: {iono_initial.ap.item()}")
         iono = iono_hmF2[0]
-        pn.plot(iono["ne"], iono.alt_km,color=(1,0,0), label=f"min f107_81: {iono.f107_81.item()}")
+        pn.plot(iono["ne"], iono.alt_km,color=(1,0,0), label=f"min ap: {iono.ap.item()}")
         iono = iono_hmF2[1]
-        pn.plot(iono["ne"], iono.alt_km,color=(0,1,0), label=f"mean f107_81: {iono.f107_81.item()}")
+        pn.plot(iono["ne"], iono.alt_km,color=(0,1,0), label=f"mean ap: {iono.ap.item()}")
         iono = iono_hmF2[2]
-        pn.plot(iono["ne"], iono.alt_km,color=(1,0,1), label=f"median f107_81: {iono.f107_81.item()}")
+        pn.plot(iono["ne"], iono.alt_km,color=(1,0,1), label=f"median ap: {iono.ap.item()}")
         iono = iono_hmF2[3]
-        pn.plot(iono["ne"], iono.alt_km,color=(0,0,1), label=f"max f107_81: {iono.f107_81.item()}")
+        pn.plot(iono["ne"], iono.alt_km,color=(0,0,1), label=f"max ap: {iono.ap.item()}")
     pn.set_xlabel("Density (m$^{-3}$)")
     pn.set_ylabel("Altitude (km)")
     pn.set_xscale("log")
