@@ -113,7 +113,8 @@ def get_IRI2020_EDP(DateTime: str,
     exe = IRIPath+"iri2020_namelist_driver"
     IRIDataPath = IRIPath+"Data"
     data_path = IRIDataPath+"/mcsat*.dat"
-    cmd = "ln -s " + data_path + " .;" 
+    cmd = "rm " +IRI_output_filename+";"
+    cmd = cmd+"ln -s " + data_path + " .;" 
     data_path = IRIDataPath+"/dgrf*.dat"
     cmd = cmd + "ln -s " + data_path + " .;" 
     data_path = IRIDataPath+"/*.asc"
@@ -139,6 +140,12 @@ def write_IRI2020_namelist(DateTime: str,
     # Write the namelist file to be read by IRI2020_namelis_driver
     #
     DateTime = parse(DateTime)
+    if not hasattr(DateTime,'hour'):
+        DateTime.hour = 0
+    if not hasattr(DateTime,'minute'):
+        DateTime.minute = DateTime.minute
+    if not hasattr(DateTime,'second'):
+        DateTime.second = DateTime.second
     #
     #    NAMELIST/EDPSamples/npts, nheight, nSample, height_grid,latitude,longitude, &
     #    idxF107D,idxap,idxIG12,idxRz12,idxfoF2,idxHmF2,idxB0,idxB1, idxHour, &
@@ -215,7 +222,7 @@ def read_IRI2020_binary_output(IRI_output_filename: str) -> np.ndarray:
     npts=int.from_bytes(data[0:4],byteorder="little",signed=True) 
     nSample=int.from_bytes(data[4:8],byteorder="little",signed=True)
     nheight=int.from_bytes(data[8:12],byteorder="little",signed=True)
-    print([nheight,npts,nSample])
+    #print([nheight,npts,nSample])
     edps = np.ndarray([nheight,npts,nSample])
     cbyte = 12
     for idxSample in range(nSample):
@@ -886,9 +893,9 @@ class EDPSamples(xr.Dataset):
             raise ValueError("geolocation must have shape (n_geo, 2) for lat, lon")
         n_geo = geolocation.shape[0]
         
-        if edps.all() == None :
+        if edps is None :
             if evaluate_iri == 1:
-                edps=self.get_IRI2020_EDP(DateTime,altitude,geolocation,sampling_parameters)
+                edps=get_IRI2020_EDP(DateTime,altitude,geolocation,sampling_parameters)
             else:
                 edps=np.ndarray((n_height,n_geo,n_sample))
         else:
