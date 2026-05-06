@@ -14,8 +14,7 @@ sys.path.insert(0, target_dir)
 target_dir = os.path.abspath("/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/EDPSamples")
 sys.path.insert(0, target_dir)
 from IRI_Sample_inputs import IRI_Sample_Inputs as IRIs
-import edp_samples as EDPS_Util
-from  edp_samples import EDPSamples as EDPS
+from edp_samples import EDPSamples as EDPS
 
 DateTime_str = "2003-11-21T12"
 Sample_Param = IRIs(DateTime_str)
@@ -34,8 +33,13 @@ Sample_Param = Sample_Param.quantileSamples(
 
 altitude = np.arange(100,1000,10)
 
-EDPSam = EDPS(DateTime_str,"Point", altitude,Sample_Param,evaluate_iri=1,Lon = 20, Lat= 30)
+EDPSam_Point = EDPS(DateTime_str,"Point", altitude,Sample_Param,evaluate_iri=1,Lon = 20, Lat= 30)
+EDPSam_Point.saveNetCDF("EDPSam_Point.nc")
 
-EDPSam.saveNetCDF("test.nc")
+EDPSam_MidLat = EDPS(DateTime_str,"Rectangle", altitude,Sample_Param,evaluate_iri=1,
+                     minLon = -20, maxLon=20, dLon=2.5, minLat= -30,maxLat=30, dLat=2.5)
+EDPSam_MidLat.saveNetCDF("EDPSam_MidLat.nc")
 
-EDPSam_1 = EDPS.fromNetCDF("test.nc")
+EDPSam_Polar = EDPS(DateTime_str,"Polar", altitude,Sample_Param,evaluate_iri=1,
+                    minLat= 75, dLat=2.5)
+EDPSam_Polar.saveNetCDF("EDPSam_Polar.nc")

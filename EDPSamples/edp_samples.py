@@ -114,11 +114,11 @@ def get_IRI2020_EDP(DateTime: str,
     IRIDataPath = IRIPath+"Data"
     data_path = IRIDataPath+"/mcsat*.dat"
     cmd = "rm " +IRI_output_filename+";"
-    cmd = cmd+"ln -s " + data_path + " .;" 
+    cmd = cmd+"ln -s -f " + data_path + " .;" 
     data_path = IRIDataPath+"/dgrf*.dat"
-    cmd = cmd + "ln -s " + data_path + " .;" 
+    cmd = cmd + "ln -s -f " + data_path + " .;" 
     data_path = IRIDataPath+"/*.asc"
-    cmd = cmd+ "ln -s " + data_path + " .;" 
+    cmd = cmd+ "ln -s -f " + data_path + " .;" 
     cmd =cmd + str(exe) +" " + namelist_filename + " "+IRI_output_filename+";"
     data_path = "mcsat*.dat"
     cmd = cmd+"rm " + data_path + ";" 
@@ -570,13 +570,15 @@ class EDPSamples(xr.Dataset):
     (see ``framework/iri2020_driver.py``). Persist with :meth:`saveNetCDF` /
     :meth:`fromNetCDF`.
     """
-
+    __slots__ = ()
+    
     DIM_HEIGHT = "height"
     DIM_GEO = "geo_vertex"
     DIM_SAMPLE = "sample"
     DIM_TRIANGLE = "mesh_triangle"
     DIM_PARAM = "param"
     DIM_GEO_COMPONENT = "lat_lon"
+    DIM_VERTEX = "vertex"
 
     COORD_ALTITUDE = "altitude"
     VAR_EDPS = "EDPs"
@@ -804,7 +806,7 @@ class EDPSamples(xr.Dataset):
         segment = np.column_stack((np.arange(num_points-1),np.arange(1,num_points)))
         return vertice, segment
 
-    def __init__(self,
+    def __init__(cls,
         DateTime: str,
         geo_type : Literal["Point","LOS","Rectangle","Polar"],
         altitude: np.ndarray,
@@ -868,11 +870,11 @@ class EDPSamples(xr.Dataset):
             case "LOS":
                 if LOS_LEO == None or LOS_GNSS == None or LOS_nb_point == None:
                     raise ValueError("For geo_type LOS, LOS_start, LOS_end and LOS_nb_point cannot be None.")
-                geolocation, mesh = self.genLineOfSight(LOS_LEO,LOS_GNSS,LOS_nb_point)
+                geolocation, mesh = cls.genLineOfSight(LOS_LEO,LOS_GNSS,LOS_nb_point)
             case "Rectangle":
                 if minLon == None or maxLon == None or dLon == None or minLat == None or maxLat == None or dLat == None:
                     raise ValueError("For geo_type Rectangle, minLon, maxLon, dLon,minLat,maxLat, and dLat cannot be None.")
-                geolocation, mesh = self.genRectangularArea(minLon, maxLon, dLon,minLat,maxLat, dLat)
+                geolocation, mesh = cls.genRectangularArea(minLon, maxLon, dLon,minLat,maxLat, dLat)
             case "Polar":
                 if minLat == None or dLat == None :
                     raise ValueError("For geo_type minLat, and dLat cannot be None.")
@@ -880,7 +882,7 @@ class EDPSamples(xr.Dataset):
                     pole="north"
                 else:
                     pole="south"
-                geolocation, mesh =self.genPolarArea(pole,minLat,dLat)
+                geolocation, mesh =cls.genPolarArea(pole,minLat,dLat)
             case _:
                 raise ValueError(f"Invalid geo_type: {geo_type}")
 
@@ -906,12 +908,12 @@ class EDPSamples(xr.Dataset):
             
 
         coords: MutableMapping[str, Any] = {
-            self.COORD_ALTITUDE: (self.DIM_HEIGHT, altitude),
-            self.DIM_GEO_COMPONENT: (
-                self.DIM_GEO_COMPONENT,
+            cls.COORD_ALTITUDE: (cls.DIM_HEIGHT, altitude),
+            cls.DIM_GEO_COMPONENT: (
+                cls.DIM_GEO_COMPONENT,
                 np.array(["latitude", "longitude"], dtype=object)),
-            self.DIM_PARAM: (
-                self.DIM_PARAM, sample_Param_name    
+            cls.DIM_PARAM: (
+                cls.DIM_PARAM, sample_Param_name    
             ),
             #self.DIM_PARAM: (self.DIM_PARAM, sampling_parameters),
         }
@@ -919,22 +921,22 @@ class EDPSamples(xr.Dataset):
         # Define variables
         #
         data_vars: MutableMapping[str, Any] = {
-            self.VAR_GEOLOCATION: (
-                (self.DIM_GEO, self.DIM_GEO_COMPONENT),
+            cls.VAR_GEOLOCATION: (
+                (cls.DIM_GEO, cls.DIM_GEO_COMPONENT),
                 geolocation,
                 {
                     "long_name": "geolocation",
                     "description": "latitude (column 0), longitude (column 1)",
                 },
             ),
-            self.VAR_EDPS: (
-                (self.DIM_HEIGHT, self.DIM_GEO, self.DIM_SAMPLE),
+            cls.VAR_EDPS: (
+                (cls.DIM_HEIGHT, cls.DIM_GEO, cls.DIM_SAMPLE),
                 edps,
                 {"long_name": "EDPs",
                  "description": "electron density profiles samples"}
                 ),
-            self.VAR_SAMPLING: (
-                (self.DIM_SAMPLE,self.DIM_PARAM),
+            cls.VAR_SAMPLING: (
+                (cls.DIM_SAMPLE,cls.DIM_PARAM),
                 sample_param_value,
                 {"long name": "sample_input_parameter",
                  "description": "sample inputs for IRI2020 model"}
@@ -947,8 +949,8 @@ class EDPSamples(xr.Dataset):
             if np.any(mesh < 0) or np.any(mesh >= n_geo):
                 raise ValueError("mesh indices must be in [0, n_geo)")
             
-            data_vars[self.VAR_MESH] = (
-                (self.DIM_TRIANGLE, self.DIM_VERTEX),
+            data_vars[cls.VAR_MESH] = (
+                (cls.DIM_TRIANGLE, cls.DIM_VERTEX),
                 mesh,
                 {
                     "long_name": "surface mesh",

@@ -30,6 +30,7 @@ real :: oarr(100), outf(20,1000)
 integer :: i, mmdd, iPts, iSample
 real :: dhour, dhour_default
 integer, parameter :: JMAG = 0
+integer :: NaN_Flag
 
 ! --- command line inputs are the file names for namelist and binary output
 if (command_argument_count() /= 2)  then
@@ -143,7 +144,14 @@ do iSample =1, nSample
 !    write(*,*) year, mmdd, dhour+25.,nheight, height_grid
     call IRISUB_Height_Grid(JF, JMAG, latitude(iPts), longitude(iPts), &
         year, mmdd, dhour+25., nheight, height_grid, outf,OARR)
-! Write electron density for a given sample at a given point        
+! Write electron density for a given sample at a given point
+    NaN_Flag = 0 
+    DO i=1, nheight 
+        if (ISNAN(outf(1,i)))  NaN_Flag =1
+    ENDDO
+    if (NaN_Flag == 1) THEN
+        WRITE(*,*) 'Ne contains NaN for sample, point ', iSample, iPts
+    ENDIF   
     WRITE(20) (outf(1,i),i=1,nheight)
   enddo
 enddo
