@@ -4,5 +4,5 @@ iri2020_namelist_driver
 .claude/
 Figures/
 DataFiles/
-__pychache__/
+__pycache__/
 *.o

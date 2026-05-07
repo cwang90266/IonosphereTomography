@@ -846,7 +846,7 @@ def main() -> None:
     print("All sections complete — displaying figures.")
     print("=" * 60)
     plt.tight_layout()
-    # plt.show()
+    plt.show()
     
 
 
