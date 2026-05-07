@@ -7,8 +7,10 @@ src/iri2020/__init__.py
 src/iri2020/altitude.py
 src/iri2020/base.py
 src/iri2020/build.py
+src/iri2020/get_iri_inputs.py
 src/iri2020/latitude.py
 src/iri2020/plots.py
+src/iri2020/sensitivity_profile.py
 src/iri2020/times.py
 src/iri2020/vprofile.py
 src/iri2020.egg-info/PKG-INFO
@@ -75,13 +77,16 @@ src/iri2020/data/ursi20.asc
 src/iri2020/data/ursi21.asc
 src/iri2020/data/ursi22.asc
 src/iri2020/src/CMakeLists.txt
+src/iri2020/src/Sample_namelist.nml
 src/iri2020/src/cira.for
 src/iri2020/src/igrf.for
+src/iri2020/src/iri2020_namelist_driver.f90
 src/iri2020/src/iri_driver.f90
 src/iri2020/src/iridreg.for
 src/iri2020/src/iriflip.for
 src/iri2020/src/irifun.for
 src/iri2020/src/irisub.for
+src/iri2020/src/irisub_height_grid.for
 src/iri2020/src/iritec.for
 src/iri2020/src/rocdrift.for
 src/iri2020/src/test.f90

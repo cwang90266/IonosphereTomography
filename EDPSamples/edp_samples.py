@@ -25,6 +25,7 @@ import math
 import pandas as pd
 
 from scipy.spatial import cKDTree
+from EDPSamples.generate_occultation_tri_mesh import generate_occultation_mesh
 
 __all__ = ["EDPSamples"]
 
@@ -109,7 +110,7 @@ def get_IRI2020_EDP(DateTime: str,
         iri_name += ".exe"
 
     # %% run IRI with hard coded path to IRI2020 directory
-    IRIPath = "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/"
+    IRIPath = "/home/aistonhunter/IonosphereTomography/iri2020_new/src/iri2020/"
     exe = IRIPath+"iri2020_namelist_driver"
     IRIDataPath = IRIPath+"Data"
     data_path = IRIDataPath+"/mcsat*.dat"
@@ -571,7 +572,6 @@ class EDPSamples(xr.Dataset):
     :meth:`fromNetCDF`.
     """
     __slots__ = ()
-    
     DIM_HEIGHT = "height"
     DIM_GEO = "geo_vertex"
     DIM_SAMPLE = "sample"
@@ -808,7 +808,7 @@ class EDPSamples(xr.Dataset):
 
     def __init__(cls,
         DateTime: str,
-        geo_type : Literal["Point","LOS","Rectangle","Polar"],
+        geo_type : Literal["Point","LOS","Rectangle","Polar","Occultation"],
         altitude: np.ndarray,
         sampling_parameters: pd.Dataframe,
         evaluate_iri: int = None,
@@ -823,6 +823,11 @@ class EDPSamples(xr.Dataset):
         LOS_nb_point: int = None,
         Lon: float = None,
         Lat: float = None,
+        filename: str = None,
+        pt1: tuple = None,
+        pt2: tuple = None,
+        pt3: tuple = None,
+        alt_limit: float = 600.0,
         edps: np.ndarray = None,
         attrs = None):
         #) -> EDPSamples:
@@ -882,7 +887,27 @@ class EDPSamples(xr.Dataset):
                     pole="north"
                 else:
                     pole="south"
-                geolocation, mesh =cls.genPolarArea(pole,minLat,dLat)
+
+                geolocation, mesh =self.genPolarArea(pole,minLat,dLat)
+            case "Occultation":
+                if filename is None and (pt1 is None or pt2 is None or pt3 is None):
+                    raise ValueError("For geo_type Occultation, you must provide either a 'filename' or all three points ('pt1', 'pt2', 'pt3').")
+                if dLat is None or dLon is None:
+                    print("For geo_type Occultation, dLat and dLon assumed to be 5 deg.")
+                    geolocation, mesh, pt1, pt2, pt3 = generate_occultation_mesh(
+                        pt1=pt1, pt2=pt2, pt3=pt3, 
+                        filename=filename, 
+                        dLat=5, dLon=5, 
+                        alt_limit=alt_limit
+                    )
+                else:
+                # vertices = geolocation (lon, lat array), triangles = mesh (indices array)
+                    geolocation, mesh, pt1, pt2, pt3 = generate_occultation_mesh(
+                        pt1=pt1, pt2=pt2, pt3=pt3, 
+                        filename=filename, 
+                        dLat=dLat, dLon=dLon, 
+                        alt_limit=alt_limit
+                    )
             case _:
                 raise ValueError(f"Invalid geo_type: {geo_type}")
 
@@ -901,6 +926,7 @@ class EDPSamples(xr.Dataset):
             else:
                 edps=np.ndarray((n_height,n_geo,n_sample))
         else:
+            print(f"EDPS: {edps.shape[1]}, N_geo: {n_geo}")
             assert edps.ndim == 3, "EDP sample profile must be 3 dimensional"
             assert edps.shape[0] == n_height, "EDP samples'eading dimension must be height"
             assert edps.shape[1] == n_geo, "EDP sample second dimension must be vertices"
@@ -1130,7 +1156,7 @@ class EDPSamples(xr.Dataset):
                 return idx_alt, weight_alt
             case "Rectangle" | "Polar":
                 idx_mesh, weight_mesh = find_containing_triangles(
-                    np.ndarray([latitude,longitude]),
+                    np.column_stack([latitude,longitude]),
                     self.geolocation,
                     self.mesh,
                     return_bary = True,

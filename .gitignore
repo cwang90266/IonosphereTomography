@@ -1,5 +1,8 @@
 *.egg-info/
-iri2020_drivear
+iri2020_driver
 iri2020_namelist_driver
 .claude/
+Figures/
+DataFiles/
+__pychache__/
 *.o
