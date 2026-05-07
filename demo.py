@@ -74,11 +74,11 @@ from IRI_Sample_Inputs.IRI_Sample_inputs import IRI_Sample_Inputs
 TIME     = "2025-06-15 04:00"      # simulation UTC time
 LAT_C    = 62.5                    # centre latitude  (°N)
 LON_C    = -145.0                  # centre longitude (°E, = 145 °W)
-ALT_KM   = [80, 500, 1]         # altitude grid: [start, stop, step] km
+ALT_KM   = [80, 700, 1]         # altitude grid: [start, stop, step] km
 
 # Alaska region bounds (used for sweeps and mesh generation)
-LAT_MIN, LAT_MAX, DLAT = 60.0, 65.0, 0.5
-LON_MIN, LON_MAX, DLON = -150.0, -140.0, 0.5
+LAT_MIN, LAT_MAX, DLAT = 60.0, 65.0, 1.5
+LON_MIN, LON_MAX, DLON = -150.0, -140.0, 1.5
 
 # Three solar-activity scenarios spanning the realistic range for Alaska
 SCENARIOS = [
@@ -665,26 +665,158 @@ def section11() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # §12  Occultation Defined Grid Points
 # ─────────────────────────────────────────────────────────────────────────────
-def section12() -> None:
+def section12() -> tuple[np.ndarray, np.ndarray]:
     from EDPSamples.generate_occultation_tri_mesh import generate_occultation_mesh
     from EDPSamples.plot_mesh_globe import plot_globe_occultation_mesh
     from TEC_model.podTc_file_processing import parse_podTc2_nc_file
     _banner("§12 Occultation Defined Grid Points")
     
-    podTc2_file = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
-    podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
+    
+    # podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
+    podTc2_string = "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc"
+    podTc2_file = f"/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/{podTc2_string}"
+    
+    
     save_path = f"./Figures/Examples/{podTc2_string}_mesh_geometry.png"
     podTc_data = parse_podTc2_nc_file(podTc2_file)
     
     print("Generating Occultation Mesh...")
-    vertices_podTc, triangles_podTc, p1, p2, p3 = generate_occultation_mesh(filename=podTc2_file,dLat=5,dLon=5)
+    vertices_podTc, triangles_podTc, pt1, pt2, pt3 = generate_occultation_mesh(filename=podTc2_file,dLat=5,dLon=5)
     print("Complete\n")
     
     print("Running plotting code...")
     plot_globe_occultation_mesh(vertices_podTc, triangles_podTc, podTc_data['lat_tecmax_tangent'], podTc_data['lon_tecmax_tangent'], save_path)
     print("Complete\n")
     
+    return vertices_podTc, triangles_podTc, pt1, pt2, pt3
     
+def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple, pt2: tuple, pt3: tuple) -> EDPSamples:
+    _banner("§8  EDPSamples  —  Alaska rect mesh × 3 solar scenarios")
+
+    # Altitude grid (1-D numpy array)
+    alt_grid = np.arange(ALT_KM[0], ALT_KM[1] + 1, ALT_KM[2], dtype=float)
+    n_height = len(alt_grid)
+
+    # sampling_parameters DataFrame: one row per solar scenario
+    # Columns must be: hour, f107, ap, ig12, rz12
+    sampling_df = pd.DataFrame([
+        {
+            "hour": 12.0,
+            "f107": float(sc["f107D"]),
+            "ap":   float(sc["ap"]),
+            "ig12": float(sc["IG12"]),
+            "rz12": float(sc["Rz12"]),
+        }
+        for sc in SCENARIOS
+    ])
+    n_sample = len(sampling_df)
+    n_geo    = rect_vertices.shape[0]
+
+    print(f"  Altitude levels : {n_height}  ({alt_grid[0]:.0f}–{alt_grid[-1]:.0f} km)")
+    print(f"  Mesh vertices   : {n_geo}")
+    print(f"  Solar scenarios : {n_sample}")
+    print(f"  Total IRI calls : {n_geo * n_sample}")
+
+    # ── Run IRI for every vertex × scenario, fill edps array ─────────────────
+    # edps shape: (height, geo_vertex, sample)
+    edps = np.full((n_height, n_geo, n_sample), np.nan)
+
+    for i_s, sc in enumerate(SCENARIOS):
+        for i_g in range(n_geo):
+            lon_v, lat_v = rect_vertices[i_g]      # vertices are (lon, lat)
+            # print(f"  scenario {i_s+1}/{n_sample}  "
+            #       f"vertex {i_g+1:2d}/{n_geo}  "
+            #       f"({lat_v:.1f} °N, {lon_v:.1f} °E)",
+            #       end="\r", flush=True)
+            iono = IRI(
+                TIME, ALT_KM, lat_v, lon_v,
+                f107D=sc["f107D"], ap=sc["ap"],
+                IG12=sc["IG12"], Rz12=sc["Rz12"],
+            )
+            edps[:, i_g, i_s] = iono["ne"].values
+    print()  # clear the \r progress line
+
+    # ── Construct EDPSamples ─────────────────────────────────────────────────
+    # Passing a pre-computed edps array bypasses the evaluate_iri / hardcoded-
+    # path code path in __init__.  The DIM_VERTEX patch (applied at import
+    # time above) prevents the AttributeError from the missing class attribute.
+    eds = EDPSamples(
+        DateTime=TIME,
+        geo_type="Occultation",
+        altitude=alt_grid,
+        sampling_parameters=sampling_df,
+        edps=edps,
+        pt1 = pt1,
+        pt2 = pt2,
+        pt3 = pt3
+    )
+
+    print(f"  EDPSamples dims  : {dict(eds.sizes)}")
+    print(f"  EDPs shape       : {eds.edps.shape}   (height, geo_vertex, sample)")
+    print(f"  Sampling params  :\n{sampling_df.to_string(index=False)}")
+
+    # ── Plot: ne altitude profiles by solar scenario ──────────────────────────
+    fig, axes = plt.subplots(1, n_sample, figsize=(5 * n_sample, 7), sharey=True)
+    fig.suptitle(
+        f"§8  EDPSamples — ne profiles per solar scenario\n"
+        f"Alaska rect mesh  ({n_geo} vertices)   {TIME}"
+    )
+
+    # Vertex closest to the centre of the region
+    dists    = np.hypot(rect_vertices[:, 0] - LON_C, rect_vertices[:, 1] - LAT_C)
+    i_centre = int(np.argmin(dists))
+
+    for i_s, (sc, ax, color) in enumerate(zip(SCENARIOS, axes, COLORS)):
+        for i_g in range(n_geo):
+            ax.plot(edps[:, i_g, i_s], alt_grid, color="lightgray", lw=0.7)
+        ax.plot(
+            edps[:, i_centre, i_s], alt_grid,
+            color=color, lw=2.5,
+            label=(f"centre  ({rect_vertices[i_centre,1]:.1f} °N, "
+                   f"{rect_vertices[i_centre,0]:.1f} °E)"),
+        )
+        ax.set_xscale("log")
+        ax.set_xlabel("ne (m⁻³)")
+        ax.set_title(sc["label"])
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.4)
+    axes[0].set_ylabel("Altitude (km)")
+
+    # ── Save / load roundtrip ─────────────────────────────────────────────────
+    ncpath = ROOT / "alaska_edp_demo.nc"
+    try:
+        eds.saveNetCDF(ncpath)
+        print(f"\n  Saved  → {ncpath.name}  ({ncpath.stat().st_size // 1024} KB)")
+        eds_loaded = EDPSamples.fromNetCDF(ncpath)
+        print(f"  Loaded   EDPSamples dims: {dict(eds_loaded.sizes)}")
+    except Exception as exc:
+        print(f"\n  NetCDF roundtrip skipped: {exc}")
+
+    # ── Demonstrate interp_heights ────────────────────────────────────────────
+    query_alts = np.array([120.0, 250.0, 350.0, 450.0])
+    idx, w = interp_heights(alt_grid, query_alts)
+    print(f"\n  interp_heights — query altitudes: {query_alts}")
+    print(f"    bracket indices : {idx}")
+    print(f"    lower weights   : {w[:, 0].round(3)}")
+    print(f"    upper weights   : {w[:, 1].round(3)}")
+
+    # ── Demonstrate find_containing_triangles (spherical version) ─────────────
+    # geolocation passed as (lat, lon) — the convention of locate_in_mesh.py
+    geoloc_latlon = rect_vertices[:, [1, 0]]   # swap (lon,lat) → (lat,lon)
+    query_pts = np.array([
+        [62.5, -145.0],   # region centre
+        [61.0, -148.0],   # SW
+        [64.0, -142.0],   # NE
+    ])
+    tri_idx, bary = find_triangle_sphere(
+        query_pts, geoloc_latlon, rect_triangles, return_bary=True
+    )
+    print(f"\n  find_containing_triangles ({len(query_pts)} queries):")
+    for q, ti, b in zip(query_pts, tri_idx, bary):
+        print(f"    ({q[0]:.1f} °N, {q[1]:.1f} °E)  →  triangle {ti}"
+              f"   bary = {b.round(3)}")
+
+    return eds
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Main
@@ -703,17 +835,19 @@ def main() -> None:
     # section5()
     v_rect, t_rect = section6()
     # section7()
-    # section8(v_rect, t_rect)
+    section8(v_rect, t_rect)
     # section9()
     # section10()
     # section11()
-    section12()
+    v_occ, t_occ, pt1, pt2, pt3 = section12()
+    section13(v_occ, t_occ, pt1, pt2, pt3)
 
     print("\n" + "=" * 60)
     print("All sections complete — displaying figures.")
     print("=" * 60)
     plt.tight_layout()
-    plt.show()
+    # plt.show()
+    
 
 
 if __name__ == "__main__":

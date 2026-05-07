@@ -75,5 +75,5 @@ def plot_globe_occultation_mesh(vertices, triangles, tecmax_lat, tecmax_lon, sav
         
     # Save the figure
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.show(fig)
+    # plt.show()
     # plt.close(fig)

@@ -1,8 +1,5 @@
 import numpy as np
-import netCDF4
-import pandas as pd
 import pyproj
-import warnings
 from TEC_model.podTc_file_processing import parse_podTc2_nc_file
 
 def latlon_to_cartesian(lat, lon):
