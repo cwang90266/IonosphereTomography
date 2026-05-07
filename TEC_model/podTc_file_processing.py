@@ -76,57 +76,118 @@ def rayTangent(LEO, GNSS, units = 'km'):
 
     return tangent_point, p, alt
 
-
 def parse_podTc2_nc_file(file_path):
-    # This function parses the NetCDF file and extracts the relevant data.
-    # Open the NetCDF file
-
+    """Parses the NetCDF file, extracts variables, and performs optional QC cleanup."""
+    
+    clean_podTc2 = True  # Changed from 1 to True for Pythonic standard
+    
     with netCDF4.Dataset(file_path, 'r') as nc:
+        podTc2_data = {}
 
-        if file_path.startswith('podTc2'):
-            # Read in the variables and attributes, store in a dictionary
-            podTc2_data = {}
+        # Variables
+        podTc2_data['time'] = nc.variables['time'][:]
+        podTc2_data['time'] = podTc2_data['time'] - podTc2_data['time'][0]
+        podTc2_data['TEC_podTc2'] = nc.variables['TEC'][:]
+        podTc2_data['elevation'] = nc.variables['elevation'][:]
+        podTc2_data['mp_cal'] = nc.variables['mp_cal'][:]
+        podTc2_data['S4_L1'] = nc.variables['S4_L1'][:]
+        podTc2_data['S4_L2'] = nc.variables['S4_L2'][:]
+        podTc2_data['caL1_SNR'] = nc.variables['caL1_SNR'][:]
+        podTc2_data['pL2_SNR'] = nc.variables['pL2_SNR'][:]
+        
+        podTc2_data['x_LEO'] = nc.variables['x_LEO'][:]
+        podTc2_data['x_GNSS'] = nc.variables['x_GPS'][:]
+        podTc2_data['y_LEO'] = nc.variables['y_LEO'][:]
+        podTc2_data['y_GNSS'] = nc.variables['y_GPS'][:]
+        podTc2_data['z_LEO'] = nc.variables['z_LEO'][:]
+        podTc2_data['z_GNSS'] = nc.variables['z_GPS'][:]
+        
+        # NOTE: If these are in meters, remember to divide by 1000.0 here 
+        # depending on which version of rayTangent you are using!
+        podTc2_data['LEO'] = np.array([podTc2_data['x_LEO'], podTc2_data['y_LEO'], podTc2_data['z_LEO']])
+        podTc2_data['GNSS'] = np.array([podTc2_data['x_GNSS'], podTc2_data['y_GNSS'], podTc2_data['z_GNSS']])
 
-            # Variables
-            podTc2_data['time'] = nc.variables['time'][:]
-            podTc2_data['time'] = podTc2_data['time'] - podTc2_data['time'][0]
-            podTc2_data['TEC_podTc2'] = nc.variables['TEC'][:]
-            podTc2_data['elevation'] = nc.variables['elevation'][:]
-            podTc2_data['mp_cal'] = nc.variables['mp_cal'][:]
-            podTc2_data['S4_L1'] = nc.variables['S4_L1'][:]
-            podTc2_data['S4_L2'] = nc.variables['S4_L2'][:]
-            #podTc2_data['sigma_phi_L1'] = nc.variables['sigma_phi_L1'][:]
-            #podTc2_data['sigma_phi_L2'] = nc.variables['sigma_phi_L2'][:]
-            podTc2_data['caL1_SNR'] = nc.variables['caL1_SNR'][:]
-            podTc2_data['pL2_SNR'] = nc.variables['pL2_SNR'][:]
-            podTc2_data['x_LEO'] = nc.variables['x_LEO'][:]
-            podTc2_data['x_GNSS'] = nc.variables['x_GPS'][:]
-            podTc2_data['y_LEO'] = nc.variables['y_LEO'][:]
-            podTc2_data['y_GNSS'] = nc.variables['y_GPS'][:]
-            podTc2_data['z_LEO'] = nc.variables['z_LEO'][:]
-            podTc2_data['z_GNSS'] = nc.variables['z_GPS'][:]
-            podTc2_data['LEO'] = np.array([podTc2_data['x_LEO'], podTc2_data['y_LEO'], podTc2_data['z_LEO']])
-            podTc2_data['GNSS'] = np.array([podTc2_data['x_GNSS'], podTc2_data['y_GNSS'], podTc2_data['z_GNSS']])
+        # Attributes
+        attr_list = [
+            'start_time', 'conid', 'prn_id', 'leo_id', 'obs1', 'obs2',
+            'lat_tecmax_tangent', 'lon_tecmax_tangent', 'slta_tecmax_tangent',
+            'leveling_err', 'leodcb', 'gpsdcb', 'year', 'month', 'day',
+            'hour', 'minute', 'second'
+        ]
+        for attr in attr_list:
+            podTc2_data[attr] = nc.getncattr(attr)
 
-            # Attributes
-            attr_list = [
-                'start_time', 'conid', 'prn_id', 'leo_id', 'obs1', 'obs2',
-                'lat_tecmax_tangent', 'lon_tecmax_tangent', 'slta_tecmax_tangent',
-                'leveling_err', 'leodcb', 'gpsdcb', 'year', 'month', 'day',
-                'hour', 'minute', 'second'
-            ]
-            for attr in attr_list:
-                podTc2_data[attr] = nc.getncattr(attr)
+        # Date/time processing
+        date_str = f"{podTc2_data['year']}-{podTc2_data['month']:02d}-{podTc2_data['day']:02d} {podTc2_data['hour']:02d}:{podTc2_data['minute']:02d}:{podTc2_data['second']:02d}"
+        podTc2_data['date'] = pd.to_datetime(date_str)
+        local_time_offset = podTc2_data['lon_tecmax_tangent'] / 15.0  # 15 deg per hour
+        local_time = podTc2_data['date'] + pd.to_timedelta(local_time_offset, unit='h')
+        podTc2_data['local_time_hms'] = local_time.strftime('%H:%M:%S')
+        podTc2_data['DOY'] = podTc2_data['date'].dayofyear
+        
+        # -----------------------------------------
+        # QC and Cleanup Block
+        # -----------------------------------------
+        if clean_podTc2:
+            # 1. Break for invalid latitudes
+            if np.abs(podTc2_data['lat_tecmax_tangent']) > 90:
+                print(f"Invalid latitude ({podTc2_data['lat_tecmax_tangent']}) for TEC max tangent point. Skipping file.")
+                return None
 
-            # Date/time processing
-            date_str = f"{podTc2_data['year']}-{podTc2_data['month']:02d}-{podTc2_data['day']:02d} {podTc2_data['hour']:02d}:{podTc2_data['minute']:02d}:{podTc2_data['second']:02d}"
-            podTc2_data['date'] = pd.to_datetime(date_str)
-            local_time_offset = podTc2_data['lon_tecmax_tangent'] / 15.0  # 15 deg per hour
-            local_time = podTc2_data['date'] + pd.to_timedelta(local_time_offset, unit='h')
-            podTc2_data['local_time_hms'] = local_time.strftime('%H:%M:%S')
-            podTc2_data['DOY'] = podTc2_data['date'].dayofyear
-    return podTc2_data   
+            # 2. Calculate tangent info
+            tangent_point, p1, tangent_alt_raw = rayTangent(podTc2_data['LEO'], podTc2_data['GNSS'])
+            tangent_alt_km = tangent_alt_raw * 1e-3  
 
+            # [NEW] Calculate distance from the tangent point to the LEO satellite
+            # This identifies when the ray path physically detaches from the LEO and starts setting.
+            dist_to_leo = np.linalg.norm(tangent_point - podTc2_data['LEO'], axis=0)
+
+            # 3. Basic quality check for altitude bounds
+            if np.max(tangent_alt_km) < 400:
+                print("Data not high enough. Skipping.")
+                return None
+
+            # 4. Mask arrays strictly to valid altitudes AND ensure the ray has detached from LEO
+            # We use > 5.0 (km) as a tiny buffer to avoid floating point fuzziness when they are clamped.
+            valid_alt_mask = (
+                (tangent_alt_km > 0) & (dist_to_leo > 5.0) 
+            )
+            
+            # Guard clause: Ensure we actually have data left after masking
+            if not np.any(valid_alt_mask):
+                print(f"No valid descending tangent points found. Skipping.")
+                return None
+            
+            tec_masked = podTc2_data['TEC_podTc2'][valid_alt_mask]
+            leo_masked = podTc2_data['LEO'][:, valid_alt_mask]
+            gnss_masked = podTc2_data['GNSS'][:, valid_alt_mask]
+            time_masked = podTc2_data['time'][valid_alt_mask]
+            tangent_alt_masked = tangent_alt_km[valid_alt_mask]
+
+            # 5. Determine occultation type (Rising vs Setting) and conditionally flip
+            # We determine this using the unmasked array to see the true direction of the pass
+            is_setting = tangent_alt_km[0] > tangent_alt_km[-1]
+            
+            if is_setting:
+                # Reassign back into dictionary, flipped
+                podTc2_data['TEC_podTc2'] = np.flip(tec_masked)
+                podTc2_data['LEO'] = np.flip(leo_masked, axis=1) # Axis 1 for 2D arrays
+                podTc2_data['GNSS'] = np.flip(gnss_masked, axis=1)
+                podTc2_data['time'] = np.flip(time_masked)
+                podTc2_data['tangent_alt_km'] = np.flip(tangent_alt_masked)
+                podTc2_data['occ_type'] = 'setting'
+                print(f"Data Flipped: {podTc2_data['conid']}{podTc2_data['prn_id']} is setting")
+            else:
+                # Reassign back into dictionary, straight pass
+                podTc2_data['TEC_podTc2'] = tec_masked
+                podTc2_data['LEO'] = leo_masked
+                podTc2_data['GNSS'] = gnss_masked
+                podTc2_data['time'] = time_masked
+                podTc2_data['tangent_alt_km'] = tangent_alt_masked
+                podTc2_data['occ_type'] = 'rising'
+                print(f"{podTc2_data['conid']}{podTc2_data['prn_id']} is rising")
+
+    return podTc2_data
 #
 #
 #

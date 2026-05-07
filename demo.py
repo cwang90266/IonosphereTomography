@@ -298,7 +298,7 @@ def section5() -> xr.Dataset:
 
 def section6() -> tuple[np.ndarray, np.ndarray]:
     _banner("§6  Rectangular triangular mesh  (Alaska region)")
-
+    from EDPSamples.plot_mesh_globe import plot_globe_occultation_mesh
     # generate_rect_tri_mesh(minLat, maxLat, dLat, minLon, maxLon, dLon)
     # Returns vertices as (N, 2) columns = (longitude, latitude)
     vertices, triangles = generate_rect_tri_mesh(
@@ -317,6 +317,11 @@ def section6() -> tuple[np.ndarray, np.ndarray]:
         f"dLat={DLAT}°   dLon={DLON}°   →   "
         f"{vertices.shape[0]} vertices,  {triangles.shape[0]} triangles"
     )
+    save_path = "./Figures/Examples/Alaska_region.png"
+    
+    print("Running plotting code...")
+    plot_globe_occultation_mesh(vertices, triangles, LAT_C, LON_C, save_path)
+    print("Complete\n")
     return vertices, triangles
 
 
@@ -658,10 +663,26 @@ def section11() -> None:
     
     
 # ─────────────────────────────────────────────────────────────────────────────
-# §11  Forward Model TEC Paths with example file
+# §12  Occultation Defined Grid Points
 # ─────────────────────────────────────────────────────────────────────────────
 def section12() -> None:
-    _banner("§11 Forward Modeled TEC")
+    from EDPSamples.generate_occultation_tri_mesh import generate_occultation_mesh
+    from EDPSamples.plot_mesh_globe import plot_globe_occultation_mesh
+    from TEC_model.podTc_file_processing import parse_podTc2_nc_file
+    _banner("§12 Occultation Defined Grid Points")
+    
+    podTc2_file = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
+    podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
+    save_path = f"./Figures/Examples/{podTc2_string}_mesh_geometry.png"
+    podTc_data = parse_podTc2_nc_file(podTc2_file)
+    
+    print("Generating Occultation Mesh...")
+    vertices_podTc, triangles_podTc, p1, p2, p3 = generate_occultation_mesh(filename=podTc2_file,dLat=5,dLon=5)
+    print("Complete\n")
+    
+    print("Running plotting code...")
+    plot_globe_occultation_mesh(vertices_podTc, triangles_podTc, podTc_data['lat_tecmax_tangent'], podTc_data['lon_tecmax_tangent'], save_path)
+    print("Complete\n")
     
     
 
@@ -675,17 +696,18 @@ def main() -> None:
     print("Alaska region:  60–65 °N,  150–140 °W")
     print("=" * 60)
 
-    section1()
-    section2()
-    section3()
-    section4()
-    section5()
+    # section1()
+    # section2()
+    # section3()
+    # section4()
+    # section5()
     v_rect, t_rect = section6()
-    section7()
-    section8(v_rect, t_rect)
-    section9()
-    section10()
-    section11()
+    # section7()
+    # section8(v_rect, t_rect)
+    # section9()
+    # section10()
+    # section11()
+    section12()
 
     print("\n" + "=" * 60)
     print("All sections complete — displaying figures.")
