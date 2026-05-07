@@ -5,3 +5,4 @@ iri2020_namelist_driver
 Figures/
 DataFiles/
 *.o
+__pycache__/
