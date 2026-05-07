@@ -109,7 +109,7 @@ def get_IRI2020_EDP(DateTime: str,
         iri_name += ".exe"
 
     # %% run IRI with hard coded path to IRI2020 directory
-    IRIPath = "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/"
+    IRIPath = "/home/aistonhunter/IonosphereTomography/iri2020_new/src/iri2020/"
     exe = IRIPath+"iri2020_namelist_driver"
     IRIDataPath = IRIPath+"Data"
     data_path = IRIDataPath+"/mcsat*.dat"
@@ -563,13 +563,14 @@ class EDPSamples(xr.Dataset):
     (see ``framework/iri2020_driver.py``). Persist with :meth:`saveNetCDF` /
     :meth:`fromNetCDF`.
     """
-
+    __slots__ = ()
     DIM_HEIGHT = "height"
     DIM_GEO = "geo_vertex"
     DIM_SAMPLE = "sample"
     DIM_TRIANGLE = "mesh_triangle"
     DIM_PARAM = "param"
     DIM_GEO_COMPONENT = "lat_lon"
+    DIM_VERTEX = "vertex"
 
     COORD_ALTITUDE = "altitude"
     VAR_EDPS = "EDPs"
@@ -1121,7 +1122,7 @@ class EDPSamples(xr.Dataset):
                 return idx_alt, weight_alt
             case "Rectangle" | "Polar":
                 idx_mesh, weight_mesh = find_containing_triangles(
-                    np.ndarray([latitude,longitude]),
+                    np.column_stack([latitude,longitude]),
                     self.geolocation,
                     self.mesh,
                     return_bary = True,

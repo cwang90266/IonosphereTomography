@@ -40,7 +40,7 @@ def timeprofile(tlim: tuple, dt: timedelta, altkmrange: list[float], glat, glon)
         else:
             iono = xarray.concat((iono, iri), dim="time")
 
-        f107.append(iri.f107)
+        f107.append(iri.f107D)
         ap.append(iri.ap)
 
     iono.attrs = iri.attrs
@@ -66,7 +66,7 @@ def geoprofile(latrange, glon, altkm, time: str | datetime) -> xarray.Dataset:
         else:
             iono = xarray.concat((iono, iri), dim="glat")
 
-        f107.append(iri.f107)
+        f107.append(iri.f107D)
         ap.append(iri.ap)
 
     iono.attrs = iri.attrs
