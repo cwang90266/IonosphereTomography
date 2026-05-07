@@ -2,3 +2,4 @@
 iri2020_drivear
 iri2020_namelist_driver
 *.o
+*.pyc

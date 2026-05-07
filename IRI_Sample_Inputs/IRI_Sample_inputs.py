@@ -13,6 +13,7 @@ import urllib.request
 import numpy as np
 import pandas as pd
 from dateutil.parser import parse
+import pickle
 
 def get_apf107():
     """
@@ -289,6 +290,16 @@ class IRI_Sample_Inputs:
             zip(year, month, day)]
         datenum_sim=datetime.date(self.year,self.month,15)
         self.current_idx_igrz=datenum_igrz.index(datenum_sim)
+        
+    def save_to_file(self,filename:str):
+        with open(filename+".pkl","wb") as file:
+            pickle.dump(self,file)
+            
+    @classmethod
+    def fromPickle(cls,filename:str):
+        with open(filename+".pkl","rb") as file:
+            ds = pickle.load(file)
+            return ds
 
     def quantileSamples(self,
                        hour_sample_range:int = None,
@@ -313,8 +324,9 @@ class IRI_Sample_Inputs:
             idx_start=max((0,self.current_idx_f107-f107_sample_range))
             idx_end=min((self.current_idx_f107+f107_sample_range,len(f107_range)-1))
             f107_range=f107_range[idx_start:idx_end]
-            f107_range=[min(f107_range),float(np.mean(f107_range)),max(f107_range)]
+            f107_range=[max([10,min(f107_range)]),float(np.mean(f107_range)),max(f107_range)]
             f107_range.append(None)
+
         #
         ap_range=self.apf107["iiap"]
         if ap_sample_range == None:
@@ -323,9 +335,7 @@ class IRI_Sample_Inputs:
             idx_start=max((0,self.current_idx_f107-ap_sample_range))
             idx_end=min((self.current_idx_f107+ap_sample_range,len(ap_range)-1))
             ap_range=ap_range[idx_start:idx_end]
-            ap_range=[min(min(ap_range)),float(np.mean(ap_range)),
-                      
-                      max(max(ap_range))]
+            ap_range=[max([0,min(min(ap_range))]),float(np.mean(ap_range)),max(max(ap_range))]
             ap_range.append(None)
         #
         if ig_sample_range == None:
@@ -335,7 +345,7 @@ class IRI_Sample_Inputs:
             idx_start=max((0,self.current_idx_igrz-ig_sample_range))
             idx_end=min((self.current_idx_igrz+ig_sample_range,len(ig12_range)-1))
             ig12_range=ig12_range[idx_start:idx_end]
-            f107_range=[min(ig12_range),float(np.mean(ig12_range)),max(ig12_range)]
+            ig12_range=[max([0,min(ig12_range)]),float(np.mean(ig12_range)),max(ig12_range)]
             ig12_range.append(None)
         #
         if rz_sample_range == None:
@@ -345,10 +355,15 @@ class IRI_Sample_Inputs:
             idx_start=max((0,self.current_idx_igrz-rz_sample_range))
             idx_end=min((self.current_idx_igrz+rz_sample_range,len(Rz12_range)-1))
             Rz12_range=Rz12_range[idx_start:idx_end]
-            Rz12_range=[min(Rz12_range),float(np.mean(Rz12_range)),max(Rz12_range)]
+            Rz12_range=[max([0,min(Rz12_range)]),float(np.mean(Rz12_range)),max(Rz12_range)]
             Rz12_range.append(None)
         
         Samples={'hour':[], 'f107':[],'ap':[],'ig12':[],'rz12':[]}
+        #print(f"Hour_range: {hour_range}")
+        #print(f"f107_range: {f107_range}")
+        #print(f"ap_range: {ap_range}")
+        #print(f"ig12_range:{ig12_range}")
+        #print(f"Rz12_range:{Rz12_range}")
         for hour in hour_range:
             for f107 in f107_range:
                 for ap in ap_range:
@@ -360,6 +375,13 @@ class IRI_Sample_Inputs:
                             Samples['ig12'].append(ig12)
                             Samples['rz12'].append(Rz12)
         
-        return pd.DataFrame(Samples)
+        ds = pd.DataFrame(Samples)
+        ds.attrs["hour_sample_range"] = hour_sample_range
+        ds.attrs["ap_sample_range"] = ap_sample_range
+        ds.attrs["f107_sample_range"] = f107_sample_range
+        ds.attrs["ig_sample_range"] = ig_sample_range
+        ds.attrs["rz_sample_range"] = rz_sample_range
+        
+        return ds
             
          
