@@ -12,6 +12,7 @@ import requests
 import urllib.request
 import numpy as np
 import pandas as pd
+from dateutil.parser import parse
 
 def get_apf107():
     """
@@ -30,8 +31,7 @@ def get_apf107():
     response.raise_for_status()
     input_lines = response.text.splitlines()
     
-    local_file = "apf107_data.dat"
-    
+    local_file = "apf107.dat"
     urllib.request.urlretrieve(url, local_file)
 
     apf107={
@@ -230,16 +230,29 @@ def show_iri_inputs(apf107,ig_rz):
     fig.show()
     
 class IRI_Sample_Inputs:
-    def __init__(self, year, month, day, hour, minute, second):
-        self.year = year
-        self.month = month
-        self.day = day
-        self.hour = hour
-        self.minute = minute
-        self.second = second
+    def __init__(self, DateTime_str: str):
+        DateTime_int = parse(DateTime_str)
+        self.year = DateTime_int.year
+        self.month = DateTime_int.month
+        self.day = DateTime_int.day
+        if hasattr(DateTime_int,'hour'):
+            self.hour = DateTime_int.hour
+        else:
+            self.hour = 0
+            
+        if hasattr(DateTime_int,'minute'):
+            self.minute = DateTime_int.minute
+        else: 
+            self.minute = 0
+            
+        if hasattr(DateTime_int,"second"):
+            self.second=DateTime_int.second 
+        else:
+            self.second = 0
+            
         self.apf107 = get_apf107()
         self.ig_rz = get_ig_rz()
-
+        
         # Identify the indice of the current time in the array apf107 and ig_rz
         datenum_f107 = [datetime.date(int(yy), int(mm), int(dd)) for yy, mm, dd in 
             zip(self.apf107["yr"], self.apf107["mn"], self.apf107["dy"])]
