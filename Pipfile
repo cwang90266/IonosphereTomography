@@ -1,0 +1,35 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+numpy = ">=2.1"
+scipy = ">=1.16"
+xarray = ">=2025.4.0"
+requests = "~=2.32"
+matplotlib = "<4.0"
+cartopy = "~=0.25.0"
+beautifulsoup4 = "~=4.14"
+satpy = ">=0.59.0"
+cdsapi = ">=0.7.1"
+georinex = ">=1.15"
+pandas = ">=2.1"
+ipython = "*"
+tqdm = ">=4.65.0"
+astropy = ">=7.1.1"
+netcdf4 = ">=1.6"
+h5py = "~=3.15"
+cfgrib = ">=0.8"
+h5netcdf = "~=1.8"
+geopy = ">=2.3"
+pyproj = "~=3.6"
+boto3 = "*"
+python-dateutil = ">=2.9"
+# Local iri2020 package — editable install from the repo subfolder
+iri2020 = {path = "./iri2020_new/src", editable = true}
+
+[dev-packages]
+
+[requires]
+python_version = "3.11"

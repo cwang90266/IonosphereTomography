@@ -9,6 +9,9 @@ enable_testing()
 
 option(BUILD_TESTING "build tests")
 
+# Allow Fortran source lines longer than 132 characters (gfortran default limit)
+add_compile_options($<$<COMPILE_LANGUAGE:Fortran>:-ffree-line-length-none>)
+
 # --- main program
 
 add_subdirectory(src)

@@ -18,6 +18,15 @@ import pickle
 def get_apf107():
     """
     Get updated data file apf107.dat
+    
+    File format:
+        year(I3), month(I3), day(I3),
+        3-hour Ap indices for the UT intervals (0-3), )3-6), )6-9), .., )18-21), )21-24( (8I3),
+        daily Ap (I3),
+        -11(I3),
+        F10.7 radio flux for the day (F5.1),
+        81-day average of F10.7 radio flux (F5.1),
+        365-day average of F10.7 centered on the date of interest (F5.1)
 
     Parameters
     ----------
@@ -57,8 +66,10 @@ def get_apf107():
         apf107["yr"].append(yy)
         apf107["mn"].append(int(line[3:6]))
         apf107["dy"].append(int(line[6:9]))
-        apf107["iapda"].append(int(line[9+0:9+3]))
-        apf107["iiap"].append([int(line[12+i*3:15+i*3]) for i in range(8)])
+        apf107["iiap"].append([int(line[9+i*3:12+i*3]) for i in range(8)])
+        apf107["iapda"].append(int(line[33:36]))
+            # apf107["iapda"].append(int(line[9+0:9+3]))
+            # apf107["iiap"].append([int(line[12+i*3:15+i*3]) for i in range(8)])
         apf107["ir"].append(int(line[36:39]))
         apf107["f107"].append(float(line[39:44]))
         apf107["f107_81"].append(float(line[44:49]))
@@ -154,11 +165,12 @@ def show_iri_inputs(apf107,ig_rz):
             zip(apf107["yr"], apf107["mn"], apf107["dy"])]
     
     pn = axs[0]
-    pn.plot(datenum, apf107["iapda"], marker='o', linestyle='-')
-    pn.plot(datenum, apf107["iiap"], marker='o', linestyle='-')
+    pn.plot(datenum, apf107["iapda"], marker='o', linestyle='none')
+    pn.plot(datenum, apf107["iiap"], marker='.', linestyle='none', alpha=0.2)
     fig.gca().xaxis.set_major_locator(mdates.AutoDateLocator())
     fig.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     #fig.gca().autofmt_xdate()  # Auto rotate date labels
+    pn.legend(['Daily','0-3','3-6','6-9','9-12','12-15','15-18','18-21','21-24'],loc='upper left')
     pn.set_xlabel('Date')
     pn.set_ylabel('AP')
 
@@ -171,12 +183,13 @@ def show_iri_inputs(apf107,ig_rz):
     #pn.set_ylabel('Sun Spot')
     
     pn = axs[1]
-    pn.plot(datenum, apf107["f107"], marker='o', linestyle='-')
-    pn.plot(datenum, apf107["f107_81"], marker='o', linestyle='-')
-    pn.plot(datenum, apf107["f107_365"], marker='o', linestyle='-')
+    pn.plot(datenum, apf107["f107"], marker='o', linestyle='-', label='F10.7')
+    pn.plot(datenum, apf107["f107_81"], marker='o', linestyle='-', label='81-day Average')
+    pn.plot(datenum, apf107["f107_365"], marker='o', linestyle='-', label='365-day Average')
     fig.gca().xaxis.set_major_locator(mdates.AutoDateLocator())
     fig.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     #fig.gca().autofmt_xdate()  # Auto rotate date labels
+    pn.legend(loc='upper left')
     pn.set_xlabel('Date')
     pn.set_ylabel('F10.7')
 
