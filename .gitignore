@@ -6,4 +6,8 @@ Figures/
 DataFiles/
 __pycache__/
 *.o
-__pycache__/
+.claude/
+Figures/
+DataFiles/
+*.o
+__pycache__
