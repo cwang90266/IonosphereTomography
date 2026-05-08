@@ -8,7 +8,7 @@ implicit none
 integer, parameter :: max_npts=1000
 integer, parameter :: max_nheight=1000
 integer, parameter :: max_nParam=9
-integer, parameter :: max_nSample=2500
+integer, parameter :: max_nSample=5000
 
 ! Definition of input variables in the namelist
 integer :: npts, nheight, nSample
