@@ -818,6 +818,104 @@ def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple,
 
     return eds
 
+
+def section14(eds, podTc_filename: str):
+    from TEC_model.podTc_file_processing import parse_podTc2_nc_file
+    from TEC_model.podTc_file_processing import forward_model_mesh_tec
+    from TEC_model.podTc_file_processing import rayTangent
+    """
+    Tests the modeled TEC against measured TEC from a podTc2 file.
+    
+    Parameters:
+    -----------
+    eds : EDPSamples
+        The initialized and populated EDPSamples dataset (from section 13).
+    podTc_filename : str
+        Path to the podTc2 NetCDF file containing the measured RO pass.
+    """
+    try:
+        _banner("§8  Section 14  —  Modeled vs Measured TEC Comparison")
+    except NameError:
+        print("\n=== Section 14 — Modeled vs Measured TEC Comparison ===")
+
+    # 1. Parse the observed data
+    print(f"  Loading measured data from : {podTc_filename}")
+    data = parse_podTc2_nc_file(podTc_filename)
+    
+    LEO = data['LEO']
+    GNSS = data['GNSS']
+    
+    # Safely extract TEC (keys can vary based on your parser implementation)
+    if 'TEC' in data:
+        measured_tec = data['TEC']
+    elif 'absolute_TEC' in data:
+        measured_tec = data['absolute_TEC']
+    else:
+        print("  [!] Warning: Could not find 'TEC' or 'absolute_TEC' key in podTc2 data.")
+        measured_tec = np.zeros(LEO.shape[1])
+
+    n_rays = LEO.shape[1]
+    n_samples = eds.sizes.get('sample', 1) # Support 1 or multiple solar scenarios
+    print(f"  Total Occultation Rays   : {n_rays}")
+    print(f"  Evaluating Scenarios     : {n_samples}")
+
+    # 2. Calculate Tangent Altitudes for the plot's Y-axis
+    print("  Calculating tangent altitudes for profile geometry...")
+    _, _, tangent_alt = rayTangent(LEO, GNSS, units='km')
+
+    # 3. Compute Forward Modeled TEC for each scenario
+    modeled_tecs = []
+    for i_s in range(n_samples):
+        print(f"  Running forward model for scenario {i_s + 1}/{n_samples}...")
+        # Make sure forward_model_mesh_tec is imported/available in this scope
+        tec = forward_model_mesh_tec(eds, data, sample_idx=i_s, num_segments=1000)
+        modeled_tecs.append(tec)
+
+    # 4. Generate the Comparison Plot
+    print("  Generating comparison plot...")
+    fig, ax = plt.subplots(figsize=(7, 9))
+    fig.suptitle(
+        f"§8  Section 14 — Measured vs. Modeled TEC\n"
+        f"Occultation Pass: {podTc_filename.split('/')[-1]}",
+        fontsize=12
+    )
+
+    # Plot Measured TEC
+    ax.plot(measured_tec, tangent_alt, color='black', lw=2.5, label="Measured TEC (podTc2)")
+
+    # Plot Modeled TEC Scenarios
+    colors = ['tab:red', 'tab:blue', 'tab:green', 'tab:orange', 'tab:purple']
+    
+    # Try to grab scenario labels if they exist in your sampling parameters
+    try:
+        sample_params = eds.data_vars['sampling_parameters'].values
+    except KeyError:
+        sample_params = None
+
+    for i_s in range(n_samples):
+        c = colors[i_s % len(colors)]
+        label = f"Modeled TEC (Scenario {i_s + 1})"
+        
+        ax.plot(modeled_tecs[i_s], tangent_alt, color=c, lw=1.5, linestyle='--', label=label)
+
+    # Formatting the plot to match typical RO profiles
+    ax.set_ylabel("Tangent Altitude (km)")
+    ax.set_xlabel("Total Electron Content (TECU)")
+    
+    # Restrict Y-axis to the valid altitude envelope
+    valid_alts = tangent_alt[tangent_alt >= 0]
+    if len(valid_alts) > 0:
+        ax.set_ylim(0, min(np.max(valid_alts) + 50, eds.coords['altitude'].values[-1]))
+    else:
+        ax.set_ylim(0, 600)
+        
+    ax.grid(True, alpha=0.4, linestyle=':')
+    ax.legend(loc='upper right', fontsize=9)
+    
+    plt.tight_layout()
+    plt.show()
+
+    return modeled_tecs, tangent_alt
 # ─────────────────────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────────────────────
