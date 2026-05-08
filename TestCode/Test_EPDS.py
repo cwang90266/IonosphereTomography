@@ -35,7 +35,14 @@ Sample_Param = Sample_Param_Database.quantileSamples(
                    f107_sample_range,
                    ig_sample_range,
                    rz_sample_range)
-
+nSample = 2000
+Sample_Param = Sample_Param_Database.randomSamples(
+                   hour_sample_range,
+                   ap_sample_range,
+                   f107_sample_range,
+                   ig_sample_range,
+                   rz_sample_range,
+                   nSample)
 altitude = np.arange(100,1000,10)
 
 EDPSam_Point = EDPS(DateTime_str,"Point", altitude,Sample_Param,evaluate_iri=1,Lon = 20, Lat= 30)
