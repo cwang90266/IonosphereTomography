@@ -359,11 +359,11 @@ class IRI_Sample_Inputs:
             Rz12_range.append(None)
         
         Samples={'hour':[], 'f107':[],'ap':[],'ig12':[],'rz12':[]}
-        #print(f"Hour_range: {hour_range}")
-        #print(f"f107_range: {f107_range}")
-        #print(f"ap_range: {ap_range}")
-        #print(f"ig12_range:{ig12_range}")
-        #print(f"Rz12_range:{Rz12_range}")
+        print(f"Hour_range: {hour_range}")
+        print(f"f107_range: {f107_range}")
+        print(f"ap_range: {ap_range}")
+        print(f"ig12_range:{ig12_range}")
+        print(f"Rz12_range:{Rz12_range}")
         for hour in hour_range:
             for f107 in f107_range:
                 for ap in ap_range:
