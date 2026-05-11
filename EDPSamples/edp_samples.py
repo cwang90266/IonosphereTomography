@@ -853,7 +853,7 @@ class EDPSamples(xr.Dataset):
         pt1: tuple = None,
         pt2: tuple = None,
         pt3: tuple = None,
-        alt_limit: float = 600.0,
+        alt_limit: float = 1800.0,
         edps: np.ndarray = None,
         attrs = None):
         #) -> EDPSamples:
@@ -1031,6 +1031,13 @@ class EDPSamples(xr.Dataset):
                 attrs["dLon"] = dLon,
                 attrs["minLat"] = minLat
                 attrs["maxLat"] = maxLat
+                attrs["dLat"] = dLat
+            case "Occultation":
+                attrs["filename"] = filename
+                attrs["pt1"] = pt1
+                attrs["pt2"] = pt2
+                attrs["pt3"] = pt3
+                attrs["dLon"] = dLon,
                 attrs["dLat"] = dLat
             case "Polar":
                 attrs["minLat"] = minLat
@@ -1230,4 +1237,5 @@ class EDPSamples(xr.Dataset):
             ds=self[self.VAR_MESH]
             return ds.to_numpy()
         return None
+
 

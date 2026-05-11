@@ -50,7 +50,7 @@ def rayTangent(LEO, GNSS, units='km'):
 
     return tangent_point, p, alt
 
-def get_occultation_extrema(LEO, GNSS, alt_limit=600.0, r_earth_km=6371.0):
+def get_occultation_extrema(LEO, GNSS, alt_limit=1800.0, r_earth_km=6371.0):
     """
     Analytically computes 3 bounding points (lat, lon) by finding the tangent 
     point of the highest valid ray, and the entry/exit points of the deepest ray.

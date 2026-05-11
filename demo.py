@@ -13,7 +13,7 @@ Or, with any venv that has the packages installed:
 
 Sections
 --------
- §1  Single IRI altitude profile at the region centre (default solar indices)
+ §1  Single IRI altitude profile at the region center (default solar indices)
  §2  Three solar-activity scenarios compared on one altitude profile
  §3  Sensitivity to ionospheric shape parameters (foF2, hmF2, B0, B1)
  §4  24-hour time profile at a fixed location
@@ -72,9 +72,9 @@ from IRI_Sample_Inputs.IRI_Sample_inputs import IRI_Sample_Inputs
 # ─────────────────────────────────────────────────────────────────────────────
 
 TIME     = "2025-06-15 04:00"      # simulation UTC time
-LAT_C    = 62.5                    # centre latitude  (°N)
-LON_C    = -145.0                  # centre longitude (°E, = 145 °W)
-ALT_KM   = [80, 700, 1]         # altitude grid: [start, stop, step] km
+LAT_C    = 62.5                    # center latitude  (°N)
+LON_C    = -145.0                  # center longitude (°E, = 145 °W)
+ALT_KM   = [80, 1000, 1]         # altitude grid: [start, stop, step] km
 
 # Alaska region bounds (used for sweeps and mesh generation)
 LAT_MIN, LAT_MAX, DLAT = 60.0, 65.0, 1.5
@@ -126,7 +126,7 @@ def _banner(title: str) -> None:
 # =============================================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  §1  Single IRI altitude profile at the region centre
+#  §1  Single IRI altitude profile at the region center
 # ─────────────────────────────────────────────────────────────────────────────
 
 def section1() -> xr.Dataset:
@@ -420,18 +420,18 @@ def section8(rect_vertices: np.ndarray, rect_triangles: np.ndarray) -> EDPSample
         f"Alaska rect mesh  ({n_geo} vertices)   {TIME}"
     )
 
-    # Vertex closest to the centre of the region
+    # Vertex closest to the center of the region
     dists    = np.hypot(rect_vertices[:, 0] - LON_C, rect_vertices[:, 1] - LAT_C)
-    i_centre = int(np.argmin(dists))
+    i_center = int(np.argmin(dists))
 
     for i_s, (sc, ax, color) in enumerate(zip(SCENARIOS, axes, COLORS)):
         for i_g in range(n_geo):
             ax.plot(edps[:, i_g, i_s], alt_grid, color="lightgray", lw=0.7)
         ax.plot(
-            edps[:, i_centre, i_s], alt_grid,
+            edps[:, i_center, i_s], alt_grid,
             color=color, lw=2.5,
-            label=(f"centre  ({rect_vertices[i_centre,1]:.1f} °N, "
-                   f"{rect_vertices[i_centre,0]:.1f} °E)"),
+            label=(f"center  ({rect_vertices[i_center,1]:.1f} °N, "
+                   f"{rect_vertices[i_center,0]:.1f} °E)"),
         )
         ax.set_xscale("log")
         ax.set_xlabel("ne (m⁻³)")
@@ -462,7 +462,7 @@ def section8(rect_vertices: np.ndarray, rect_triangles: np.ndarray) -> EDPSample
     # geolocation passed as (lat, lon) — the convention of locate_in_mesh.py
     geoloc_latlon = rect_vertices[:, [1, 0]]   # swap (lon,lat) → (lat,lon)
     query_pts = np.array([
-        [62.5, -145.0],   # region centre
+        [62.5, -145.0],   # region center
         [61.0, -148.0],   # SW
         [64.0, -142.0],   # NE
     ])
@@ -665,32 +665,31 @@ def section11() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # §12  Occultation Defined Grid Points
 # ─────────────────────────────────────────────────────────────────────────────
-def section12() -> tuple[np.ndarray, np.ndarray]:
+def section12(podTc2_file: str) -> tuple[np.ndarray, np.ndarray, tuple, tuple, tuple]:
     from EDPSamples.generate_occultation_tri_mesh import generate_occultation_mesh
     from EDPSamples.plot_mesh_globe import plot_globe_occultation_mesh
     from TEC_model.podTc_file_processing import parse_podTc2_nc_file
+    
     _banner("§12 Occultation Defined Grid Points")
     
-    
-    # podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
-    podTc2_string = "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc"
-    podTc2_file = f"/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/{podTc2_string}"
-    
-    
+    # Extract the filename from the path to use in the save string
+    podTc2_string = podTc2_file.split('/')[-1]
     save_path = f"./Figures/Examples/{podTc2_string}_mesh_geometry.png"
+    
     podTc_data = parse_podTc2_nc_file(podTc2_file)
     
     print("Generating Occultation Mesh...")
-    vertices_podTc, triangles_podTc, pt1, pt2, pt3 = generate_occultation_mesh(filename=podTc2_file,dLat=5,dLon=5)
+    vertices_podTc, triangles_podTc, pt1, pt2, pt3 = generate_occultation_mesh(filename=podTc2_file, dLat=5, dLon=5)
     print("Complete\n")
     
     print("Running plotting code...")
     plot_globe_occultation_mesh(vertices_podTc, triangles_podTc, podTc_data['lat_tecmax_tangent'], podTc_data['lon_tecmax_tangent'], save_path)
     print("Complete\n")
     
-    return vertices_podTc, triangles_podTc, pt1, pt2, pt3
-    
+    return vertices_podTc, triangles_podTc, pt1, pt2, pt3   
+
 def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple, pt2: tuple, pt3: tuple) -> EDPSamples:
+    from EDPSamples.EDPS_plotting import plot_edp_statistics
     _banner("§8  EDPSamples  —  Alaska rect mesh × 3 solar scenarios")
 
     # Altitude grid (1-D numpy array)
@@ -762,18 +761,18 @@ def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple,
         f"Alaska rect mesh  ({n_geo} vertices)   {TIME}"
     )
 
-    # Vertex closest to the centre of the region
+    # Vertex closest to the center of the region
     dists    = np.hypot(rect_vertices[:, 0] - LON_C, rect_vertices[:, 1] - LAT_C)
-    i_centre = int(np.argmin(dists))
+    i_center = int(np.argmin(dists))
 
     for i_s, (sc, ax, color) in enumerate(zip(SCENARIOS, axes, COLORS)):
         for i_g in range(n_geo):
             ax.plot(edps[:, i_g, i_s], alt_grid, color="lightgray", lw=0.7)
         ax.plot(
-            edps[:, i_centre, i_s], alt_grid,
+            edps[:, i_center, i_s], alt_grid,
             color=color, lw=2.5,
-            label=(f"centre  ({rect_vertices[i_centre,1]:.1f} °N, "
-                   f"{rect_vertices[i_centre,0]:.1f} °E)"),
+            label=(f"center  ({rect_vertices[i_center,1]:.1f} °N, "
+                   f"{rect_vertices[i_center,0]:.1f} °E)"),
         )
         ax.set_xscale("log")
         ax.set_xlabel("ne (m⁻³)")
@@ -804,7 +803,7 @@ def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple,
     # geolocation passed as (lat, lon) — the convention of locate_in_mesh.py
     geoloc_latlon = rect_vertices[:, [1, 0]]   # swap (lon,lat) → (lat,lon)
     query_pts = np.array([
-        [62.5, -145.0],   # region centre
+        [62.5, -145.0],   # region center
         [61.0, -148.0],   # SW
         [64.0, -142.0],   # NE
     ])
@@ -815,7 +814,8 @@ def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple,
     for q, ti, b in zip(query_pts, tri_idx, bary):
         print(f"    ({q[0]:.1f} °N, {q[1]:.1f} °E)  →  triangle {ti}"
               f"   bary = {b.round(3)}")
-
+        
+    plot_edp_statistics(eds)
     return eds
 
 
@@ -848,8 +848,8 @@ def section14(eds, podTc_filename: str):
     # Safely extract TEC (keys can vary based on your parser implementation)
     if 'TEC' in data:
         measured_tec = data['TEC']
-    elif 'absolute_TEC' in data:
-        measured_tec = data['absolute_TEC']
+    elif 'TEC_podTc2' in data:
+        measured_tec = data['TEC_podTc2']
     else:
         print("  [!] Warning: Could not find 'TEC' or 'absolute_TEC' key in podTc2 data.")
         measured_tec = np.zeros(LEO.shape[1])
@@ -881,7 +881,10 @@ def section14(eds, podTc_filename: str):
     )
 
     # Plot Measured TEC
-    ax.plot(measured_tec, tangent_alt, color='black', lw=2.5, label="Measured TEC (podTc2)")
+    print(f"{measured_tec.shape},  {tangent_alt.shape}")
+    print(f"Measured TEC - Min: {np.nanmin(measured_tec)}, Max: {np.nanmax(measured_tec)}, NaNs: {np.isnan(measured_tec).sum()}")
+    print(f"Modeled TEC 1 - Min: {np.nanmin(modeled_tecs[0])}, Max: {np.nanmax(modeled_tecs[0])}, NaNs: {np.isnan(modeled_tecs[0]).sum()}")
+    ax.plot(measured_tec, tangent_alt*1e-3, color='black', lw=2.5, label="Measured TEC (podTc2)")
 
     # Plot Modeled TEC Scenarios
     colors = ['tab:red', 'tab:blue', 'tab:green', 'tab:orange', 'tab:purple']
@@ -896,7 +899,7 @@ def section14(eds, podTc_filename: str):
         c = colors[i_s % len(colors)]
         label = f"Modeled TEC (Scenario {i_s + 1})"
         
-        ax.plot(modeled_tecs[i_s], tangent_alt, color=c, lw=1.5, linestyle='--', label=label)
+        ax.plot(modeled_tecs[i_s], tangent_alt*1e-3, color=c, lw=1.5, linestyle='--', label=label)
 
     # Formatting the plot to match typical RO profiles
     ax.set_ylabel("Tangent Altitude (km)")
@@ -913,9 +916,108 @@ def section14(eds, podTc_filename: str):
     ax.legend(loc='upper right', fontsize=9)
     
     plt.tight_layout()
-    plt.show()
+    # plt.show()
 
     return modeled_tecs, tangent_alt
+
+
+
+def section15(lon_point: float = -145.0, lat_point: float = 62.5, n_mc_samples: int = 100):
+    """
+    Evaluates a single geographical point across a large Monte Carlo ensemble 
+    of IRI input parameters to test statistical EDPSamples generation.
+    """
+    from EDPSamples.EDPS_plotting import plot_edp_statistics
+    
+    try:
+        _banner("§15  EDPSamples  —  Single Point × Monte Carlo Ensemble")
+    except NameError:
+        print("\n=== Section 15 — Single Point × Monte Carlo Ensemble ===")
+
+    # 1. Altitude grid (1-D numpy array)
+    alt_grid = np.arange(ALT_KM[0], ALT_KM[1] + 1, ALT_KM[2], dtype=float)
+    n_height = len(alt_grid)
+    n_geo = 1  # Single point
+
+    # 2. Generate a large range of varying input parameters (Monte Carlo)
+    print(f"  Generating {n_mc_samples} synthetic solar scenarios...")
+    np.random.seed(42) # Set seed for reproducible testing
+    
+    # Create normal distributions for typical solar/geomagnetic parameters, 
+    # clipped to realistic boundaries to prevent IRI model crashes.
+    sampling_df = pd.DataFrame({
+        "hour": np.full(n_mc_samples, 12.0),
+        "f107": np.random.normal(loc=130, scale=30, size=n_mc_samples).clip(70, 250),
+        "ap":   np.random.normal(loc=15, scale=12, size=n_mc_samples).clip(0, 400),
+        "ig12": np.random.normal(loc=100, scale=25, size=n_mc_samples).clip(50, 200),
+        "rz12": np.random.normal(loc=100, scale=25, size=n_mc_samples).clip(50, 200),
+    })
+
+    print(f"  Altitude levels : {n_height}  ({alt_grid[0]:.0f}–{alt_grid[-1]:.0f} km)")
+    print(f"  Mesh vertices   : {n_geo}  (Point: {lat_point}°N, {lon_point}°E)")
+    print(f"  Solar scenarios : {n_mc_samples} (Monte Carlo Distribution)")
+    print(f"  Total IRI calls : {n_geo * n_mc_samples}")
+
+    # 3. Run IRI for the single vertex across ALL scenarios
+    # edps shape: (height, geo_vertex, sample)
+    edps = np.full((n_height, n_geo, n_mc_samples), np.nan)
+
+    for i_s in range(n_mc_samples):
+        sc = sampling_df.iloc[i_s]
+        
+        # Display a simple progress tracker
+        if (i_s + 1) % 10 == 0 or i_s == 0:
+            print(f"    Running sample {i_s + 1}/{n_mc_samples}...", end="\r", flush=True)
+            
+        iono = IRI(
+            TIME, ALT_KM, lat_point, lon_point,
+            f107D=sc["f107"], ap=sc["ap"],
+            IG12=sc["ig12"], Rz12=sc["rz12"],
+        )
+        edps[:, 0, i_s] = iono["ne"].values
+        
+    print(f"    Running sample {n_mc_samples}/{n_mc_samples}... Done!  ")
+
+    # 4. Construct the EDPSamples Object
+    # Note: geo_type is explicitly "Point", and we pass Lon/Lat instead of pt1/pt2/pt3
+    eds = EDPSamples(
+        DateTime=TIME,
+        geo_type="Point",
+        altitude=alt_grid,
+        sampling_parameters=sampling_df,
+        edps=edps,
+        Lon=lon_point,
+        Lat=lat_point
+    )
+
+    print(f"\n  EDPSamples dims  : {dict(eds.sizes)}")
+    print(f"  EDPs shape       : {eds.edps.shape}   (height, geo_vertex, sample)")
+
+    # 5. Plot the raw "Spaghetti" Plot
+    fig, ax = plt.subplots(figsize=(6, 8))
+    fig.suptitle(f"§15 EDPSamples — Raw Monte Carlo Ensemble\nPoint: {lat_point}°N, {lon_point}°E at {TIME}")
+    
+    # Plot all samples lightly in the background
+    for i_s in range(n_mc_samples):
+        ax.plot(edps[:, 0, i_s], alt_grid, color="tab:blue", alpha=0.1, lw=1.0)
+        
+    # Plot the mean line over the top
+    mean_profile = np.nanmean(edps[:, 0, :], axis=1)
+    ax.plot(mean_profile, alt_grid, color="black", lw=2.5, label="Ensemble Mean")
+    
+    ax.set_xscale("log")
+    ax.set_xlabel("ne (m⁻³)")
+    ax.set_ylabel("Altitude (km)")
+    ax.grid(True, alpha=0.4, linestyle=':')
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
+
+    # 6. Call the Statistical Plotting Code
+    print("\n  Generating Statistical Distribution Plots...")
+    plot_edp_statistics(eds)
+
+    return eds
 # ─────────────────────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────────────────────
@@ -931,22 +1033,39 @@ def main() -> None:
     # section3()
     # section4()
     # section5()
-    v_rect, t_rect = section6()
+    # v_rect, t_rect = section6()
     # section7()
-    section8(v_rect, t_rect)
+    # section8(v_rect, t_rect)
     # section9()
     # section10()
     # section11()
-    v_occ, t_occ, pt1, pt2, pt3 = section12()
-    section13(v_occ, t_occ, pt1, pt2, pt3)
+
+    # --- Define the file here so both section12 and section14 can use it ---
+    # podTc2_string = "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc" #North polar
+    # podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc" #West coast pacific
+    # podTc2_string = "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc" #Wide occultation polar
+    # podTc2_string = "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc" #South America vertical occultation
+    # podTc2_string = "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc" #South America wider occultation
+    # podTc2_string = "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc" #Easter coast of South America
+    # podTc2_string = 'podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc' #North America vertical occultation
+    # podTc2_file = f"/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/{podTc2_string}"
+
+    # # Pass the file to section12
+    # v_occ, t_occ, pt1, pt2, pt3 = section12(podTc2_file)
+    
+    # # Capture the generated EDPSamples dataset from section13
+    # eds = section13(v_occ, t_occ, pt1, pt2, pt3)
+    
+    # # Call section14 using the dataset and the original file
+    # tec = section14(eds, podTc2_file)
+    
+    section15()
 
     print("\n" + "=" * 60)
     print("All sections complete — displaying figures.")
     print("=" * 60)
     plt.tight_layout()
     plt.show()
-    
-
 
 if __name__ == "__main__":
     main()
