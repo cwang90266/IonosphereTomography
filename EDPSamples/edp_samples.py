@@ -31,6 +31,9 @@ import pyproj
 from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 from tqdm import tqdm
 
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
 __all__ = ["EDPSamples"]
 
 # WGS84 (geodetic <-> ECEF for satellite line-of-sight)
@@ -86,6 +89,23 @@ def _ecef_to_geodetic(xyz: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarr
         lat = np.where(pole, np.sign(z) * (np.pi / 2.0), lat)
         h = np.where(pole, h_pole, h)
     return np.degrees(lat), np.degrees(lon), h
+
+def ECEFtolla(ECEF):
+    # ECEF can be shape (3,) for single point or (3, n) for multiple points
+    if ECEF.ndim == 1:
+        x, y, z = ECEF[0], ECEF[1], ECEF[2]
+    else:
+        x, y, z = ECEF[0, :], ECEF[1, :], ECEF[2, :]
+    
+    # Rest stays the same - pyproj handles arrays automatically
+    transformer = pyproj.Transformer.from_crs(
+            pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
+            pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+            always_xy=True
+        )
+    lon_deg, lat_deg, alt = transformer.transform(1e3*x, 1e3*y, 1e3*z)
+    
+    return lat_deg, lon_deg, alt
 
 def read_iri_namelist_log(file_path) -> np.array :
     """
@@ -163,6 +183,7 @@ def get_IRI2020_EDP(DateTime: str,
     # 2. Link data files to the current working directory
     cmd += f"ln -s -f {IRIDataPath}mcsat*.dat . ; "
     cmd += f"ln -s -f {IRIDataPath}dgrf*.dat . ; "
+    cmd += f"ln -s -f {IRIDataPath}igrf*.dat . ; "
     cmd += f"ln -s -f {IRIDataPath}*.asc . ; "
     cmd += f"ln -s -f {apf107_src} . ; "
     cmd += f"ln -s -f {ig_rz_src} . ; "
@@ -170,18 +191,18 @@ def get_IRI2020_EDP(DateTime: str,
    # 3. Execute Fortran driver
     cmd += f"{exe} {namelist_filename} {IRI_output_filename}"
     
-    print(f"\n--- DEBUG: Executing Fortran ---")
+    # print(f"\n--- DEBUG: Executing Fortran ---")
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
 
     # UNCONDITIONALLY print the Fortran output so we can see what it did
-    print(f"\n--- FORTRAN EXECUTION OUTPUT ---")
-    print(f"Return Code: {result.returncode}")
-    print(f"STDOUT:\n{result.stdout.strip()}")
-    print(f"STDERR:\n{result.stderr.strip()}")
-    print(f"--------------------------------\n")
+    # print(f"\n--- FORTRAN EXECUTION OUTPUT ---")
+    # print(f"Return Code: {result.returncode}")
+    # print(f"STDOUT:\n{result.stdout.strip()}")
+    # print(f"STDERR:\n{result.stderr.strip()}")
+    # print(f"--------------------------------\n")
 
     # 4. Clean up symlinks 
-    os.system("rm -f mcsat*.dat dgrf*.dat *.asc apf107.dat ig_rz.dat")
+    os.system("rm -f mcsat*.dat dgrf*.dat igrf*.dat *.asc apf107.dat ig_rz.dat")
 
     # Now proceed to read the file (which will still crash with EOFError, 
     # but we will finally see the STDOUT/STDERR above it!)
@@ -962,7 +983,7 @@ class EDPSamples(xr.Dataset):
                 else:
                     pole="south"
 
-                geolocation, mesh =self.genPolarArea(pole,minLat,dLat)
+                geolocation, mesh = cls.genPolarArea(pole,minLat,dLat)
             case "Occultation":
                 if filename is None and (pt1 is None or pt2 is None or pt3 is None):
                     raise ValueError("For geo_type Occultation, you must provide either a 'filename' or all three points ('pt1', 'pt2', 'pt3').")
@@ -1214,6 +1235,16 @@ class EDPSamples(xr.Dataset):
                     plot_polar_mesh(self.geolocation, self.mesh, pole= "north")  
                 else:
                     plot_polar_mesh(self.geolocation, self.mesh, pole= "south")  
+                    
+    def plot_mesh_globe(self, tecmax_lat, tecmax_lon, save_path,
+                    leo_data=None, gnss_data=None, tangent_lla=None, alt_limit=600.0):
+        from EDPSamples.plot_mesh_globe import plot_globe_occultation_mesh
+        vertices  = self.geolocation   # (n_geo, 2) [lon, lat]
+        triangles = self.mesh          # triangle index array
+        plot_globe_occultation_mesh(vertices, triangles, tecmax_lat, tecmax_lon, save_path,
+                                    leo_data=leo_data, gnss_data=gnss_data,
+                                    tangent_lla=tangent_lla, alt_limit=alt_limit)
+    
 
     def interp(self, positions: np.array, 
                coordinate: Literal["lla","ecef"] = "lla") -> tuple[np.ndarray,  np.ndarray, np.ndarray,  np.ndarray]:
@@ -1260,80 +1291,105 @@ class EDPSamples(xr.Dataset):
             np.ndarray
                 Calculated TEC values (in TECU) for each occultation ray.
             """
-            print("Building spatial interpolators for the occultation mesh...")
-            
             # 1. Extract Mesh and EDP Data using class properties
             altitude = self.altitude                      # 1D array of heights (km)
-            geolocation = self.geolocation                # (n_geo, 2) array [lon, lat] Note: check coordinate order!
+            geolocation = self.geolocation                # (n_geo, 2) array [lon, lat]
             raw_edps = self.edps[:, :, sample_idx].T      # Transpose to (n_geo, n_height)
             edps_2d = np.nan_to_num(raw_edps, nan=0.0)
-            
-            # Primary: High accuracy inside the mesh
-            spatial_interp_lin = LinearNDInterpolator(geolocation, edps_2d)
-            
-            # Fallback: Graceful extrapolation for the ray tails outside the mesh
-            spatial_interp_near = NearestNDInterpolator(geolocation, edps_2d)
-    
+            n_geo = edps_2d.shape[0]
+
             # 2. Extract Satellite Geometry
             LEO = podTc2_data['LEO']
             GNSS = podTc2_data['GNSS']
             n_rays = LEO.shape[1]
-            
+
             TEC = np.zeros(n_rays)
-            
+
             transformer = pyproj.Transformer.from_crs(
                 pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
                 pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
                 always_xy=True
             )
-    
-            # 3. Ray Tracing & Integration
-            for i in tqdm(range(n_rays), desc="Processing Occultation Rays"):
-                
-                t = np.linspace(0, 1, num_segments)
-                ray_points = GNSS[:, i:i+1] + (LEO[:, i:i+1] - GNSS[:, i:i+1]) * t
-                
-                diffs = np.diff(ray_points, axis=1) 
-                dl_km = np.linalg.norm(diffs, axis=0)
-                dl_m = dl_km * 1000.0 
-                
-                midpoints = (ray_points[:, :-1] + ray_points[:, 1:]) / 2.0
-                
-                lons, lats, alts_m = transformer.transform(
-                    midpoints[0, :] * 1e3, 
-                    midpoints[1, :] * 1e3, 
-                    midpoints[2, :] * 1e3
-                )
-                alts_km = alts_m / 1000.0 
-                
-                # 4. Interpolate Electron Density with Hybrid Fallback
-                
-                # Step A: Try linear interpolation first
-                ray_profiles = spatial_interp_lin(lons, lats)
-                
-                # Step B: Find the points that fell outside the mesh (LinearND returns NaN)
-                nan_mask = np.isnan(ray_profiles[:, 0])
-                
-                # Step C: Fill those outside points using the nearest neighbor
-                if np.any(nan_mask):
-                    ray_profiles[nan_mask, :] = spatial_interp_near(lons[nan_mask], lats[nan_mask])
-                    
-                Ne_along_ray = np.zeros(num_segments - 1)
-                
-                for j in range(num_segments - 1):
-                    # Safe 1D altitude interpolation
-                    Ne_along_ray[j] = np.interp(
-                        alts_km[j], 
-                        altitude, 
-                        ray_profiles[j, :], 
-                        left=0.0, 
-                        right=0.0
+
+            if n_geo == 1:
+                # Spherical symmetry: single EDP profile assumed valid at all
+                # horizontal positions — only altitude matters.
+                print("Single-point EDP: using spherical symmetry for TEC integration.")
+                ne_profile = edps_2d[0, :]   # shape: (n_height,)
+
+                for i in tqdm(range(n_rays), desc="Processing Occultation Rays"):
+                    t = np.linspace(0, 1, num_segments)
+                    ray_points = GNSS[:, i:i+1] + (LEO[:, i:i+1] - GNSS[:, i:i+1]) * t
+
+                    diffs = np.diff(ray_points, axis=1)
+                    dl_km = np.linalg.norm(diffs, axis=0)
+                    dl_m = dl_km * 1000.0
+
+                    midpoints = (ray_points[:, :-1] + ray_points[:, 1:]) / 2.0
+
+                    _, _, alts_m = transformer.transform(
+                        midpoints[0, :] * 1e3,
+                        midpoints[1, :] * 1e3,
+                        midpoints[2, :] * 1e3
                     )
-                    
-                # 5. Integrate to calculate TEC (Ne * dl)
-                tec_ray = np.nansum(Ne_along_ray * dl_m)
-                TEC[i] = tec_ray / 1e16 
-    
+                    alts_km = alts_m / 1000.0
+
+                    # Single profile: vectorised altitude interpolation, no spatial step
+                    Ne_along_ray = np.interp(alts_km, altitude, ne_profile,
+                                             left=0.0, right=0.0)
+
+                    tec_ray = np.nansum(Ne_along_ray * dl_m)
+                    TEC[i] = tec_ray / 1e16
+
+            else:
+                # Multi-point mesh: build 2-D spatial interpolators then do altitude lookup.
+                print("Building spatial interpolators for the occultation mesh...")
+
+                # Primary: high accuracy inside the mesh convex hull
+                spatial_interp_lin = LinearNDInterpolator(geolocation, edps_2d)
+
+                # Fallback: graceful extrapolation for ray tails outside the mesh
+                spatial_interp_near = NearestNDInterpolator(geolocation, edps_2d)
+
+                # 3. Ray Tracing & Integration
+                for i in tqdm(range(n_rays), desc="Processing Occultation Rays"):
+
+                    t = np.linspace(0, 1, num_segments)
+                    ray_points = GNSS[:, i:i+1] + (LEO[:, i:i+1] - GNSS[:, i:i+1]) * t
+
+                    diffs = np.diff(ray_points, axis=1)
+                    dl_km = np.linalg.norm(diffs, axis=0)
+                    dl_m = dl_km * 1000.0
+
+                    midpoints = (ray_points[:, :-1] + ray_points[:, 1:]) / 2.0
+
+                    lons, lats, alts_m = transformer.transform(
+                        midpoints[0, :] * 1e3,
+                        midpoints[1, :] * 1e3,
+                        midpoints[2, :] * 1e3
+                    )
+                    alts_km = alts_m / 1000.0
+
+                    # 4. Interpolate Electron Density with Hybrid Fallback
+                    ray_profiles = spatial_interp_lin(lons, lats)
+
+                    nan_mask = np.isnan(ray_profiles[:, 0])
+                    if np.any(nan_mask):
+                        ray_profiles[nan_mask, :] = spatial_interp_near(
+                            lons[nan_mask], lats[nan_mask]
+                        )
+
+                    Ne_along_ray = np.zeros(num_segments - 1)
+                    for j in range(num_segments - 1):
+                        Ne_along_ray[j] = np.interp(
+                            alts_km[j], altitude, ray_profiles[j, :],
+                            left=0.0, right=0.0
+                        )
+
+                    # 5. Integrate to calculate TEC (Ne * dl)
+                    tec_ray = np.nansum(Ne_along_ray * dl_m)
+                    TEC[i] = tec_ray / 1e16
+
             return TEC
 
         

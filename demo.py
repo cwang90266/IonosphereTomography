@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/home/austinhunter/Downloads/PlanetiQ_Code/venv311/bin/python3.11
+
 """
 demo.py — End-to-end demonstration of the IonosphereTomography codebase.
 
@@ -1030,7 +1031,7 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     """
     from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
     from EDPSamples.edp_samples import EDPSamples
-    
+    from EDPSamples.EDPS_plotting import plot_edp_statistics
     # Optional banner formatting fallback
     try:
         _banner("§16  Comparing 4 Mesh Types")
@@ -1089,7 +1090,7 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
         sampling_parameters=sampling_df, evaluate_iri=1,
         minLat=min_lat_polar, dLat=5
     )
-
+    
     # ---------------------------------------------------------
     # 3. Calculate TEC for each Mesh Type
     # ---------------------------------------------------------
@@ -1098,6 +1099,18 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     for name, eds in eds_dict.items():
         print(f"     Evaluating TEC for {name} mesh")
         # Uses the newly integrated class method
+        
+        plot_edp_statistics(eds)
+        # Derive center of figure from podTc data
+        tecmax_lat = podTc_data['lat_tecmax_tangent']
+        tecmax_lon = podTc_data['lon_tecmax_tangent']
+        if name is not 'Point':
+            eds.plot_mesh_globe(
+                tecmax_lat, tecmax_lon,
+                save_path=f"{name}_mesh_globe.png",
+                leo_data=podTc_data['LEO'],
+                gnss_data=podTc_data['GNSS']
+            )
         results_tec[name] = eds.forward_model_mesh_tec(podTc_data, sample_idx=0, num_segments=1000)
 
     # ---------------------------------------------------------
@@ -1203,19 +1216,19 @@ def main() -> None:
     # section15()
     
 
-    alt_grid = np.arange(100.0, 200.0, 20.0, dtype=float)
+    alt_grid = np.arange(100.0, 1000.0, 10.0, dtype=float)
     sampling_df = pd.DataFrame([{
         "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
     }])
 
     podTc2_files = [
         "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
-        "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
-        "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
-        "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
-        "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
-        "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Easter coast of South America
-        "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
+        # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
+        # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
+        # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
+        # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
+        # "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Easter coast of South America
+        # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
     ]
 
     base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
