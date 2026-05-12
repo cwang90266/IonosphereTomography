@@ -30,7 +30,7 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             edps = edps/np.mean(edps,axis=1)
 
         initial_filter = KalmanFilter (dim_x=edps.dim[0], dim_z=1)
-        initial_filter.x = np.mean(edps,axis=1)
+        initial_filter.x = np.zeros(edps.dim[0])
         initial_filter.P = np.cov(edps)
         initial_filter.attrs["meanscale"]=meanscale
         initial_filter.attrs["initial_edps"]=edps
@@ -60,11 +60,15 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         new_filter.R = np.cov(intial_predict_obs)+measurement_err*np.eye(obs.dim[0])
         new_filter.Q = (1- relaxation)*np.cov(self.attrs["initial_edps"])
         
-        predict_x = new_filter.predict()
-        analysis_x, analysis_cov = new_filter.update(obs)
+        predict_obs = new_filter.predict()
+        analysis_x = new_filter.update(obs-predict_obs)
+        analysis_x = analysis_x+self.x
+        if self.meanscale == 1:
+            analysis_x = analysis_x * self.attrs["initial_edps_mean"]
+
         self = new_filter
         
-        return analysis_x , predict_x, analysis_cov
+        return analysis_x
         
         
             
