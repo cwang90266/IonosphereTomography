@@ -1013,7 +1013,7 @@ def section15(lon_point: float = -145.0, lat_point: float = 62.5, n_mc_samples: 
     ax.grid(True, alpha=0.4, linestyle=':')
     ax.legend()
     plt.tight_layout()
-    plt.show()
+    # plt.show()
 
     # 6. Call the Statistical Plotting Code
     print("\n  Generating Statistical Distribution Plots...")
@@ -1025,19 +1025,18 @@ def section15(lon_point: float = -145.0, lat_point: float = 62.5, n_mc_samples: 
 def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame) -> tuple[dict, dict]:
     """
     §16 Comparative Mesh Analysis
-    Generates 4 distinct EDPSamples meshes (Point, Occultation, Rectangle, Polar), 
-    evaluates the TEC for each using the integrated forward model, and plots 
-    the results against the measured podTc2 data.
+    Generates 4 distinct EDPSamples meshes (Point, Occultation, Rectangle, Polar)
+    across an ensemble of states (±3 hours), evaluates the nominal TEC, and plots 
+    the spatial and state covariances.
     """
     from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
     from EDPSamples.edp_samples import EDPSamples
-    from EDPSamples.EDPS_plotting import plot_edp_statistics
-    # Optional banner formatting fallback
+    
     try:
-        _banner("§16  Comparing 4 Mesh Types")
+        _banner("§16  Comparing 4 Mesh Types Across State Range")
     except NameError:
-        print("\n=== §16  Comparing 4 Mesh Types ===")
-
+        print("\n=== §16  Comparing 4 Mesh Types Across State Range ===")
+        
     filename = podTc2_file.split('/')[-1]
     print(f"Processing File: {filename}")
 
@@ -1047,21 +1046,48 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
         print(" [!] Invalid or skipped podTc data. Aborting comparison.")
         return {}, {}
 
-    time_str = podTc_data['date'].strftime("%Y-%m-%d %H:%M:%S")
     lat_c = podTc_data['lat_tecmax_tangent']
     lon_c = podTc_data['lon_tecmax_tangent']
+    dlat_step = 5
+    dlon_step = 5
+
+    # ---------------------------------------------------------
+    # 2. Generate State Ensemble (±3 Hours + Solar Variance)
+    # ---------------------------------------------------------
+    print("\n  -> Generating State Ensemble (±3 hours, varying solar parameters)")
+    time_str = "2015-06-01 12:00:00"  # Base nominal time
+    
+    # Extract the base scenario
+    base_sc = sampling_df.iloc[0]
+    n_mc = 50  # Number of states to simulate for the covariance matrix
+    np.random.seed(42)
+
+    # Vary hour by ±3 hours, wrapping around midnight
+    mc_hours = (base_sc['hour'] + np.random.uniform(-3, 3, size=n_mc)) % 24
+
+    mc_df = pd.DataFrame({
+        "hour": mc_hours,
+        "f107": np.random.normal(loc=base_sc.get('f107', 130), scale=10, size=n_mc).clip(70, 250),
+        "ap":   np.random.normal(loc=base_sc.get('ap', 15), scale=5, size=n_mc).clip(0, 400),
+        "ig12": np.random.normal(loc=base_sc.get('ig12', 100), scale=10, size=n_mc).clip(50, 200),
+        "rz12": np.random.normal(loc=base_sc.get('rz12', 100), scale=10, size=n_mc).clip(50, 200),
+    })
+
+    # CRITICAL: Force the 0th sample to be the EXACT nominal base state 
+    # so the forward TEC model calculates exactly as it did before.
+    mc_df.iloc[0] = base_sc
 
     eds_dict = {}
 
     # ---------------------------------------------------------
-    # 2. Generate EDPSamples for each Geo Type
+    # 3. Generate EDPSamples for each Geo Type
     # ---------------------------------------------------------
-    time_str = "2015-06-01 12:00:00"
-    # A. POINT (Uses fallback NearestNDInterpolator in the forward model)
-    print("\n  -> Generating [Point] EDPSamples")
+    
+    # A. POINT (State Distribution anchor)
+    print("  -> Generating [Point] EDPSamples")
     eds_dict['Point'] = EDPSamples(
         DateTime=time_str, geo_type="Point", altitude=alt_grid,
-        sampling_parameters=sampling_df, evaluate_iri=1,
+        sampling_parameters=mc_df, evaluate_iri=1,
         Lon=lon_c, Lat=lat_c
     )
 
@@ -1069,69 +1095,96 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     print("  -> Generating [Occultation] EDPSamples")
     eds_dict['Occultation'] = EDPSamples(
         DateTime=time_str, geo_type="Occultation", altitude=alt_grid,
-        sampling_parameters=sampling_df, evaluate_iri=1,
-        filename=podTc2_file, dLat=5, dLon=5
+        sampling_parameters=mc_df, evaluate_iri=1,
+        filename=podTc2_file, dLat=dlat_step, dLon=dlon_step
     )
+    
+    lat_lons = np.array([
+        eds_dict['Occultation'].attrs['pt1'], 
+        eds_dict['Occultation'].attrs['pt2'], 
+        eds_dict['Occultation'].attrs['pt3']
+    ])
 
-    # C. RECTANGLE (Centered on the occultation tangent max)
+    # C. RECTANGLE
     print("  -> Generating [Rectangle] EDPSamples")
     eds_dict['Rectangle'] = EDPSamples(
         DateTime=time_str, geo_type="Rectangle", altitude=alt_grid,
-        sampling_parameters=sampling_df, evaluate_iri=1,
-        minLon=lon_c - 15, maxLon=lon_c + 15, dLon=5,
-        minLat=lat_c - 15, maxLat=lat_c + 15, dLat=5
+        sampling_parameters=mc_df, evaluate_iri=1,
+        minLon=np.min(lat_lons[:,1]), maxLon=np.max(lat_lons[:,1]), dLon=dlon_step,
+        minLat=np.min(lat_lons[:,0]), maxLat=np.max(lat_lons[:,0]), dLat=dlat_step
     )
 
-    # D. POLAR (Dynamic pole selection based on lat_c)
+    # D. POLAR
     print("  -> Generating [Polar] EDPSamples")
-    min_lat_polar = 50.0 if lat_c >= 0 else -50.0
+    lats = lat_lons[:, 0]
+    if np.mean(lats) > 0: 
+        min_lat_polar = np.max([np.min(lats[lats > 0]), 1.0]) if np.any(lats > 0) else 1.0
+    else:
+        min_lat_polar = np.min([np.max(lats[lats <= 0]), -1.0]) if np.any(lats <= 0) else -1.0
+        
+    print(f"     Polar Plot edge: {min_lat_polar:.2f}°")
     eds_dict['Polar'] = EDPSamples(
         DateTime=time_str, geo_type="Polar", altitude=alt_grid,
-        sampling_parameters=sampling_df, evaluate_iri=1,
-        minLat=min_lat_polar, dLat=5
+        sampling_parameters=mc_df, evaluate_iri=1,
+        minLat=min_lat_polar, dLat=dlat_step
     )
     
     # ---------------------------------------------------------
-    # 3. Calculate TEC for each Mesh Type
+    # 4. Analysis: Plots, Covariance, and TEC Models
     # ---------------------------------------------------------
-    print("\n  -> Running Forward Models...")
+    print("\n  -> Running Analysis and Forward Models...")
     results_tec = {}
+    
     for name, eds in eds_dict.items():
-        print(f"     Evaluating TEC for {name} mesh")
-        # Uses the newly integrated class method
+        print(f"\n     --- Evaluating {name} mesh ---")
         
-        plot_edp_statistics(eds)
-        # Derive center of figure from podTc data
-        tecmax_lat = podTc_data['lat_tecmax_tangent']
-        tecmax_lon = podTc_data['lon_tecmax_tangent']
-        if name is not 'Point':
-            eds.plot_mesh_globe(
-                tecmax_lat, tecmax_lon,
-                save_path=f"{name}_mesh_globe.png",
-                leo_data=podTc_data['LEO'],
-                gnss_data=podTc_data['GNSS']
-            )
+        try:
+            if name == 'Point':
+                print("      -> Plotting State Distribution (Temporal variance at Center Point)")
+                # Evaluates over the 50 state samples at the single point
+                eds.plot_edp_statistics(f"{name} Geometry ({n_mc} states)")
+            else:
+                print(f"      -> Plotting {name} Geometric Distribution (Spatial variance at base time)")
+                # Isolate the nominal state (sample 0) to view purely spatial variance
+                eds_spatial = EDPSamples.from_xarray(eds.isel(sample=[0]))
+                eds_spatial.plot_edp_statistics(f"{name} Geometry ({n_mc} states)")
+                # Derive center of figure from podTc data
+                tecmax_lat = podTc_data['lat_tecmax_tangent']
+                tecmax_lon = podTc_data['lon_tecmax_tangent']
+                
+                eds_spatial.plot_mesh_globe(
+                    tecmax_lat, tecmax_lon,
+                    save_path=f"./Figures/{name}_mesh_globe.png",
+                    podTc_data=podTc_data
+                )
+                print(f"      -> Plotting {name} State Covariance Matrix")
+                # Evaluates over all spatial points AND all 50 states
+                eds.plot_edp_covariance()
+                
+
+                
+        except Exception as e:
+            print(f"      [!] Statistical plotting failed: {e}")
+            
+        print("      -> Running Forward TEC Integration")
+        # Explicitly targets sample_idx=0 (our unmodified base state)
         results_tec[name] = eds.forward_model_mesh_tec(podTc_data, sample_idx=0, num_segments=1000)
 
     # ---------------------------------------------------------
-    # 4. Generate the Comparison Plot
+    # 5. Generate the Comparison Plot
     # ---------------------------------------------------------
-    print("\n  -> Generating Comparison Plot...")
+    print("\n  -> Generating TEC Comparison Plot...")
     
-    # Calculate measured tangents for Y-axis
-    _, _, tangent_alt_raw = rayTangent(podTc_data['LEO'], podTc_data['GNSS'], units='m')
+    _, _, tangent_alt_raw = rayTangent(podTc_data['LEO'], podTc_data['GNSS'], units='km')
     tangent_alt_km = tangent_alt_raw * 1e-3
 
-    # Extract measured TEC safely based on your parser
     measured_tec = podTc_data.get('TEC_podTc2', podTc_data.get('TEC', np.zeros_like(tangent_alt_km)))
 
     fig, ax = plt.subplots(figsize=(8, 10))
     fig.suptitle(f"§16 Mesh Geometry Comparison\nOccultation: {filename}", fontsize=12)
 
-    # Plot Base Measured Data
     ax.plot(measured_tec, tangent_alt_km, color='black', lw=3, label="Measured TEC")
 
-    # Plot Styles Mapping
     styles = {
         'Point':       {'color': 'tab:red',    'ls': ':'},
         'Occultation': {'color': 'tab:blue',   'ls': '--'},
@@ -1139,7 +1192,6 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
         'Polar':       {'color': 'tab:purple', 'ls': '-'}
     }
 
-    # Overlay Modeled Data
     for name in eds_dict.keys():
         ax.plot(
             results_tec[name], 
@@ -1153,7 +1205,6 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax.set_ylabel("Tangent Altitude (km)")
     ax.set_xlabel("Total Electron Content (TECU)")
     
-    # Clamp Y-Axis to data
     valid_alts = tangent_alt_km[tangent_alt_km >= 0]
     if len(valid_alts) > 0:
         ax.set_ylim(0, min(np.max(valid_alts) + 50, alt_grid[-1]))
@@ -1164,7 +1215,6 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax.legend(loc='upper right', fontsize=10)
     plt.tight_layout()
 
-    # Save output
     save_dir = "./Figures/Section16_Comparisons/"
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"{filename}_mesh_comparison.png")
@@ -1190,8 +1240,8 @@ def main() -> None:
     # v_rect, t_rect = section6()
     # section7()
     # section8(v_rect, t_rect)
-    section9()
-    section10()
+    # section9()
+    # section10()
     # section11()
 
     # --- Define the file here so both section12 and section14 can use it ---
@@ -1222,12 +1272,12 @@ def main() -> None:
     }])
 
     podTc2_files = [
-        "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
+        # "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
         # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
-        # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
+        "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
         # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
         # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
-        # "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Easter coast of South America
+        # "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
         # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
     ]
 

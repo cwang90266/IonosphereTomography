@@ -25,7 +25,7 @@ import math
 import pandas as pd
 
 from scipy.spatial import cKDTree
-from EDPSamples.generate_occultation_tri_mesh import generate_occultation_mesh
+# from EDPSamples.generate_occultation_tri_mesh import generate_occultation_mesh
 
 import pyproj
 from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
@@ -857,6 +857,162 @@ class EDPSamples(xr.Dataset):
         return vertices, triangles
     
     @staticmethod
+    def rayTangent(LEO, GNSS, units='km'):
+        """Calculates the tangent points and altitude of the raypath."""
+        v = LEO - GNSS
+        t_s = np.clip(-np.sum(v * GNSS, axis=0) / np.sum(v * v, axis=0), 0.0, 1.0)
+        tangent_point = GNSS + v * t_s[np.newaxis, :]
+        p = np.linalg.norm(tangent_point, axis=0)
+        
+        # Convert to meters for _ecef_to_geodetic
+        tp_m = tangent_point * 1000.0 if units == 'km' else tangent_point
+        
+        # _ecef_to_geodetic expects shape (..., 3) so we transpose tp_m
+        _, _, alt_m = _ecef_to_geodetic(tp_m.T)
+        
+        # Convert altitude back to requested units
+        alt = alt_m / 1000.0 if units == 'km' else alt_m
+
+        return tangent_point, p, alt
+
+    @staticmethod
+    def get_occultation_extrema(LEO, GNSS, alt_limit=1800.0, r_earth_km=6371.0):
+        """
+        Analytically computes 3 bounding points (lat, lon) by finding the tangent 
+        point of the highest valid ray, and the entry/exit points of the deepest ray.
+        """
+        # 1. Calculate tangent points and filter by valid altitude limits
+        tangent_point, _, tangent_alt = EDPSamples.rayTangent(LEO, GNSS, units='km')
+        
+        valid_mask = (tangent_alt >= 0) & (tangent_alt <= (alt_limit))
+        if not np.any(valid_mask):
+            raise ValueError(f"No tangent points found within bounds [0, {alt_limit}] km.")
+            
+        LEO_v = LEO[:, valid_mask]
+        GNSS_v = GNSS[:, valid_mask]
+        Tan_v = tangent_point[:, valid_mask]
+        alts_v = tangent_alt[valid_mask]
+        
+        # 2. Identify highest and lowest tangent points
+        idx_high = np.argmax(alts_v)
+        idx_low = np.argmin(alts_v)
+        
+        # 3. p1: Tangent point of the highest altitude ray
+        ecef_p1 = Tan_v[:, idx_high]
+        
+        # 4. p2 & p3: Endpoints of the lowest ray at the alt_limit boundary
+        leo_low = LEO_v[:, idx_low]
+        gnss_low = GNSS_v[:, idx_low]
+        v_low = leo_low - gnss_low
+        
+        R_target = r_earth_km + alt_limit
+        a = np.dot(v_low, v_low)
+        b = 2.0 * np.dot(gnss_low, v_low)
+        c = np.dot(gnss_low, gnss_low) - (R_target ** 2)
+        
+        discriminant = b**2 - 4*a*c
+        if discriminant < 0:
+            raise ValueError("The deepest ray does not intersect the altitude limit shell.")
+            
+        t1 = (-b - np.sqrt(discriminant)) / (2 * a)
+        t2 = (-b + np.sqrt(discriminant)) / (2 * a)
+        
+        ecef_p2 = gnss_low + v_low * t1  # Entry point
+        ecef_p3 = gnss_low + v_low * t2  # Exit point
+        
+        # 5. Convert ECEF points back to Lat/Lon using built-in _ecef_to_geodetic
+        points_ecef = np.column_stack((ecef_p1, ecef_p2, ecef_p3))
+        pts_m = points_ecef.T * 1000.0  # Transpose to (3,3) for the coordinate function
+        
+        lats, lons, _ = _ecef_to_geodetic(pts_m)
+        
+        p1 = (lats[0], lons[0])
+        p2 = (lats[1], lons[1])
+        p3 = (lats[2], lons[2])
+        
+        return p1, p2, p3
+
+    @staticmethod
+    def generate_occultation_mesh(pt1=None, pt2=None, pt3=None, filename=None, dLat=0.5, dLon=0.5, alt_limit=600.0):
+        """
+        Generates a rectangular grid mesh of vertices (lat, lon) aligned with an 
+        occultation geometry.
+        """
+        from TEC_model.podTc_file_processing import parse_podTc2_nc_file
+        
+        if filename is not None:
+            data = parse_podTc2_nc_file(filename)
+            pt1, pt2, pt3 = EDPSamples.get_occultation_extrema(
+                data['LEO'], data['GNSS'], alt_limit=alt_limit
+            )
+            
+        if pt1 is not None and pt2 is not None and pt3 is not None:
+            target_res = (dLat + dLon) / 2.0
+            
+            # 1. Convert to Cartesian and normalize to unit vectors using built-in function
+            v1 = _geodetic_to_ecef(pt1[0], pt1[1], 0.0)
+            v1 = v1 / np.linalg.norm(v1)
+            
+            v2 = _geodetic_to_ecef(pt2[0], pt2[1], 0.0)
+            v2 = v2 / np.linalg.norm(v2)
+            
+            v3 = _geodetic_to_ecef(pt3[0], pt3[1], 0.0)
+            v3 = v3 / np.linalg.norm(v3)
+            
+            # 2. Calculate Great Circle distances
+            e1 = np.degrees(np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0)))
+            e2 = np.degrees(np.arccos(np.clip(np.dot(v2, v3), -1.0, 1.0)))
+            e3 = np.degrees(np.arccos(np.clip(np.dot(v3, v1), -1.0, 1.0)))
+            max_edge = max(e1, e2, e3)
+            
+            N = max(1, int(np.ceil(max_edge / target_res)))
+            
+            vertices_list = []
+            indices = {}
+            idx_counter = 0
+            
+            for i in range(N + 1):
+                for j in range(N + 1 - i):
+                    k = N - i - j
+                    w1, w2, w3 = i / N, j / N, k / N
+                    
+                    # 3. Interpolate strictly in 3D space and normalize back to sphere
+                    interp_v = w1 * v1 + w2 * v2 + w3 * v3
+                    interp_v = interp_v / np.linalg.norm(interp_v)
+                    
+                    # 4. Convert back to Lat/Lon
+                    # Scale by Earth radius so Bowring algo processes it accurately
+                    lat_arr, lon_arr, _ = _ecef_to_geodetic(interp_v * _WGS84_A)
+                    
+                    # Extract floats
+                    lat, lon = float(lat_arr), float(lon_arr)
+                    
+                    vertices_list.append([lon, lat])
+                    indices[(i, j)] = idx_counter
+                    idx_counter += 1
+                    
+            vertices = np.array(vertices_list)
+            
+            triangles = []
+            for i in range(N):
+                for j in range(N - i):
+                    v0 = indices[(i, j)]
+                    v1 = indices[(i + 1, j)]
+                    v2 = indices[(i, j + 1)]
+                    triangles.append([v0, v1, v2])
+                    
+                    if j < N - i - 1:
+                        v0 = indices[(i + 1, j)]
+                        v1 = indices[(i + 1, j + 1)]
+                        v2 = indices[(i, j + 1)]
+                        triangles.append([v0, v1, v2])
+                        
+            triangles = np.array(triangles, dtype=int)
+        else:
+            raise ValueError("You must provide either (pt1, pt2, pt3) OR a valid (filename).")
+            
+        return vertices, triangles, pt1, pt2, pt3
+    @staticmethod
     def genLineOfSight(
         lat1: float,
         lon1: float,
@@ -918,7 +1074,7 @@ class EDPSamples(xr.Dataset):
         pt1: tuple = None,
         pt2: tuple = None,
         pt3: tuple = None,
-        alt_limit: float = 1800.0,
+        alt_limit: float = 700.0,
         edps: np.ndarray = None,
         attrs = None):
         #) -> EDPSamples:
@@ -989,7 +1145,7 @@ class EDPSamples(xr.Dataset):
                     raise ValueError("For geo_type Occultation, you must provide either a 'filename' or all three points ('pt1', 'pt2', 'pt3').")
                 if dLat is None or dLon is None:
                     print("For geo_type Occultation, dLat and dLon assumed to be 5 deg.")
-                    geolocation, mesh, pt1, pt2, pt3 = generate_occultation_mesh(
+                    geolocation, mesh, pt1, pt2, pt3 = cls.generate_occultation_mesh(
                         pt1=pt1, pt2=pt2, pt3=pt3, 
                         filename=filename, 
                         dLat=5, dLon=5, 
@@ -997,7 +1153,7 @@ class EDPSamples(xr.Dataset):
                     )
                 else:
                 # vertices = geolocation (lon, lat array), triangles = mesh (indices array)
-                    geolocation, mesh, pt1, pt2, pt3 = generate_occultation_mesh(
+                    geolocation, mesh, pt1, pt2, pt3 = cls.generate_occultation_mesh(
                         pt1=pt1, pt2=pt2, pt3=pt3, 
                         filename=filename, 
                         dLat=dLat, dLon=dLon, 
@@ -1093,7 +1249,7 @@ class EDPSamples(xr.Dataset):
             case "Rectangle":
                 attrs["minLon"] = minLon
                 attrs["maxLon"] = maxLon
-                attrs["dLon"] = dLon,
+                attrs["dLon"] = dLon
                 attrs["minLat"] = minLat
                 attrs["maxLat"] = maxLat
                 attrs["dLat"] = dLat
@@ -1102,7 +1258,7 @@ class EDPSamples(xr.Dataset):
                 attrs["pt1"] = pt1
                 attrs["pt2"] = pt2
                 attrs["pt3"] = pt3
-                attrs["dLon"] = dLon,
+                attrs["dLon"] = dLon
                 attrs["dLat"] = dLat
             case "Polar":
                 attrs["minLat"] = minLat
@@ -1179,6 +1335,14 @@ class EDPSamples(xr.Dataset):
                                 LOS_LEO=ds.attrs["LOS_LEO"],LOS_GNSS=ds.attrs["LOS_GNSS"],
                                 LOS_nb_point=ds.attrs["LOS_nb_point"],
                                 edps=edps,attrs=ds.attrs)
+            case "Occultation":
+                assert "filename" in ds.attrs, ["Loaded dataset missing Occultation filename."]
+                return EDPSamples(ds.attrs["DateTime"], ds.attrs["geo_type"],
+                                altitude, sampling_parameters, 
+                                filename=ds.attrs["filename"],
+                                pt1=ds.attrs.get("pt1"), pt2=ds.attrs.get("pt2"), pt3=ds.attrs.get("pt3"),
+                                dLat=ds.attrs.get("dLat"), dLon=ds.attrs.get("dLon"),
+                                edps=edps, attrs=ds.attrs)
             case "Rectangle":
                 assert "minLon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (7)."]
                 assert "maxLon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (8)."]
@@ -1237,14 +1401,65 @@ class EDPSamples(xr.Dataset):
                     plot_polar_mesh(self.geolocation, self.mesh, pole= "south")  
                     
     def plot_mesh_globe(self, tecmax_lat, tecmax_lon, save_path,
-                    leo_data=None, gnss_data=None, tangent_lla=None, alt_limit=600.0):
-        from EDPSamples.plot_mesh_globe import plot_globe_occultation_mesh
-        vertices  = self.geolocation   # (n_geo, 2) [lon, lat]
-        triangles = self.mesh          # triangle index array
-        plot_globe_occultation_mesh(vertices, triangles, tecmax_lat, tecmax_lon, save_path,
-                                    leo_data=leo_data, gnss_data=gnss_data,
-                                    tangent_lla=tangent_lla, alt_limit=alt_limit)
+                        podTc_data=None, tangent_lla=None, alt_limit=600.0):
+
+        vertices  = self.geolocation  # (n_geo, 2): col 0 = lon, col 1 = lat
+        triangles = self.mesh
     
+        fig = plt.figure(figsize=(6, 6))
+        ax = plt.axes(projection=ccrs.Orthographic(central_longitude=tecmax_lon,
+                                                   central_latitude=tecmax_lat))
+        ax.set_global()
+        ax.add_feature(cfeature.LAND, facecolor='lightgray')
+        ax.add_feature(cfeature.OCEAN, facecolor='lightblue')
+        ax.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5)
+        ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5)
+    
+        print("attempting to plot occultation mesh region...")
+        print("Any NaNs in mesh?", np.isnan(vertices).any())
+        ax.triplot(vertices[:, 0], vertices[:, 1], triangles,
+                   transform=ccrs.Geodetic(), color='darkorange', linewidth=0.8, alpha=0.7)
+    
+        if podTc_data is not None:
+            transformer = pyproj.Transformer.from_crs(
+                pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
+                pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+                always_xy=True
+            )
+    
+            leo  = podTc_data['LEO']   # (3, N)
+            gnss = podTc_data['GNSS']  # (3, N)
+    
+            # Plot start position of LEO and GNSS (first column only)
+            lon_leo,  lat_leo,  _ = transformer.transform(leo[0, 0]  * 1e3, leo[1, 0]  * 1e3, leo[2, 0]  * 1e3)
+            lon_gnss, lat_gnss, _ = transformer.transform(gnss[0, 0] * 1e3, gnss[1, 0] * 1e3, gnss[2, 0] * 1e3)
+    
+            ax.plot(lon_leo,  lat_leo,  transform=ccrs.Geodetic(),
+                    color='g', marker='^', markersize=6, label='LEO Start')
+            ax.plot(lon_gnss, lat_gnss, transform=ccrs.Geodetic(),
+                    color='r', marker='s', markersize=6, label='GNSS Start')
+    
+            # Plot the ray paths (all columns)
+            lons_leo,  lats_leo,  _ = transformer.transform(leo[0, :]  * 1e3, leo[1, :]  * 1e3, leo[2, :]  * 1e3)
+            lons_gnss, lats_gnss, _ = transformer.transform(gnss[0, :] * 1e3, gnss[1, :] * 1e3, gnss[2, :] * 1e3)
+    
+            ax.plot(lons_leo,  lats_leo,  transform=ccrs.Geodetic(),
+                    color='g', linewidth=0.8, alpha=0.6)
+            ax.plot(lons_gnss, lats_gnss, transform=ccrs.Geodetic(),
+                    color='r', linewidth=0.8, alpha=0.6)
+    
+        if tangent_lla is not None:
+            mask = tangent_lla[2, :] < alt_limit * 1e3
+            ax.plot(tangent_lla[1, mask], tangent_lla[0, mask],
+                    transform=ccrs.Geodetic(), color='m', linewidth=2, label='Tangent Path')
+    
+        plt.title(f"Occultation Mesh Geometry Below {alt_limit} km")
+    
+        if podTc_data is not None:
+            plt.legend(loc='lower left')
+    
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        
 
     def interp(self, positions: np.array, 
                coordinate: Literal["lla","ecef"] = "lla") -> tuple[np.ndarray,  np.ndarray, np.ndarray,  np.ndarray]:
@@ -1345,11 +1560,22 @@ class EDPSamples(xr.Dataset):
                 # Multi-point mesh: build 2-D spatial interpolators then do altitude lookup.
                 print("Building spatial interpolators for the occultation mesh...")
 
-                # Primary: high accuracy inside the mesh convex hull
-                spatial_interp_lin = LinearNDInterpolator(geolocation, edps_2d)
+                # Project to azimuthal equidistant centred on the mesh — fixes
+                # lon/lat distortion near the poles and gives a proper metric space.
+                centroid_lon = float(np.mean(geolocation[:, 0]))
+                centroid_lat = float(np.mean(geolocation[:, 1]))
+                proj = pyproj.Proj(proj='aeqd', lat_0=centroid_lat,
+                                   lon_0=centroid_lon, ellps='WGS84')
+                geo_x, geo_y = proj(geolocation[:, 0], geolocation[:, 1])
+                geo_xy = np.column_stack([geo_x, geo_y])
 
-                # Fallback: graceful extrapolation for ray tails outside the mesh
-                spatial_interp_near = NearestNDInterpolator(geolocation, edps_2d)
+                # Maximum distance (m) beyond the mesh boundary to trust nearest-neighbour.
+                # Points further than this are set to zero instead of extrapolated.
+                mesh_tree = cKDTree(geo_xy)
+                max_extrap_m = 500_000.0   # 500 km — tune to your mesh size
+
+                spatial_interp_lin  = LinearNDInterpolator(geo_xy, edps_2d)
+                spatial_interp_near = NearestNDInterpolator(geo_xy, edps_2d)
 
                 # 3. Ray Tracing & Integration
                 for i in tqdm(range(n_rays), desc="Processing Occultation Rays"):
@@ -1371,12 +1597,20 @@ class EDPSamples(xr.Dataset):
                     alts_km = alts_m / 1000.0
 
                     # 4. Interpolate Electron Density with Hybrid Fallback
-                    ray_profiles = spatial_interp_lin(lons, lats)
+                    ray_x, ray_y = proj(lons, lats)
+                    ray_profiles = spatial_interp_lin(ray_x, ray_y)
 
                     nan_mask = np.isnan(ray_profiles[:, 0])
                     if np.any(nan_mask):
+                        out_xy = np.column_stack([ray_x[nan_mask], ray_y[nan_mask]])
+                        dists, _ = mesh_tree.query(out_xy)
                         ray_profiles[nan_mask, :] = spatial_interp_near(
-                            lons[nan_mask], lats[nan_mask]
+                            ray_x[nan_mask], ray_y[nan_mask]
+                        )
+                        # Zero out segments too far outside the mesh boundary
+                        ray_profiles[nan_mask, :] = np.where(
+                            dists[:, np.newaxis] > max_extrap_m, 0.0,
+                            ray_profiles[nan_mask, :]
                         )
 
                     Ne_along_ray = np.zeros(num_segments - 1)
@@ -1431,3 +1665,207 @@ class EDPSamples(xr.Dataset):
             ds=self[self.VAR_MESH]
             return ds.to_numpy()
         return None
+
+    def plot_edp_statistics(self, TitleName="Non-Gaussian"):
+        """
+        Plots a 3-panel statistical overview of this EDPSamples dataset using robust
+        non-Gaussian percentiles.
+        """
+        from matplotlib.colors import LogNorm
+        
+        # Extract data from the dataset instance
+        altitude = self.altitude
+        edps = self.edps 
+        
+        percentiles = np.nanpercentile(edps, [1, 5, 16, 50, 84, 95, 99], axis=(1, 2))
+        p01, p05, p16, median_edp, p84, p95, p99 = percentiles
+        
+        safe_median = np.where(median_edp == 0, np.nan, median_edp)
+
+        fig, axes = plt.subplots(1, 3, figsize=(16, 7), sharey=True)
+        fig.suptitle(f"EDP Ensemble Statistics ({TitleName})", fontsize=16, fontweight='bold', y=0.95)
+
+        # ---------------------------------------------------------
+        # Subplot 1: Absolute Median and Percentile Ranges
+        # ---------------------------------------------------------
+        ax1 = axes[0]
+        ax1.fill_betweenx(altitude, p01, p99, color='lightblue', alpha=0.3, label='1st–99th %ile')
+        ax1.fill_betweenx(altitude, p05, p95, color='dodgerblue', alpha=0.5, label='5th–95th %ile')
+        ax1.fill_betweenx(altitude, p16, p84, color='blue', alpha=0.7, label='16th–84th %ile')
+        ax1.plot(median_edp, altitude, color='black', lw=2, label='Median EDP')
+        
+        ax1.set_ylim([0, 700])
+        ax1.set_xlabel("Electron Density (m⁻³)")
+        ax1.set_ylabel("Altitude (km)")
+        ax1.set_title("Absolute Profile Spread")
+        ax1.grid(True, alpha=0.4, linestyle=':')
+        ax1.legend(loc='lower right')
+
+        # ---------------------------------------------------------
+        # Subplot 2: Normalized Spread (Percentage Deviation from Median)
+        # ---------------------------------------------------------
+        ax2 = axes[1]
+        ax2.axvline(0, color='black', lw=2, label='Median (Baseline)')
+        
+        def norm_pct(p_array):
+            return (p_array - safe_median) / safe_median * 100
+
+        ax2.fill_betweenx(altitude, norm_pct(p01), norm_pct(p99), color='lightcoral', alpha=0.3, label='1st–99th %ile')
+        ax2.fill_betweenx(altitude, norm_pct(p05), norm_pct(p95), color='indianred', alpha=0.5, label='5th–95th %ile')
+        ax2.fill_betweenx(altitude, norm_pct(p16), norm_pct(p84), color='darkred', alpha=0.7, label='16th–84th %ile')
+
+        ax2.set_ylim([0, 700])
+        ax2.set_xlabel("Deviation from Median (%)")
+        ax2.set_title("Normalized Profile Spread")
+        ax2.grid(True, alpha=0.4, linestyle=':')
+        
+        max_plot_pct = np.nanmax(np.abs(norm_pct(p95))) 
+        ax2.set_xlim(-max_plot_pct, max_plot_pct)
+        ax2.legend(loc='lower right')
+
+        # ---------------------------------------------------------
+        # Subplot 3: 2D Probability Density Histogram
+        # ---------------------------------------------------------
+        ax3 = axes[2]
+        ax3.set_facecolor('black') 
+        
+        n_profiles = edps.shape[1] * edps.shape[2]
+        flat_alts = np.tile(altitude, n_profiles)
+        flat_edps = edps.reshape(len(altitude), -1).flatten(order='F')
+        
+        valid_mask = ~np.isnan(flat_edps)
+        
+        h = ax3.hist2d(flat_edps[valid_mask], flat_alts[valid_mask], 
+                       bins=[60, len(altitude)], cmap='viridis', norm=LogNorm())
+        
+        ax3.plot(median_edp, altitude, color='white', lw=1.5, linestyle='--', label='Median')
+
+        ax3.set_ylim([0, 700])
+        ax3.set_xlabel("Electron Density (m⁻³)")
+        ax3.set_title("True Ensemble Probability Density")
+        cbar = fig.colorbar(h[3], ax=ax3)
+        cbar.set_label('Count (Density)')
+        ax3.grid(True, alpha=0.3, color='white', linestyle=':')
+        ax3.legend(loc='lower right')
+
+        plt.tight_layout()
+        # plt.show()
+
+    def plot_edp_covariance(self, ref_alt_idx: int = None, ref_geo_idx: int = None):
+            """
+            Memory-efficient covariance analysis using the ensemble perturbation matrix.
+
+            Never forms the full (n_state_vars × n_state_vars) matrix. Instead stores
+            P_sqrt of shape (n_state_vars, n_sample) such that C = P_sqrt @ P_sqrt.T.
+            For n_sample << n_state_vars this saves orders of magnitude of RAM.
+
+            Plots:
+              - Standard deviation at each state variable (n_height × n_geo heatmap)
+              - Pearson correlation from a chosen reference state variable
+
+            Parameters
+            ----------
+            ref_alt_idx : int, optional
+                Altitude index of the reference state variable. Defaults to the
+                altitude of maximum mean Ne (F-region peak).
+            ref_geo_idx : int, optional
+                Geo-point index of the reference state variable. Defaults to the
+                centre geo point.
+
+            Returns
+            -------
+            P_sqrt : np.ndarray, shape (n_state_vars, n_sample)
+                Square-root covariance factor. Full covariance is P_sqrt @ P_sqrt.T.
+            std_map : np.ndarray, shape (n_height, n_geo)
+                Standard deviation at every state variable.
+            corr_map : np.ndarray, shape (n_height, n_geo)
+                Pearson correlation with the reference state variable.
+            """
+            from matplotlib.colors import LogNorm
+
+            edps = self.edps.astype(np.float32)
+            n_height, n_geo, n_sample = edps.shape
+            n_state_vars = n_height * n_geo
+
+            full_mb  = n_state_vars ** 2 * 4 / 1e6
+            sqrt_mb  = n_state_vars * n_sample * 4 / 1e6
+            print(f"  -> State vector : {n_state_vars} variables  "
+                  f"({n_height} heights × {n_geo} geo points)")
+            print(f"  -> Ensemble size: {n_sample} samples")
+            print(f"  -> Memory — full matrix: {full_mb:.0f} MB  |  "
+                  f"P_sqrt factor: {sqrt_mb:.1f} MB")
+
+            # Flatten to (n_state_vars, n_sample)
+            X = edps.reshape(n_state_vars, n_sample)
+
+            # Mean-centre; treat NaNs as zero perturbation so they don't inflate variance
+            X_mean = np.nanmean(X, axis=1, keepdims=True)
+            X_c    = np.where(np.isnan(X), 0.0, X - X_mean).astype(np.float32)
+
+            # C = P_sqrt @ P_sqrt.T  (never formed explicitly)
+            P_sqrt = X_c / np.sqrt(max(n_sample - 1, 1))
+
+            # --- Standard deviation (square root of diagonal of C) ---
+            # var[i] = ||P_sqrt[i,:]||^2  — one elementwise square + row sum
+            std_map = np.sqrt(np.sum(P_sqrt ** 2, axis=1)).reshape(n_height, n_geo)
+
+            # --- Reference state variable ---
+            if ref_geo_idx is None:
+                ref_geo_idx = n_geo // 2
+            if ref_alt_idx is None:
+                mean_profile = X_mean.reshape(n_height, n_geo).mean(axis=1)
+                ref_alt_idx  = int(np.argmax(mean_profile))
+
+            ref_idx = ref_alt_idx * n_geo + ref_geo_idx
+            print(f"  -> Reference state: alt idx={ref_alt_idx}, "
+                  f"geo idx={ref_geo_idx}  (flat idx={ref_idx})")
+
+            # corr[i] = (P_sqrt[ref] · P_sqrt[i]) / (||P_sqrt[ref]|| · ||P_sqrt[i]||)
+            # Only one (n_state_vars,) matmul needed — no full matrix formed
+            ref_row    = P_sqrt[ref_idx, :]                        # (n_sample,)
+            dot_prods  = P_sqrt @ ref_row                          # (n_state_vars,)
+            ref_norm   = float(np.linalg.norm(ref_row))
+            row_norms  = np.linalg.norm(P_sqrt, axis=1)           # (n_state_vars,)
+
+            with np.errstate(divide='ignore', invalid='ignore'):
+                corr_row = dot_prods / (ref_norm * row_norms)
+            corr_map = np.nan_to_num(corr_row, nan=0.0).reshape(n_height, n_geo)
+
+            # ---------------------------------------------------------
+            # Plot
+            # ---------------------------------------------------------
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+            fig.suptitle(
+                f"EDP Ensemble Statistics  "
+                f"({n_height} heights × {n_geo} geo pts, {n_sample} samples)",
+                fontsize=14, fontweight='bold'
+            )
+
+            # Panel 1: standard deviation map
+            ax1 = axes[0]
+            im1 = ax1.pcolormesh(std_map, cmap='plasma')
+            ax1.set_title("Standard Deviation (Ne, m⁻³)")
+            ax1.set_xlabel("Geo Point Index")
+            ax1.set_ylabel("Altitude Index")
+            ax1.invert_yaxis()
+            fig.colorbar(im1, ax=ax1, label="Std Dev (m⁻³)")
+
+            # Panel 2: correlation from reference point
+            ax2 = axes[1]
+            im2 = ax2.pcolormesh(corr_map, cmap='coolwarm', vmin=-1, vmax=1)
+            ax2.set_title(
+                f"Pearson Correlation from Reference\n"
+                f"(alt idx={ref_alt_idx}, geo idx={ref_geo_idx})"
+            )
+            ax2.set_xlabel("Geo Point Index")
+            ax2.set_ylabel("Altitude Index")
+            ax2.invert_yaxis()
+            ax2.plot(ref_geo_idx, ref_alt_idx, 'k*', markersize=10,
+                     label='Reference point')
+            ax2.legend(loc='upper right')
+            fig.colorbar(im2, ax=ax2, label="Pearson Correlation")
+
+            plt.tight_layout()
+            # plt.show()
+
+            return P_sqrt, std_map, corr_map

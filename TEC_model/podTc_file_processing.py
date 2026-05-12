@@ -155,7 +155,7 @@ def parse_podTc2_nc_file(file_path):
             
             # Guard clause: Ensure we actually have data left after masking
             if not np.any(valid_alt_mask):
-                print(f"No valid descending tangent points found. Skipping.")
+                print("No valid descending tangent points found. Skipping.")
                 return None
             
             tec_masked = podTc2_data['TEC_podTc2'][valid_alt_mask]
@@ -166,9 +166,9 @@ def parse_podTc2_nc_file(file_path):
 
             # 5. Determine occultation type (Rising vs Setting) and conditionally flip
             # We determine this using the unmasked array to see the true direction of the pass
-            is_setting = tangent_alt_km[0] > tangent_alt_km[-1]
+            is_rising = tangent_alt_km[0] < tangent_alt_km[-1]
             
-            if is_setting:
+            if is_rising:
                 # Reassign back into dictionary, flipped
                 podTc2_data['TEC_podTc2'] = np.flip(tec_masked)
                 podTc2_data['LEO'] = np.flip(leo_masked, axis=1) # Axis 1 for 2D arrays
