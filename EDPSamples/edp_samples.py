@@ -27,6 +27,10 @@ import pandas as pd
 from scipy.spatial import cKDTree
 from EDPSamples.generate_occultation_tri_mesh import generate_occultation_mesh
 
+import pyproj
+from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+from tqdm import tqdm
+
 __all__ = ["EDPSamples"]
 
 # WGS84 (geodetic <-> ECEF for satellite line-of-sight)
@@ -1197,7 +1201,101 @@ class EDPSamples(xr.Dataset):
                     return_bary = True,
                     )
                 return idx_alt, weight_alt, idx_mesh, weight_mesh
-       
+    
+    def forward_model_mesh_tec(self, podTc2_data: dict, sample_idx: int = 0, num_segments: int = 1000) -> np.ndarray:
+            """
+            Simulate Total Electron Content (TEC) for radio occultation rays through the EDP mesh.
+            
+            Parameters
+            ----------
+            podTc2_data : dict
+                Dictionary containing 'LEO' and 'GNSS' ECEF coordinate arrays (shape 3 x N).
+            sample_idx : int, default 0
+                Index of the sampling parameter to use from the EDPs array.
+            num_segments : int, default 1000
+                Number of segments to divide each ray into for integration.
+                
+            Returns
+            -------
+            np.ndarray
+                Calculated TEC values (in TECU) for each occultation ray.
+            """
+            print("Building spatial interpolators for the occultation mesh...")
+            
+            # 1. Extract Mesh and EDP Data using class properties
+            altitude = self.altitude                      # 1D array of heights (km)
+            geolocation = self.geolocation                # (n_geo, 2) array [lon, lat] Note: check coordinate order!
+            raw_edps = self.edps[:, :, sample_idx].T      # Transpose to (n_geo, n_height)
+            edps_2d = np.nan_to_num(raw_edps, nan=0.0)
+            
+            # Primary: High accuracy inside the mesh
+            spatial_interp_lin = LinearNDInterpolator(geolocation, edps_2d)
+            
+            # Fallback: Graceful extrapolation for the ray tails outside the mesh
+            spatial_interp_near = NearestNDInterpolator(geolocation, edps_2d)
+    
+            # 2. Extract Satellite Geometry
+            LEO = podTc2_data['LEO']
+            GNSS = podTc2_data['GNSS']
+            n_rays = LEO.shape[1]
+            
+            TEC = np.zeros(n_rays)
+            
+            transformer = pyproj.Transformer.from_crs(
+                pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
+                pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+                always_xy=True
+            )
+    
+            # 3. Ray Tracing & Integration
+            for i in tqdm(range(n_rays), desc="Processing Occultation Rays"):
+                
+                t = np.linspace(0, 1, num_segments)
+                ray_points = GNSS[:, i:i+1] + (LEO[:, i:i+1] - GNSS[:, i:i+1]) * t
+                
+                diffs = np.diff(ray_points, axis=1) 
+                dl_km = np.linalg.norm(diffs, axis=0)
+                dl_m = dl_km * 1000.0 
+                
+                midpoints = (ray_points[:, :-1] + ray_points[:, 1:]) / 2.0
+                
+                lons, lats, alts_m = transformer.transform(
+                    midpoints[0, :] * 1e3, 
+                    midpoints[1, :] * 1e3, 
+                    midpoints[2, :] * 1e3
+                )
+                alts_km = alts_m / 1000.0 
+                
+                # 4. Interpolate Electron Density with Hybrid Fallback
+                
+                # Step A: Try linear interpolation first
+                ray_profiles = spatial_interp_lin(lons, lats)
+                
+                # Step B: Find the points that fell outside the mesh (LinearND returns NaN)
+                nan_mask = np.isnan(ray_profiles[:, 0])
+                
+                # Step C: Fill those outside points using the nearest neighbor
+                if np.any(nan_mask):
+                    ray_profiles[nan_mask, :] = spatial_interp_near(lons[nan_mask], lats[nan_mask])
+                    
+                Ne_along_ray = np.zeros(num_segments - 1)
+                
+                for j in range(num_segments - 1):
+                    # Safe 1D altitude interpolation
+                    Ne_along_ray[j] = np.interp(
+                        alts_km[j], 
+                        altitude, 
+                        ray_profiles[j, :], 
+                        left=0.0, 
+                        right=0.0
+                    )
+                    
+                # 5. Integrate to calculate TEC (Ne * dl)
+                tec_ray = np.nansum(Ne_along_ray * dl_m)
+                TEC[i] = tec_ray / 1e16 
+    
+            return TEC
+
         
     @property
     def altitude(self) -> xr.DataArray:
@@ -1237,5 +1335,3 @@ class EDPSamples(xr.Dataset):
             ds=self[self.VAR_MESH]
             return ds.to_numpy()
         return None
-
-
