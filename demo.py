@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT))
 # locate_in_mesh.py lives inside a directory with a space in its name
 sys.path.insert(0, str(ROOT / "EDPSamples" / "Locate in mesh" / "outputs"))
 
+import os
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -584,7 +585,7 @@ def section11() -> None:
             geo_type="Point",
             altitude=alt_grid,
             sampling_parameters=samples,
-            evaluate_iri=1,
+            evaluate_iri=0,
             Lon=LON_C,
             Lat=LAT_C,
         )
@@ -690,7 +691,7 @@ def section12(podTc2_file: str) -> tuple[np.ndarray, np.ndarray, tuple, tuple, t
 
 def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple, pt2: tuple, pt3: tuple) -> EDPSamples:
     from EDPSamples.EDPS_plotting import plot_edp_statistics
-    _banner("§8  EDPSamples  —  Alaska rect mesh × 3 solar scenarios")
+    _banner("§13  EDPSamples  —  Occultation Mesh × 3 solar scenarios")
 
     # Altitude grid (1-D numpy array)
     alt_grid = np.arange(ALT_KM[0], ALT_KM[1] + 1, ALT_KM[2], dtype=float)
@@ -1018,6 +1019,146 @@ def section15(lon_point: float = -145.0, lat_point: float = 62.5, n_mc_samples: 
     plot_edp_statistics(eds)
 
     return eds
+
+
+def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame) -> tuple[dict, dict]:
+    """
+    §16 Comparative Mesh Analysis
+    Generates 4 distinct EDPSamples meshes (Point, Occultation, Rectangle, Polar), 
+    evaluates the TEC for each using the integrated forward model, and plots 
+    the results against the measured podTc2 data.
+    """
+    from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
+    from EDPSamples.edp_samples import EDPSamples
+    
+    # Optional banner formatting fallback
+    try:
+        _banner("§16  Comparing 4 Mesh Types")
+    except NameError:
+        print("\n=== §16  Comparing 4 Mesh Types ===")
+
+    filename = podTc2_file.split('/')[-1]
+    print(f"Processing File: {filename}")
+
+    # 1. Parse podTc2 data to anchor the geometry
+    podTc_data = parse_podTc2_nc_file(podTc2_file)
+    if podTc_data is None:
+        print(" [!] Invalid or skipped podTc data. Aborting comparison.")
+        return {}, {}
+
+    time_str = podTc_data['date'].strftime("%Y-%m-%d %H:%M:%S")
+    lat_c = podTc_data['lat_tecmax_tangent']
+    lon_c = podTc_data['lon_tecmax_tangent']
+
+    eds_dict = {}
+
+    # ---------------------------------------------------------
+    # 2. Generate EDPSamples for each Geo Type
+    # ---------------------------------------------------------
+    time_str = "2015-06-01 12:00:00"
+    # A. POINT (Uses fallback NearestNDInterpolator in the forward model)
+    print("\n  -> Generating [Point] EDPSamples")
+    eds_dict['Point'] = EDPSamples(
+        DateTime=time_str, geo_type="Point", altitude=alt_grid,
+        sampling_parameters=sampling_df, evaluate_iri=1,
+        Lon=lon_c, Lat=lat_c
+    )
+
+    # B. OCCULTATION
+    print("  -> Generating [Occultation] EDPSamples")
+    eds_dict['Occultation'] = EDPSamples(
+        DateTime=time_str, geo_type="Occultation", altitude=alt_grid,
+        sampling_parameters=sampling_df, evaluate_iri=1,
+        filename=podTc2_file, dLat=5, dLon=5
+    )
+
+    # C. RECTANGLE (Centered on the occultation tangent max)
+    print("  -> Generating [Rectangle] EDPSamples")
+    eds_dict['Rectangle'] = EDPSamples(
+        DateTime=time_str, geo_type="Rectangle", altitude=alt_grid,
+        sampling_parameters=sampling_df, evaluate_iri=1,
+        minLon=lon_c - 15, maxLon=lon_c + 15, dLon=5,
+        minLat=lat_c - 15, maxLat=lat_c + 15, dLat=5
+    )
+
+    # D. POLAR (Dynamic pole selection based on lat_c)
+    print("  -> Generating [Polar] EDPSamples")
+    min_lat_polar = 50.0 if lat_c >= 0 else -50.0
+    eds_dict['Polar'] = EDPSamples(
+        DateTime=time_str, geo_type="Polar", altitude=alt_grid,
+        sampling_parameters=sampling_df, evaluate_iri=1,
+        minLat=min_lat_polar, dLat=5
+    )
+
+    # ---------------------------------------------------------
+    # 3. Calculate TEC for each Mesh Type
+    # ---------------------------------------------------------
+    print("\n  -> Running Forward Models...")
+    results_tec = {}
+    for name, eds in eds_dict.items():
+        print(f"     Evaluating TEC for {name} mesh")
+        # Uses the newly integrated class method
+        results_tec[name] = eds.forward_model_mesh_tec(podTc_data, sample_idx=0, num_segments=1000)
+
+    # ---------------------------------------------------------
+    # 4. Generate the Comparison Plot
+    # ---------------------------------------------------------
+    print("\n  -> Generating Comparison Plot...")
+    
+    # Calculate measured tangents for Y-axis
+    _, _, tangent_alt_raw = rayTangent(podTc_data['LEO'], podTc_data['GNSS'], units='m')
+    tangent_alt_km = tangent_alt_raw * 1e-3
+
+    # Extract measured TEC safely based on your parser
+    measured_tec = podTc_data.get('TEC_podTc2', podTc_data.get('TEC', np.zeros_like(tangent_alt_km)))
+
+    fig, ax = plt.subplots(figsize=(8, 10))
+    fig.suptitle(f"§16 Mesh Geometry Comparison\nOccultation: {filename}", fontsize=12)
+
+    # Plot Base Measured Data
+    ax.plot(measured_tec, tangent_alt_km, color='black', lw=3, label="Measured TEC")
+
+    # Plot Styles Mapping
+    styles = {
+        'Point':       {'color': 'tab:red',    'ls': ':'},
+        'Occultation': {'color': 'tab:blue',   'ls': '--'},
+        'Rectangle':   {'color': 'tab:green',  'ls': '-.'},
+        'Polar':       {'color': 'tab:purple', 'ls': '-'}
+    }
+
+    # Overlay Modeled Data
+    for name in eds_dict.keys():
+        ax.plot(
+            results_tec[name], 
+            tangent_alt_km, 
+            color=styles[name]['color'], 
+            ls=styles[name]['ls'], 
+            lw=2, 
+            label=f"Modeled ({name})"
+        )
+
+    ax.set_ylabel("Tangent Altitude (km)")
+    ax.set_xlabel("Total Electron Content (TECU)")
+    
+    # Clamp Y-Axis to data
+    valid_alts = tangent_alt_km[tangent_alt_km >= 0]
+    if len(valid_alts) > 0:
+        ax.set_ylim(0, min(np.max(valid_alts) + 50, alt_grid[-1]))
+    else:
+        ax.set_ylim(0, 600)
+        
+    ax.grid(True, alpha=0.4, linestyle=':')
+    ax.legend(loc='upper right', fontsize=10)
+    plt.tight_layout()
+
+    # Save output
+    save_dir = "./Figures/Section16_Comparisons/"
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"{filename}_mesh_comparison.png")
+    fig.savefig(save_path, dpi=150)
+    print(f"  -> Saved figure to {save_path}\n")
+
+    return eds_dict, results_tec
 # ─────────────────────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1036,8 +1177,8 @@ def main() -> None:
     # v_rect, t_rect = section6()
     # section7()
     # section8(v_rect, t_rect)
-    # section9()
-    # section10()
+    section9()
+    section10()
     # section11()
 
     # --- Define the file here so both section12 and section14 can use it ---
@@ -1059,7 +1200,31 @@ def main() -> None:
     # # Call section14 using the dataset and the original file
     # tec = section14(eds, podTc2_file)
     
-    section15()
+    # section15()
+    
+
+    alt_grid = np.arange(100.0, 200.0, 20.0, dtype=float)
+    sampling_df = pd.DataFrame([{
+        "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
+    }])
+
+    podTc2_files = [
+        "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
+        "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
+        "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
+        "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
+        "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
+        "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Easter coast of South America
+        "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
+    ]
+
+    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
+
+    for f_string in podTc2_files:
+        full_path = os.path.join(base_path, f_string)
+        
+        # Run the comparison suite
+        eds_dict, tec_results = section16(full_path, alt_grid, sampling_df)
 
     print("\n" + "=" * 60)
     print("All sections complete — displaying figures.")

@@ -129,37 +129,62 @@ def get_IRI2020_EDP(DateTime: str,
     #
     # Execute IRI2020_namelist_driver
     #
-    apf107 = Path("apf107.dat")
-    ig_rz = Path("ig_rz.dat")
+    # Define exactly where these files live permanently
+    data_dir = "/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/data/" # Or wherever they are
+    apf107 = Path(data_dir) / "apf107.dat"
+    ig_rz = Path(data_dir) / "ig_rz.dat"
 
-    assert apf107.is_file(), "The file apf107.dat must exist in the current folder"
-    assert ig_rz.is_file(), "The file iG_rz.dat must exist in the current folder"
+    assert apf107.is_file(), f"The file apf107.dat was not found at {apf107}"
+    assert ig_rz.is_file(), f"The file ig_rz.dat was not found at {ig_rz}"
 
     iri_name = "iri2020_namelist_driver"
     if os.name == "nt":
         iri_name += ".exe"
 
-    # %% run IRI with hard coded path to IRI2020 directory
-    IRIPath = "/home/aistonhunter/IonosphereTomography/iri2020_new/src/iri2020/"
-    exe = IRIPath+"iri2020_namelist_driver"
-    IRIDataPath = IRIPath+"Data"
-    data_path = IRIDataPath+"/mcsat*.dat"
-    cmd = "rm " +IRI_output_filename+";"
-    cmd = cmd+"ln -s -f " + data_path + " .;" 
-    data_path = IRIDataPath+"/dgrf*.dat"
-    cmd = cmd + "ln -s -f " + data_path + " .;" 
-    data_path = IRIDataPath+"/*.asc"
-    cmd = cmd+ "ln -s -f " + data_path + " .;" 
-    cmd =cmd + str(exe) +" " + namelist_filename + " "+IRI_output_filename+"> iri2020_namelist_driver.log;"
-    data_path = "mcsat*.dat"
-    cmd = cmd+"rm " + data_path + ";" 
-    data_path = "dgrf*.dat"
-    cmd = cmd+"rm " + data_path + ";" 
-    data_path = "*.asc"
-    cmd = cmd+"rm " + data_path + ";" 
-    logging.info(" ".join(cmd))
-    subprocess.run(cmd, shell = True)
 
+    assert flag == 0, "Fail to write input namelist for IRI2020"
+    
+    # ---------------------------------------------------------
+   # ---------------------------------------------------------
+    # Execute IRI2020_namelist_driver
+    # ---------------------------------------------------------
+    
+    IRIPath = "/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/"
+    IRIDataPath = IRIPath + "data/"  # Confirmed lowercase 'data'
+    exe = IRIPath + "iri2020_namelist_driver"
+    
+    # Confirmed these live inside the data/ folder
+    apf107_src = IRIDataPath + "apf107.dat" 
+    ig_rz_src = IRIDataPath + "ig_rz.dat"
+
+    # 1. Clean up old output silently
+    cmd = f"rm -f {IRI_output_filename}; "
+    
+    # 2. Link data files to the current working directory
+    cmd += f"ln -s -f {IRIDataPath}mcsat*.dat . ; "
+    cmd += f"ln -s -f {IRIDataPath}dgrf*.dat . ; "
+    cmd += f"ln -s -f {IRIDataPath}*.asc . ; "
+    cmd += f"ln -s -f {apf107_src} . ; "
+    cmd += f"ln -s -f {ig_rz_src} . ; "
+    
+   # 3. Execute Fortran driver
+    cmd += f"{exe} {namelist_filename} {IRI_output_filename}"
+    
+    print(f"\n--- DEBUG: Executing Fortran ---")
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+    # UNCONDITIONALLY print the Fortran output so we can see what it did
+    print(f"\n--- FORTRAN EXECUTION OUTPUT ---")
+    print(f"Return Code: {result.returncode}")
+    print(f"STDOUT:\n{result.stdout.strip()}")
+    print(f"STDERR:\n{result.stderr.strip()}")
+    print(f"--------------------------------\n")
+
+    # 4. Clean up symlinks 
+    os.system("rm -f mcsat*.dat dgrf*.dat *.asc apf107.dat ig_rz.dat")
+
+    # Now proceed to read the file (which will still crash with EOFError, 
+    # but we will finally see the STDOUT/STDERR above it!)
     return read_IRI2020_binary_output(IRI_output_filename)
     
 def write_IRI2020_namelist(DateTime: str,
@@ -245,24 +270,39 @@ def write_IRI2020_namelist(DateTime: str,
 
     return 0   
            
-
 def read_IRI2020_binary_output(IRI_output_filename: str) -> np.ndarray:
     with open(IRI_output_filename, 'rb') as f:
-        data =  f.read()
+        data = f.read()
     
-    npts=int.from_bytes(data[0:4],byteorder="little",signed=True) 
-    nSample=int.from_bytes(data[4:8],byteorder="little",signed=True)
-    nheight=int.from_bytes(data[8:12],byteorder="little",signed=True)
-    #print([nheight,npts,nSample])
-    edps = np.ndarray([nheight,npts,nSample])
+    # 1. Check if file is completely empty or just garbage
+    if len(data) < 12:
+        raise ValueError(f"File {IRI_output_filename} is too short ({len(data)} bytes). The Fortran driver crashed immediately.")
+        
+    npts = int.from_bytes(data[0:4], byteorder="little", signed=True) 
+    nSample = int.from_bytes(data[4:8], byteorder="little", signed=True)
+    nheight = int.from_bytes(data[8:12], byteorder="little", signed=True)
+    
+    # 2. Pre-calculate expected file size
+    expected_size = 12 + (npts * nSample * nheight * 4)
+    if len(data) < expected_size:
+        print(f"DEBUG: npts={npts}, nSample={nSample}, nheight={nheight}")
+        raise EOFError(
+            f"File {IRI_output_filename} is missing data. Expected {expected_size} bytes, "
+            f"but only got {len(data)}. The Fortran driver crashed mid-execution. "
+            f"Check 'iri2020_namelist_driver.log' to see the Fortran error."
+        )
+
+    # 3. Safely extract data using [0] instead of float()
+    edps = np.ndarray([nheight, npts, nSample])
     cbyte = 12
     for idxSample in range(nSample):
         for idxpts in range(npts):
             for idxheight in range(nheight):
-                edps[idxheight,idxpts,idxSample] = float(np.frombuffer(data[cbyte:cbyte+4],dtype=np.float32))
+                edps[idxheight, idxpts, idxSample] = np.frombuffer(data[cbyte:cbyte+4], dtype=np.float32)[0]
                 cbyte += 4
                 
     return edps
+
 
 def plot_polar_mesh(vertices: np.ndarray, triangles: np.ndarray, pole: str = "north", ax=None):
     """

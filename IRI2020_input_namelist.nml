@@ -1,0 +1,33 @@
+&EDPSamples
+fill_value  = -99999.0
+npts  = 1
+nheight  = 5
+nSample  = 1
+idxHour = 1
+idxF107D  = 2
+idxap = 3
+idxIG12  = 4
+idxRz12 = 5
+idxfoF2  = -1
+idxHmF2 = -1
+idxB0  = -1
+idxB1  = -1
+year  = 2015
+month  = 6
+day  = 1
+hour  = 12
+minute  = 0
+second  = 0
+height_grid(1)  = 100.0
+height_grid(2)  = 120.0
+height_grid(3)  = 140.0
+height_grid(4)  = 160.0
+height_grid(5)  = 180.0
+latitude(1)  = 88.93863227679604
+longitude(1)  = 151.7038835872627
+phy_inputs(1,1)  = 12.0
+phy_inputs(2,1)  = 150.0
+phy_inputs(3,1)  = 15.0
+phy_inputs(4,1)  = 100.0
+phy_inputs(5,1)  = 100.0
+/ 
