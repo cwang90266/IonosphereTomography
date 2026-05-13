@@ -542,9 +542,16 @@ def find_containing_triangles(
     if max_k is None:
         max_k = n_tri
 
-    # 3D unit vectors
-    V = _geodetic_to_ecef(geolocation[:, 0], geolocation[:, 1], degrees=degrees)  # (N, 3)
-    Q = _geodetic_to_ecef(query_latlon[:, 0], query_latlon[:, 1], degrees=degrees)  # (M, 3)
+    # Fix: If the inputs are in radians, convert them to degrees first
+    # because _geodetic_to_ecef strictly assumes degree inputs.
+    if not degrees:
+        query_latlon = np.degrees(query_latlon)
+        geolocation = np.degrees(geolocation)
+
+    # Fix: Added the missing 0.0 altitude argument for the ECEF conversion
+    # Note: Assumes arrays are in [lat, lon] format as per the docstring
+    V = _geodetic_to_ecef(geolocation[:, 0], geolocation[:, 1], 0.0)  # (N, 3)
+    Q = _geodetic_to_ecef(query_latlon[:, 0], query_latlon[:, 1], 0.0)  # (M, 3)
     M = Q.shape[0]
 
     # Triangle corners
@@ -1487,6 +1494,155 @@ class EDPSamples(xr.Dataset):
                     return_bary = True,
                     )
                 return idx_alt, weight_alt, idx_mesh, weight_mesh
+            
+    def get_observation_operator(self, podTc2_data: dict, num_segments: int = 1000) -> np.ndarray:
+        """
+        Generates the Observation Operator (H matrix) for the Kalman Filter.
+        Maps the integration path of RO rays to the flattened state vector.
+        
+        Parameters
+        ----------
+        podTc2_data : dict
+            Dictionary containing 'LEO' and 'GNSS' ECEF coordinate arrays.
+        num_segments : int, default 1000
+            Number of segments to divide each ray into for integration.
+            
+        Returns
+        -------
+        H : np.ndarray
+            Observation matrix of shape (n_rays, n_state_vars), where 
+            n_state_vars = n_height * n_geo.
+        """
+        from scipy.spatial import cKDTree
+        import pyproj
+        
+        altitude = self.altitude
+        geolocation = self.geolocation
+        n_height = len(altitude)
+        n_geo = geolocation.shape[0]
+        n_state_vars = n_height * n_geo
+        
+        LEO = podTc2_data['LEO']
+        GNSS = podTc2_data['GNSS']
+        n_rays = LEO.shape[1]
+        
+        # Initialize the H matrix (n_observations x n_state_variables)
+        H = np.zeros((n_rays, n_state_vars), dtype=np.float32)
+        
+        transformer = pyproj.Transformer.from_crs(
+            pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
+            pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+            always_xy=True
+        )
+
+        # Cache the KDTree for the "NearestNDInterpolator" fallback outside the mesh
+        if n_geo > 1:
+            tree = cKDTree(geolocation)
+
+        for i in tqdm(range(n_rays), desc="Building H Matrix"):
+            t = np.linspace(0, 1, num_segments)
+            ray_points = GNSS[:, i:i+1] + (LEO[:, i:i+1] - GNSS[:, i:i+1]) * t
+            
+            diffs = np.diff(ray_points, axis=1)
+            dl_m = np.linalg.norm(diffs, axis=0) * 1000.0  # Segment lengths in meters
+            
+            midpoints = (ray_points[:, :-1] + ray_points[:, 1:]) / 2.0
+            
+            lons, lats, alts_m = transformer.transform(
+                midpoints[0, :] * 1e3,
+                midpoints[1, :] * 1e3,
+                midpoints[2, :] * 1e3
+            )
+            alts_km = alts_m / 1000.0
+            
+            # 1. Mask out segments completely outside our altitude bounds (left=0.0, right=0.0)
+            valid_mask = (alts_km >= altitude[0]) & (alts_km <= altitude[-1])
+            if not np.any(valid_mask):
+                continue
+                
+            dl_m_v = dl_m[valid_mask]
+            lats_v = lats[valid_mask]
+            lons_v = lons[valid_mask]
+            alts_km_v = alts_km[valid_mask]
+            
+            # 2. Get 1D Altitude Indices and Weights
+            idx_alt, w_alt = interp_heights(altitude, alts_km_v)
+            a_idx0 = idx_alt
+            a_idx1 = idx_alt + 1
+            aw0 = w_alt[:, 0]
+            aw1 = w_alt[:, 1]
+            
+            # 3. Get Spatial Indices and Weights
+            if n_geo == 1:
+                # Spherical Symmetry: Add weight purely based on altitude to the single column
+                # State index mapping: h_idx * 1 + 0 = h_idx
+                np.add.at(H[i], a_idx0, dl_m_v * aw0)
+                np.add.at(H[i], a_idx1, dl_m_v * aw1)
+                
+            else:
+                # Mesh Geometry: 2D Spatial mapping
+                tri_idx, bary = find_containing_triangles(
+                    np.column_stack([lats_v, lons_v]), 
+                    geolocation, 
+                    self.mesh, 
+                    return_bary=True
+                )
+                
+                inside = tri_idx != -1
+                outside = tri_idx == -1
+                
+                # --- A. Handle points INSIDE the mesh (Linear Barycentric) ---
+                if np.any(inside):
+                    t_idx = tri_idx[inside]
+                    # The 3 vertices for each segment's triangle
+                    v0 = self.mesh[t_idx, 0]
+                    v1 = self.mesh[t_idx, 1]
+                    v2 = self.mesh[t_idx, 2]
+                    
+                    # Spatial weights
+                    bw0 = bary[inside, 0]
+                    bw1 = bary[inside, 1]
+                    bw2 = bary[inside, 2]
+                    
+                    # Altitude variables for inside points
+                    a0_in = a_idx0[inside]
+                    a1_in = a_idx1[inside]
+                    aw0_in = aw0[inside]
+                    aw1_in = aw1[inside]
+                    dl_in = dl_m_v[inside]
+                    
+                    # Flattened state index = (altitude_index * n_geo) + geo_vertex
+                    
+                    # Distribute to the lower altitude plane (k)
+                    np.add.at(H[i], a0_in * n_geo + v0, dl_in * bw0 * aw0_in)
+                    np.add.at(H[i], a0_in * n_geo + v1, dl_in * bw1 * aw0_in)
+                    np.add.at(H[i], a0_in * n_geo + v2, dl_in * bw2 * aw0_in)
+                    
+                    # Distribute to the upper altitude plane (k+1)
+                    np.add.at(H[i], a1_in * n_geo + v0, dl_in * bw0 * aw1_in)
+                    np.add.at(H[i], a1_in * n_geo + v1, dl_in * bw1 * aw1_in)
+                    np.add.at(H[i], a1_in * n_geo + v2, dl_in * bw2 * aw1_in)
+
+                # --- B. Handle points OUTSIDE the mesh (Nearest Neighbor Fallback) ---
+                if np.any(outside):
+                    # Query KDTree for the single closest vertex (weight = 1.0)
+                    _, near_v = tree.query(np.column_stack([lats_v[outside], lons_v[outside]]))
+                    
+                    a0_out = a_idx0[outside]
+                    a1_out = a_idx1[outside]
+                    aw0_out = aw0[outside]
+                    aw1_out = aw1[outside]
+                    dl_out = dl_m_v[outside]
+                    
+                    # Distribute entirely to the nearest vertical column
+                    np.add.at(H[i], a0_out * n_geo + near_v, dl_out * aw0_out)
+                    np.add.at(H[i], a1_out * n_geo + near_v, dl_out * aw1_out)
+
+        # Convert final integral path lengths to TEC Units (1 TECU = 1e16)
+        H /= 1e16
+        
+        return H
+    
     
     def forward_model_mesh_tec(self, podTc2_data: dict, sample_idx: int = 0, num_segments: int = 1000) -> np.ndarray:
             """

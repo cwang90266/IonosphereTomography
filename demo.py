@@ -61,6 +61,8 @@ from EDPSamples.edp_samples import (
 from EDPSamples.generate_rect_tri_mesh import generate_rect_tri_mesh
 from EDPSamples.generate_polar_mesh import generate_ploar_mesh   # note: typo in source
 
+from Ionosphere_Tomography_Inverter.Ionophy_Tomography_Inverter import Ionosphere_Tomography_Inverter
+
 # Standalone spherical point-in-triangle algorithm (no WGS84 altitude bug)
 from locate_in_mesh import find_containing_triangles as find_triangle_sphere
 
@@ -1222,6 +1224,217 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     print(f"  -> Saved figure to {save_path}\n")
 
     return eds_dict, results_tec
+
+def section17(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame):
+    """
+    §17 Tomography Data Assimilation Test
+    Initializes the Ionosphere_Tomography_Inverter, assimilates measured TEC data,
+    and plots the Prior vs. Posterior states to evaluate filter performance.
+    """
+    from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
+    from EDPSamples.edp_samples import EDPSamples
+    
+    # Make sure this matches where you saved the inverter class!
+    # from EDPSamples.tomography_inverter import Ionosphere_Tomography_Inverter 
+    
+    try:
+        _banner("§17  Tomography Data Assimilation (Kalman Filter)")
+    except NameError:
+        print("\n=== §17  Tomography Data Assimilation (Kalman Filter) ===")
+        
+    filename = podTc2_file.split('/')[-1]
+    print(f"Processing File: {filename}")
+
+    # 1. Parse Data and Clean NaNs
+    podTc_data = parse_podTc2_nc_file(podTc2_file)
+    if podTc_data is None:
+        print(" [!] Invalid or skipped podTc data. Aborting.")
+        return
+
+    _, _, tangent_alt_raw = rayTangent(podTc_data['LEO'], podTc_data['GNSS'], units='km')
+    tangent_alt_km = tangent_alt_raw * 1e-3
+    measured_tec = podTc_data.get('TEC_podTc2', podTc_data.get('TEC', np.zeros_like(tangent_alt_km)))
+    
+    # CRITICAL: Kalman Filters cannot process NaNs. We must filter out invalid rays.
+    valid_mask = ~np.isnan(measured_tec) & (measured_tec > 0)
+    measured_tec_clean = measured_tec[valid_mask]
+    tangent_alt_clean = tangent_alt_km[valid_mask]
+    
+    # Create a subset of the geometry dictionary for the filter
+    podTc_clean = {
+        'LEO': podTc_data['LEO'][:, valid_mask],
+        'GNSS': podTc_data['GNSS'][:, valid_mask]
+    }
+    
+    print(f"  -> Filtered {np.sum(~valid_mask)} invalid/NaN rays. {np.sum(valid_mask)} rays remaining.")
+
+    # 2. Generate Prior Ensemble (Required for P and Q matrices)
+    print("  -> Generating Prior State Ensemble...")
+    base_sc = sampling_df.iloc[0]
+    n_mc = 50  
+    np.random.seed(42)
+
+    mc_hours = (base_sc['hour'] + np.random.uniform(-3, 3, size=n_mc)) % 24
+    mc_df = pd.DataFrame({
+        "hour": mc_hours,
+        "f107": np.random.normal(loc=base_sc.get('f107', 130), scale=10, size=n_mc).clip(70, 250),
+        "ap":   np.random.normal(loc=base_sc.get('ap', 15), scale=5, size=n_mc).clip(0, 400),
+        "ig12": np.random.normal(loc=base_sc.get('ig12', 100), scale=10, size=n_mc).clip(50, 200),
+        "rz12": np.random.normal(loc=base_sc.get('rz12', 100), scale=10, size=n_mc).clip(50, 200),
+    })
+    mc_df.iloc[0] = base_sc  # Ensure 0th index is the baseline
+
+    eds_occ = EDPSamples(
+        DateTime="2015-06-01 12:00:00", geo_type="Occultation", altitude=alt_grid,
+        sampling_parameters=mc_df, evaluate_iri=1,
+        filename=podTc2_file, dLat=5, dLon=5
+    )
+
+    # 3. Initialize the Tomography Inverter
+    print("  -> Initializing Kalman Filter...")
+    # Initialize using meanscale=1 to use fractional perturbations
+    inverter = Ionosphere_Tomography_Inverter(EDPSam=eds_occ, meanscale=1)
+    
+    # Calculate the unscaled H matrix explicitly so we can use it to calculate absolute TEC
+    print("  -> Building Observation Operator (H)...")
+    H_unscaled = inverter.get_observation_operator(podTc_clean)
+    # ---------------------------------------------------------
+    # Plot the H Matrix Structure
+    # ---------------------------------------------------------
+    print("  -> Plotting H Matrix Structure...")
+    from matplotlib.colors import LogNorm
+    
+    fig_H, ax_H = plt.subplots(figsize=(10, 8))
+    fig_H.suptitle(f"Observation Operator (H Matrix)\n{filename}", fontsize=14)
+    
+    # Mask exactly zero values so they appear blank (white) instead of skewing the colormap
+    H_masked = np.ma.masked_where(H_unscaled == 0, H_unscaled)
+    
+    # Plot using a heatmap. aspect='auto' prevents it from squishing to a tiny square
+    im_H = ax_H.imshow(H_masked, aspect='auto', cmap='viridis', interpolation='none', norm=LogNorm())
+    
+    ax_H.set_title(f"Matrix Shape: {H_unscaled.shape[0]} Rays × {H_unscaled.shape[1]} State Variables", fontsize=11)
+    ax_H.set_xlabel("State Vector Index (Flattened Altitude + Geo)")
+    ax_H.set_ylabel("Observation Index (RO Ray Number)")
+    
+    # Add a colorbar
+    cbar_H = fig_H.colorbar(im_H, ax=ax_H)
+    cbar_H.set_label('Ray Path Length within Grid Cell (Scaled)')
+    
+    plt.tight_layout()
+    plt.show()
+    # ---------------------------------------------------------
+    # 4. Run Assimilation
+    print("\n  -> Running Data Assimilation...")
+    posterior_state_flat = inverter.assimilate(
+        obs=measured_tec_clean, 
+        podTc2_data=None, # Passed None because we pre-calculated H below
+        obs_operator=H_unscaled, 
+        relaxation=0.95, 
+        measurement_err=10.0 # Assumes ~1 TECU variance in measurement noise
+    )
+
+    # 5. Evaluate Results (Prior vs Posterior)
+    print("  -> Calculating TEC and Reshaping States...")
+    # Get Prior Mean State and Posterior State
+    prior_state_flat = inverter.attrs['initial_edps_mean']
+    
+    # Strip masked array metadata to prevent NumPy mask broadcasting bugs
+    H_clean = np.asarray(H_unscaled)
+    prior_state_clean = np.asarray(prior_state_flat)
+    posterior_state_clean = np.asarray(posterior_state_flat)
+
+    # Calculate TEC: Z = H * x
+    # NOTE: .flatten() is added here to convert (N, 1) column vectors to (N,) 1D arrays for matplotlib
+    prior_tec = (H_clean @ prior_state_clean).flatten()
+    posterior_tec = (H_clean @ posterior_state_clean).flatten()
+    
+    print("\n  --- DEBUG: TEC Arrays ---")
+    print(f"  Y-Axis (tangent_alt_clean) shape: {tangent_alt_clean.shape}")
+    print(f"  prior_tec shape: {prior_tec.shape} | NaNs: {np.isnan(prior_tec).sum()} | Min: {np.nanmin(prior_tec):.2e} | Max: {np.nanmax(prior_tec):.2e}")
+    print(f"  posterior_tec shape: {posterior_tec.shape} | NaNs: {np.isnan(posterior_tec).sum()} | Min: {np.nanmin(posterior_tec):.2e} | Max: {np.nanmax(posterior_tec):.2e}")
+    
+    # --- NEW: Calculate Forward Modeled TEC directly via the integration method ---
+    print("  -> Running standard Forward TEC Integration for verification...")
+    # Compute forward model TEC for the base state (sample 0) using the full uncleaned data
+    forward_tec_full = eds_occ.forward_model_mesh_tec(podTc_data, sample_idx=0, num_segments=1000)
+    
+    # Filter it down to the same valid rays used in the Kalman filter for a direct 1:1 plot match
+    forward_tec_clean = forward_tec_full[valid_mask]
+    
+    # Reshape the 1D state vectors back into (n_height, n_geo) for plotting the vertical profiles
+    n_height = len(alt_grid)
+    n_geo = eds_occ.geolocation.shape[0]
+    
+    prior_edp_3d = prior_state_flat.reshape(n_height, n_geo)
+    posterior_edp_3d = posterior_state_flat.reshape(n_height, n_geo)
+    
+    # Extract the center vertex to plot a representative vertical profile
+    center_idx = n_geo // 2 
+    prior_profile = prior_edp_3d[:, center_idx]
+    posterior_profile = posterior_edp_3d[:, center_idx]
+    
+    print("\n  --- DEBUG: EDP Profiles ---")
+    print(f"  Y-Axis (alt_grid) shape: {alt_grid.shape}")
+    print(f"  prior_profile shape: {prior_profile.shape} | NaNs: {np.isnan(prior_profile).sum()} | Min: {np.nanmin(prior_profile):.2e} | Max: {np.nanmax(prior_profile):.2e}")
+    print(f"  posterior_profile shape: {posterior_profile.shape} | NaNs: {np.isnan(posterior_profile).sum()} | Min: {np.nanmin(posterior_profile):.2e} | Max: {np.nanmax(posterior_profile):.2e}")
+    
+    # Check for Log-Scale Violations
+    if np.nanmin(posterior_profile) <= 0:
+        print("  [!] WARNING: Posterior profile contains negative or zero values. Matplotlib's log scale will hide these points!")
+
+    # ---------------------------------------------------------
+    # 6. Generate the Assessment Plot
+    # ---------------------------------------------------------
+    print("  -> Plotting Assimilation Results...")
+    fig, axes = plt.subplots(1, 2, figsize=(14, 8), sharey=True)
+    fig.suptitle(f"§17 Tomography Assimilation Results\n{filename}", fontsize=14)
+
+    # --- Panel 1: Observation Space (TEC) ---
+    ax1 = axes[0]
+    ax1.plot(measured_tec_clean, tangent_alt_clean, color='black', lw=3, label="Measured TEC")
+    
+    # Plot both the Matrix Multiplied Prior and the Forward Integrated Prior
+    ax1.plot(prior_tec, tangent_alt_clean, color='tab:red', lw=3, ls='--', label="Prior (H Matrix)")
+    ax1.plot(forward_tec_clean, tangent_alt_clean, color='tab:green', lw=2, ls=':', label="Prior (Forward Model)")
+    
+    ax1.plot(posterior_tec, tangent_alt_clean, color='tab:blue', lw=2, label="Posterior (Assimilated)")
+    
+    ax1.set_ylabel("Tangent Altitude (km)")
+    ax1.set_xlabel("Total Electron Content (TECU)")
+    ax1.set_title("Observation Space: TEC Adjustment")
+    ax1.grid(True, alpha=0.4, linestyle=':')
+    ax1.legend(loc='upper right')
+    
+    if len(tangent_alt_clean) > 0:
+        ax1.set_ylim(0, min(np.max(tangent_alt_clean) + 50, alt_grid[-1]))
+
+    # --- Panel 2: State Space (Electron Density) ---
+    ax2 = axes[1]
+    ax2.plot(prior_profile, alt_grid, color='tab:red', lw=2, ls='--', label="Prior Mean Density")
+    ax2.plot(posterior_profile, alt_grid, color='tab:blue', lw=2, label="Posterior Density")
+    
+    # Highlight the difference
+    ax2.fill_betweenx(alt_grid, prior_profile, posterior_profile, color='tab:blue', alpha=0.15, label="Assimilation Delta")
+
+    ax2.set_xlabel("Electron Density (m⁻³)")
+    ax2.set_title("State Space: 3D Mesh Adjustment (Center Vertex)")
+    ax2.set_xscale("log")
+    ax2.grid(True, alpha=0.4, linestyle=':')
+    ax2.legend(loc='upper right')
+
+    plt.tight_layout()
+    
+    # Save output
+    save_dir = "./Figures/Section17_Assimilation/"
+    import os
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"{filename}_assimilation.png")
+    fig.savefig(save_path, dpi=150)
+    print(f"  -> Saved figure to {save_path}\n")
+
+    return prior_state_flat, posterior_state_flat
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1274,20 +1487,23 @@ def main() -> None:
     podTc2_files = [
         # "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
         # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
-        "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
+        # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
         # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
         # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
-        # "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
+        "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
         # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
     ]
 
     base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
 
     for f_string in podTc2_files:
-        full_path = os.path.join(base_path, f_string)
-        
-        # Run the comparison suite
-        eds_dict, tec_results = section16(full_path, alt_grid, sampling_df)
+            full_path = os.path.join(base_path, f_string)
+            
+            # Run the geometry comparison suite
+            eds_dict, tec_results = section16(full_path, alt_grid, sampling_df)
+            
+            # Run the assimilation test
+            prior_x, post_x = section17(full_path, alt_grid, sampling_df)
 
     print("\n" + "=" * 60)
     print("All sections complete — displaying figures.")
