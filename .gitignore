@@ -6,8 +6,5 @@ Figures/
 DataFiles/
 __pycache__/
 *.o
-<<<<<<< HEAD
 *.pyc
-=======
 *.png
->>>>>>> Austin_develop
