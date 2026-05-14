@@ -242,7 +242,7 @@ def write_IRI2020_namelist(DateTime: str,
     return 0   
            
 
-def read_IRI2020_binary_output(IRI_output_filename: str) -> np.ndarray:
+def read_IRI2020_binary_output(IRI_output_filename: str) -> tuple(np.ndarray,np.ndarray):
     with open(IRI_output_filename, 'rb') as f:
         data =  f.read()
     
@@ -251,6 +251,7 @@ def read_IRI2020_binary_output(IRI_output_filename: str) -> np.ndarray:
     nheight=int.from_bytes(data[8:12],byteorder="little",signed=True)
     #print([nheight,npts,nSample])
     edps = np.ndarray([nheight,npts,nSample])
+    feature_edps = np.ndarray([13,npts,nSample])
     cbyte = 12
     for idxSample in range(nSample):
         for idxpts in range(npts):
@@ -258,7 +259,10 @@ def read_IRI2020_binary_output(IRI_output_filename: str) -> np.ndarray:
                 edps[idxheight,idxpts,idxSample] = float(np.frombuffer(data[cbyte:cbyte+4],dtype=np.float32))
                 cbyte += 4
                 
-    return edps
+            for idx_feature in range(13):
+                feature_edps[idx_feature,idxpts,idxSample] = float(np.frombuffer(data[cbyte:cbyte+4],dtype=np.float32))
+                cbyte += 4
+    return edps, feature_edps
 
 def plot_polar_mesh(vertices: np.ndarray, triangles: np.ndarray, pole: str = "north", ax=None):
     """
@@ -605,13 +609,17 @@ class EDPSamples(xr.Dataset):
     DIM_PARAM = "param"
     DIM_GEO_COMPONENT = "lat_lon"
     DIM_VERTEX = "vertex"
+    DIM_FEATURE = "feature"
 
     COORD_ALTITUDE = "altitude"
     VAR_EDPS = "EDPs"
     VAR_GEOLOCATION = "geolocation"
     VAR_SAMPLING = "sampling_parameters"
     VAR_MESH = "Mesh"
-
+    VAR_FEDPS = "feathure_EDPS"
+    
+    FEATURE_LABEL =("nmf2","hmf2","nmf1","hmf1","nme",
+                    "hme","nmd","hmd","hhalf","b0","valley_base","valley_top","b1")
     @staticmethod
     def genRectangularArea(
         minLon: float,
@@ -791,50 +799,9 @@ class EDPSamples(xr.Dataset):
 
         return vertices, triangles
     
-    @staticmethod
-    def genLineOfSight(
-        lat1: float,
-        lon1: float,
-        alt1_m: float,
-        lat2: float,
-        lon2: float,
-        alt2_m: float,
-        num_points: int,
-    ) -> tuple[np.ndarray,np.ndarray]:
-        """
-        Geolocations along the straight **ECEF** chord between two satellites
-        (WGS84 geodetic inputs: degrees, degrees, metres above ellipsoid).
-
-        Parameters
-        ----------
-        lat1, lon1, alt1_m
-            First satellite.
-        lat2, lon2, alt2_m
-            Second satellite.
-        num_points : int
-            Samples along the segment, **including both endpoints** (>= 2).
-
-        Returns
-        -------
-        ndarray, vertice (num_points, 2)
-            Latitude and longitude in degrees. Height along the path is not stored.
-        ndarray, segmenta (num_segment,2)
-        """
-        if num_points < 2:
-            raise ValueError("num_points must be >= 2")
-        r0 = np.asarray(_geodetic_to_ecef(lat1, lon1, alt1_m), dtype=float).reshape(3)
-        r1 = np.asarray(_geodetic_to_ecef(lat2, lon2, alt2_m), dtype=float).reshape(3)
-        t = np.linspace(0.0, 1.0, num_points, dtype=float)[:, np.newaxis]
-        chord = (1.0 - t) * r0 + t * r1
-        lat_deg, lon_deg, _h = _ecef_to_geodetic(chord)
-        vertice = np.column_stack([np.asarray(lat_deg).ravel(), np.asarray(lon_deg).ravel()]
-        ).astype(float)
-        segment = np.column_stack((np.arange(num_points-1),np.arange(1,num_points)))
-        return vertice, segment
-
     def __init__(cls,
         DateTime: str,
-        geo_type : Literal["Point","LOS","Rectangle","Polar","Occultation"],
+        geo_type : Literal["Point","Rectangle","Polar","Occultation"],
         altitude: np.ndarray,
         sampling_parameters: pd.Dataframe,
         evaluate_iri: int = None,
@@ -855,6 +822,7 @@ class EDPSamples(xr.Dataset):
         pt3: tuple = None,
         alt_limit: float = 600.0,
         edps: np.ndarray = None,
+        feature_edps: np.ndarray = None,
         attrs = None):
         #) -> EDPSamples:
         """
@@ -902,10 +870,6 @@ class EDPSamples(xr.Dataset):
                     raise ValueError("For geo_type point, Lon and Lat cannot be None.")
                 geolocation =np.array([[Lon,Lat]])
                 mesh = None
-            case "LOS":
-                if LOS_LEO == None or LOS_GNSS == None or LOS_nb_point == None:
-                    raise ValueError("For geo_type LOS, LOS_start, LOS_end and LOS_nb_point cannot be None.")
-                geolocation, mesh = cls.genLineOfSight(LOS_LEO,LOS_GNSS,LOS_nb_point)
             case "Rectangle":
                 if minLon == None or maxLon == None or dLon == None or minLat == None or maxLat == None or dLat == None:
                     raise ValueError("For geo_type Rectangle, minLon, maxLon, dLon,minLat,maxLat, and dLat cannot be None.")
@@ -918,7 +882,7 @@ class EDPSamples(xr.Dataset):
                 else:
                     pole="south"
 
-                geolocation, mesh =self.genPolarArea(pole,minLat,dLat)
+                geolocation, mesh =cls.genPolarArea(pole,minLat,dLat)
             case "Occultation":
                 if filename is None and (pt1 is None or pt2 is None or pt3 is None):
                     raise ValueError("For geo_type Occultation, you must provide either a 'filename' or all three points ('pt1', 'pt2', 'pt3').")
@@ -950,17 +914,21 @@ class EDPSamples(xr.Dataset):
             raise ValueError("geolocation must have shape (n_geo, 2) for lat, lon")
         n_geo = geolocation.shape[0]
         
-        if edps is None :
+        if edps is None or feature_edps is None:
             if evaluate_iri == 1:
-                edps=get_IRI2020_EDP(DateTime,altitude,geolocation,sampling_parameters)
+                edps, feature_edps = get_IRI2020_EDP(DateTime,altitude,geolocation,sampling_parameters)
             else:
                 edps=np.ndarray((n_height,n_geo,n_sample))
+                feature_edps=np.ndarray((len(cls.FEATURE_LABEL),n_geo,n_sample))
         else:
             print(f"EDPS: {edps.shape[1]}, N_geo: {n_geo}")
             assert edps.ndim == 3, "EDP sample profile must be 3 dimensional"
             assert edps.shape[0] == n_height, "EDP samples'eading dimension must be height"
             assert edps.shape[1] == n_geo, "EDP sample second dimension must be vertices"
             assert edps.shape[2] == n_sample, "EDP sample last dimension must be param sample"
+            assert feature_edps.shape[0] == len(cls.FEATURE_LABEL), "feature_edps samples'eading dimension must be the length of feature labels"
+            assert feature_edps.shape[1] == n_geo, "feature_edps second dimension must be vertices"
+            assert feature_edps.shape[2] == n_sample, "feature_edps last dimension must be param sample"
             
 
         coords: MutableMapping[str, Any] = {
@@ -971,6 +939,9 @@ class EDPSamples(xr.Dataset):
             cls.DIM_PARAM: (
                 cls.DIM_PARAM, sample_Param_name    
             ),
+            cls.DIM_FEATURE: (
+                cls.DIM_FEATURE, np.array(cls.FEATURE_LABEL)
+            )
             #self.DIM_PARAM: (self.DIM_PARAM, sampling_parameters),
         }
         #
@@ -990,6 +961,12 @@ class EDPSamples(xr.Dataset):
                 edps,
                 {"long_name": "EDPs",
                  "description": "electron density profiles samples"}
+                ),
+            cls.VAR_FEDPS: (
+                (cls.DIM_FEATURE, cls.DIM_GEO, cls.DIM_SAMPLE),
+                feature_edps,
+                {"long_name": "Feature_EDPs",
+                 "description": "features of electron density profiles samples"}
                 ),
             cls.VAR_SAMPLING: (
                 (cls.DIM_SAMPLE,cls.DIM_PARAM),
@@ -1021,10 +998,6 @@ class EDPSamples(xr.Dataset):
             case "Point":
                attrs["Lon"] = Lon
                attrs["Lat"] = Lat
-            case "LOS":
-                attrs["LOS_LEO"] = LOS_LEO
-                attrs["LOS_GNSS"] = LOS_GNSS
-                attrs["LOS_nb_point"]= LOS_nb_point
             case "Rectangle":
                 attrs["minLon"] = minLon
                 attrs["maxLon"] = maxLon
@@ -1039,7 +1012,15 @@ class EDPSamples(xr.Dataset):
                     attrs["pole"] = "north"
                 else:
                     attrs["pole"] = "south"
-                    
+            case "Occultation":
+                    attrs["pt1"] = pt1
+                    attrs["pt2"] = pt2 
+                    attrs["pt3"] = pt3 
+                    attrs["filename"] = filename 
+                    attrs["dLat"] = 5
+                    attrs["dLon"] =5 
+                    attrs["alt_limit"] = alt_limit
+                
         super().__init__(
             data_vars=data_vars,
             coords=coords,
@@ -1087,9 +1068,12 @@ class EDPSamples(xr.Dataset):
         altitude = altitude_xr.to_numpy()
 
         assert cls.VAR_EDPS in ds.data_vars, ["Missing EDPs in loaded dataset."]
-
+        assert cls.VAR_FEDPS in ds.data_vars, ["Missing FEDPs in loaded dataset."]
+        
         epds_xr = ds.data_vars[cls.VAR_EDPS]
         edps = epds_xr.to_numpy()
+        feature_edps_xr = ds.data_vars[cls.VAR_FEDPS]
+        feature_edps = feature_edps_xr.to_numpy()
         
         match ds.attrs["geo_type"]:
             case "Point":
@@ -1097,16 +1081,8 @@ class EDPSamples(xr.Dataset):
                assert "Lat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (3)."]
                return EDPSamples(ds.attrs["DateTime"],ds.attrs["geo_type"],
                                 altitude, sampling_parameters, 
-                                Lon=ds.attrs["Lon"],Lat=ds.attrs["Lon"],edps=edps,attrs=ds.attrs)
-            case "LOS":
-                assert "LOS_LEO" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (4)."]
-                assert "LOS_GNSS" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (5)."]
-                assert "LOS_nb_point" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (6)."]
-                return EDPSamples(ds.attrs["DateTime"],ds.attrs["geo_type"],
-                                altitude, sampling_parameters, 
-                                LOS_LEO=ds.attrs["LOS_LEO"],LOS_GNSS=ds.attrs["LOS_GNSS"],
-                                LOS_nb_point=ds.attrs["LOS_nb_point"],
-                                edps=edps,attrs=ds.attrs)
+                                Lon=ds.attrs["Lon"],Lat=ds.attrs["Lon"],
+                                edps=edps,feature_edps=feature_edps,attrs=ds.attrs)
             case "Rectangle":
                 assert "minLon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (7)."]
                 assert "maxLon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (8)."]
@@ -1120,14 +1096,25 @@ class EDPSamples(xr.Dataset):
                                 dLon=ds.attrs["dLon"],
                                 minLat=ds.attrs["minLat"],maxLat=ds.attrs["maxLat"],
                                 dLat=ds.attrs["dLat"],
-                                edps=edps,attrs=ds.attrs)
+                                edps=edps,feature_edps=feature_edps,attrs=ds.attrs)
             case "Polar":
                 assert "minLat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (13)."]
                 assert "dLat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (14)."]
                 return EDPSamples(ds.attrs["DateTime"],ds.attrs["geo_type"],
                                 altitude, sampling_parameters, 
                                 minLat=ds.attrs["minLat"],dLat=ds.attrs["dLat"],
-                                edps=edps,attrs=ds.attrs)
+                                edps=edps,feature_edps=feature_edps,attrs=ds.attrs)
+            case "Occultation":
+                assert "pt1" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (15)."]
+                assert "pt2" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (16)."]
+                assert "pt3" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (17)."]
+                assert "dLat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (18)."]
+                assert "dLon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (19)."]
+                return EDPSamples(ds.attrs["DateTime"],ds.attrs["geo_type"],
+                                altitude, sampling_parameters, 
+                                pt1=ds.attrs["pt1"],pt2=ds.attrs["pt2"],pt3=ds.attrs["pt3"],
+                                dLat=ds.attrs["dLat"],dLon=ds.attrs["dLon"],
+                                edps=edps,feature_edps=feature_edps,attrs=ds.attrs)
         
         
     def saveNetCDF(self, path: str | Path, **kwargs: Any) -> None:
@@ -1146,7 +1133,7 @@ class EDPSamples(xr.Dataset):
 
     def plot_geolocation(self):
         match self.attrs["geo_type"]:
-            case "Point" | "LOS":
+            case "Point" :
                 fig, ax = plt.subplots(figsize=(8, 6))
                 # Plot the vertices
                 ax.scatter(self.geolocation[:,0], self.geolocation[:,1], color='red', s=12, label='Vertices', zorder=5)
@@ -1156,7 +1143,7 @@ class EDPSamples(xr.Dataset):
                 ax.legend()
                 ax.grid(True, alpha=0.4)
                 
-            case "Rectangle":
+            case "Rectangle" | "Occultation":
                 plot_tri_mesh(self.geolocation, self.mesh)                
             case "Polar":
                 if self.attrs["minLat"] > 0:
@@ -1179,10 +1166,7 @@ class EDPSamples(xr.Dataset):
         match self.attrs["geo_type"]:
             case "Point": 
                 return idx_alt, weight_alt
-            case "LOS":
-                # Need horizontal interpolation
-                return idx_alt, weight_alt
-            case "Rectangle" | "Polar":
+            case "Rectangle" | "Polar" | "Occultation" :
                 idx_mesh, weight_mesh = find_containing_triangles(
                     np.column_stack([latitude,longitude]),
                     self.geolocation,
@@ -1221,6 +1205,12 @@ class EDPSamples(xr.Dataset):
     def edps(self) -> xr.DataArray:
         """Main field (height, geo, sample)."""
         ds = self[self.VAR_EDPS]
+        return ds.to_numpy()
+
+    @property
+    def feature_edps(self) -> xr.DataArray:
+        """Main field (height, geo, sample)."""
+        ds = self[self.VAR_FEDPS]
         return ds.to_numpy()
 
     @property

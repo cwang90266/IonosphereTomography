@@ -6,3 +6,4 @@ Figures/
 DataFiles/
 __pycache__/
 *.o
+build/
