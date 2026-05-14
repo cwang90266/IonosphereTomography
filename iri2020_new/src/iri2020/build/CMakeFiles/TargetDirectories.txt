@@ -1,9 +1,0 @@
-/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles/iri2020_driver.dir
-/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles/iri2020_namelist_driver.dir
-/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles/test.dir
-/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles/edit_cache.dir
-/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/build/CMakeFiles/rebuild_cache.dir
-/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/iri.dir
-/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/test.dir
-/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/edit_cache.dir
-/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/build/src/CMakeFiles/rebuild_cache.dir
