@@ -125,13 +125,20 @@ def IRI(time: str | datetime, altkmrange: list[float], glat: float, glon: float,
         attrs={"f107D": arr[40], "ap": arr[50], "f107_81": arr[45], "IG12": arr[38], "Rz12": arr[32]},
     )
 
-    for i, p in enumerate(["NmF2", "hmF2", "NmF1", "hmF1", "NmE", "hmE"]):
+    # Extract OARR(1) through OARR(8)
+    for i, p in enumerate(["NmF2", "hmF2", "NmF1", "hmF1", "NmE", "hmE", "NmD", "hmD"]):
         iono[p] = (("time"), [arr[i]])
 
+    # Extract E-Valley parameters OARR(11) and OARR(12)
+    iono["VNER"] = (("time"), [arr[10]])
+    iono["HEF"] = (("time"), [arr[11]])
+
+    iono["TEC_top_pct"] = (("time"), [arr[37]])
     iono["TEC"] = (("time"), [arr[36]])
     iono["EqVertIonDrift"] = (("time"), [arr[43]])
     iono["foF2"] = (("time"), [arr[99]])
     iono["B0"] = (("time"), [arr[9]])
     iono["B1"] = (("time"), [arr[34]])
+    iono["C1"] = (("time"), [arr[41]]) # OARR(42) is index 41
     #print(iono)
     return iono
