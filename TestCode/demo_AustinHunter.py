@@ -32,7 +32,9 @@ import importlib.resources as impr
 from pathlib import Path
 
 ROOT = Path(__file__).parent
+ROOT = ROOT.parent
 # Make EDPSamples and IRI_Sample_Inputs importable (they are not installed packages)
+print(ROOT)
 sys.path.insert(0, str(ROOT))
 # locate_in_mesh.py lives inside a directory with a space in its name
 sys.path.insert(0, str(ROOT / "EDPSamples" / "Locate in mesh" / "outputs"))
@@ -673,8 +675,9 @@ def section12() -> tuple[np.ndarray, np.ndarray]:
     
     
     # podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
-    podTc2_string = "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc"
-    podTc2_file = f"/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/{podTc2_string}"
+    #podTc2_string = "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc"
+    podTc2_string = "podTc2_GN04.2025.315.03.41.0032.C32.00_0000.0001_nc"
+    podTc2_file = f"/Users/cwang/Documents/Consulting/PlanetIQ/Data/SampleData/2025.314/{podTc2_string}"
     
     
     save_path = f"./Figures/Examples/{podTc2_string}_mesh_geometry.png"

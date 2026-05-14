@@ -36,7 +36,9 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 # locate_in_mesh.py lives inside a directory with a space in its name
 sys.path.insert(0, str(ROOT / "EDPSamples" / "Locate in mesh" / "outputs"))
+sys.path.insert(0, str(ROOT / "iri2020_new" / "src" ))
 
+print(ROOT)
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -673,8 +675,8 @@ def section12() -> tuple[np.ndarray, np.ndarray]:
     
     
     # podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
-    podTc2_string = "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc"
-    podTc2_file = f"/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/{podTc2_string}"
+    podTc2_string = "podTc2_GN05.2025.315.00.04.0032.G23.01_0000.0001_nc"
+    podTc2_file = f"/Users/cwang/Documents/Consulting/PlanetIQ/Data/SampleData/2025.315/{podTc2_string}"
     
     
     save_path = f"./Figures/Examples/{podTc2_string}_mesh_geometry.png"

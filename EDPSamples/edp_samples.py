@@ -811,9 +811,6 @@ class EDPSamples(xr.Dataset):
         minLat: float =None,
         maxLat: float =None,
         dLat: float =None,
-        LOS_LEO: np.ndarray= None,
-        LOS_GNSS: np.ndarray = None,
-        LOS_nb_point: int = None,
         Lon: float = None,
         Lat: float = None,
         filename: str = None,
@@ -830,7 +827,7 @@ class EDPSamples(xr.Dataset):
 
         Parameters
         ----------
-        geo_type : Literal["Point","LOS","Rectangle","Polar"], type of 2D grid
+        geo_type : Literal["Point",Rectangle","Polar","Occultation"], type of 2D grid
         altitude : (n_height,) array
             1D altitude (or height coordinate) for each index along ``height``.
         sampling_parameters: pd.Dataframe,
@@ -842,16 +839,16 @@ class EDPSamples(xr.Dataset):
                 for polar grid.
         maxLat: float =None, maximum latitude for rectangular lat, lon grid.
         dLat: float =None, Latitude step for rectangular and prolar grid.
-        LOS_LEO: np.ndarray= None, vector of 3 float values for the ECEF or lla
-                   coordinates of LEO end of LOS.
-        LOS_GNSS: np.ndarray = None, vector of 3 float values for the ECEF or lla
-                   coordinates of GNSS end of LOS.
-        LOS_nb_point: int = None, number of intermediate points along the ground
-                   track of LOS. These 3 parameters define the EDP samples along
-                   LOS ground track.
         Lon: float = None, Longitude of single control point.
         Lat: float = None, Latitude of single control point.
-        edps: numpy array.
+        filename: str = None, filename for the RO data (needed only if pt1,pt2,pt3 are missing)
+        pt1: tuple = None, points that define the triangular region for a RO
+        pt2: tuple = None, points that define the triangular region for a RO
+        pt3: tuple = None, points that define the triangular region for a RO
+        alt_limit: float = 600.0, altitude defining the traingular region assciated with a RO.
+                                  (needed only if pt1,pt2,pt3 are missing)
+        edps: numpy array, sample edps
+        feature_edps: np.ndarray = None, sample features of edps
         attrs : mapping, optional Dataset attributes.
         
         """
