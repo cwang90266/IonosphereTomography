@@ -7,7 +7,6 @@ DataFiles/
 __pycache__/
 *.o
 *.pyc
-*png
+*.png
 build/
 *.nc
-
