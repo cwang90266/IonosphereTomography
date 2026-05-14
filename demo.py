@@ -69,15 +69,15 @@ from locate_in_mesh import find_containing_triangles as find_triangle_sphere
 # ── IRI_Sample_Inputs ────────────────────────────────────────────────────────
 from IRI_Sample_Inputs.IRI_Sample_inputs import IRI_Sample_Inputs
 
-
-
+from IRI_ARR_Samples.iri_arr_samples import calculate_iri_electron_density
+from datetime import datetime, timedelta
 # ─────────────────────────────────────────────────────────────────────────────
 #  Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-TIME     = "2025-06-15 04:00"      # simulation UTC time
-LAT_C    = 62.5                    # center latitude  (°N)
-LON_C    = -145.0                  # center longitude (°E, = 145 °W)
+TIME     = "2025-06-15 19:00"      # simulation UTC time
+LAT_C    = 40                    # center latitude  (°N)
+LON_C    = -105.0                  # center longitude (°E, = 145 °W)
 ALT_KM   = [80, 1000, 1]         # altitude grid: [start, stop, step] km
 
 # Alaska region bounds (used for sweeps and mesh generation)
@@ -133,31 +133,245 @@ def _banner(title: str) -> None:
 #  §1  Single IRI altitude profile at the region center
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Assuming IRI, calculate_iri_electron_density, iri_plots, etc. are imported
+
 def section1() -> xr.Dataset:
-    _banner("§1  Single IRI altitude profile (default solar indices)")
+    # _banner("§1  Single IRI altitude profile (default solar indices)") # Un-comment if _banner is defined
+    START_TIME = datetime(2025,6,15,0)
+    for hour_i in range(0,23,1):
+        time_in = START_TIME + timedelta(hours=hour_i)
+        # 1. Run the official IRI executable via your base.py wrapper
+        iono = IRI(time_in, ALT_KM, LAT_C, LON_C)
+    
+        # 2. Print the standard output parameters
+        peak_idx = int(iono["ne"].argmax())
+        print(f"  ne peak  : {float(iono['ne'][peak_idx]):.3e} m⁻³"
+              f"  at {float(iono.alt_km[peak_idx]):.0f} km")
+        print(f"  NmF2     : {float(iono['NmF2']):.3e} m⁻³")
+        print(f"  hmF2     : {float(iono['hmF2']):.1f} km")
+        print(f"  foF2     : {float(iono['foF2']):.2f} MHz")
+        print(f"  TEC      : {float(iono['TEC']):.3e} m⁻²")
+        print(f"  B0 / B1  : {float(iono['B0']):.1f} km / {float(iono['B1']):.3f}")
+        print(f"  f107D    : {iono.attrs['f107D']:.1f}   ap : {iono.attrs['ap']:.1f}")
+        print(f"  IG12     : {iono.attrs['IG12']:.1f}   Rz12: {iono.attrs['Rz12']:.1f}")
+    
+        # 3. Construct the parameter dictionary for the piecewise Python function
+        def get_param(name):
+            """Helper to extract float values and treat missing layers (-1 or 0) as None"""
+            val = float(iono[name].values[0])
+            return val if val > 0 else None
+    
+        from scipy.optimize import curve_fit
+        
+        def fit_topside_profile(altitudes, ne_official, hmF2, NmF2):
+            """
+            Simultaneously solves for the optimal H0 and gamma by fitting the 
+            analytical Epstein layer directly to the IRI OUTF topside array.
+            """
+            # 1. Isolate only the topside data points from the arrays
+            mask = altitudes >= hmF2
+            h_top = altitudes[mask]
+            ne_top = ne_official[mask]
+            
+            if len(h_top) < 2:
+                return 50.0, 0.15 # Fallback if array is too short
+                
+            # 2. Define the Epstein function exactly as curve_fit expects it: f(x, *params)
+            def epstein_model(h, H0, gamma):
+                r = 100.0 # NeQuick saturation factor
+                dh = h - hmF2
+                
+                # Safe calculation for the restricted scale height
+                # (Added 1e-9 to denominator to prevent division by zero during optimizer guesses)
+                H_top = H0 * (1.0 + (r * gamma * dh) / (r * H0 + gamma * dh + 1e-9))
+                
+                z = dh / H_top
+                # Clip z to prevent exponential overflow warnings during wild optimizer guesses
+                z = np.clip(z, -100, 100) 
+                
+                return 4.0 * NmF2 * np.exp(z) / ((1.0 + np.exp(z))**2)
+    
+            # 3. Run the curve fit
+            # We provide a reasonable starting guess (p0) and physical bounds
+            try:
+                popt, pcov = curve_fit(
+                    epstein_model, 
+                    h_top, 
+                    ne_top, 
+                    p0=[70.0, 0.15], 
+                    bounds=([20.0, 0.001], [300.0, 1.5]) # [Lower bounds], [Upper bounds]
+                )
+                optimized_H0 = popt[0]
+                optimized_gamma = popt[1]
+                return optimized_H0, optimized_gamma
+                
+            except RuntimeError:
+                print("Curve fit failed to converge. Defaulting.")
+                return 70.0, 0.15
+    
+        # --- How to call it in your script ---
+        
+        # Extract peak parameters
+        NmF2 = float(iono['NmF2'].values[0])
+        hmF2 = float(iono['hmF2'].values[0])
+        
+        # Run the curve fitter using the actual xarray data
+        alt_array = iono.alt_km.values
+        ne_array = iono["ne"].values.squeeze()
+        
+        H0, optimized_gamma = fit_topside_profile(alt_array, ne_array, hmF2, NmF2)
+        
+        print(f"  Curve-Fit H0       : {H0:.1f} km")
+        print(f"  Curve-Fit Gamma    : {optimized_gamma:.3f}")
+        
+    
+        iri_params = {
+            'NMF2': get_param('NmF2'),
+            'HMF2': get_param('hmF2'),
+            'NMF1': get_param('NmF1'),
+            'HMF1': get_param('hmF1'),
+            'NME':  get_param('NmE'),
+            'HME':  get_param('hmE'),
+            'NMD':  get_param('NmD'),
+            'HMD':  get_param('hmD'),
+            'B0':   get_param('B0'),
+            'B1':   get_param('B1'),
+            'VNER': get_param('VNER'),
+            'HEF':  get_param('HEF'),
+            'C1': get_param('C1')
+        }
+        # Add these variables to your parameter dictionary for the piecewise function
+        iri_params['H0'] = H0
+        iri_params['gamma'] = optimized_gamma
+        # 4. Run your vectorized piecewise function
+        altitudes = iono.alt_km.values
+        calculated_edp = calculate_iri_electron_density(altitudes, iri_params)
+    
+        
+        import matplotlib.pyplot as plt
+        
+        def plot_edp_comparison(iono):
+            """
+            Plots the official IRI electron density profile against the custom piecewise calculation,
+            including a side-by-side subplot for relative error.
+            """
+            # Extract data, ensuring they are 1D arrays
+            altitudes = iono.alt_km.values
+            ne_official = iono["ne"].values.squeeze()
+            ne_calculated = iono["ne_calculated"].values.squeeze()
+        
+            # Calculate Relative Error (%)
+            # np.errstate prevents warnings if the official array contains zeros at very low altitudes
+            with np.errstate(divide='ignore', invalid='ignore'):
+                error_pct = np.where(ne_official > 0, 
+                                     ((ne_calculated - ne_official) / ne_official) * 100.0, 
+                                     0.0)
+        
+            # Create a figure with 1 row and 2 columns, sharing the y-axis (altitude)
+            # The width_ratios gives the main plot more horizontal space than the error plot
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 10), sharey=True, 
+                                           gridspec_kw={'width_ratios': [3, 1]})
+            
+            # ==========================================
+            # Subplot 1: The Profiles
+            # ==========================================
+            ax1.plot(ne_official, altitudes, label='Official IRI (OUTF)', color='#1f77b4', linewidth=2.5)
+            ax1.plot(ne_calculated, altitudes, label='Piecewise Reconstruction', color='#d62728', linestyle='--', linewidth=2.5)
+            
+            # Standard Ionospheric Plot Formatting
+            ax1.set_xscale('log')
+            ax1.set_xlim(left=1e8) 
+            
+            ax1.set_xlabel('Electron Density (m⁻³)', fontsize=12, fontweight='bold')
+            ax1.set_ylabel('Altitude (km)', fontsize=12, fontweight='bold')
+            ax1.set_title('IRI Electron Density Profile Comparison', fontsize=14, fontweight='bold')
+            
+            ax1.grid(True, which="major", linestyle="-", alpha=0.6)
+            ax1.grid(True, which="minor", linestyle=":", alpha=0.4)
+            
+            # Highlight the anchor heights if they exist
+            anchor_heights = {
+                'hmF2': float(iono['hmF2'].values[0]) if float(iono['hmF2'].values[0]) > 0 else None,
+                'hmF1': float(iono['hmF1'].values[0]) if float(iono['hmF1'].values[0]) > 0 else None,
+                'hEF':  float(iono['HEF'].values[0]) if float(iono['HEF'].values[0]) > 0 else None,
+                'hmE':  float(iono['hmE'].values[0])  if float(iono['hmE'].values[0]) > 0 else None,
+                'hmD':  float(iono['hmD'].values[0])  if float(iono['hmD'].values[0]) > 0 else None
+            }
+            
+            for label, height in anchor_heights.items():
+                if height:
+                    ax1.axhline(height, color='gray', linestyle=':', alpha=0.8)
+                    ax1.text(1.5e8, height + 3, label, color='gray', fontsize=10, fontweight='bold')
+                    # Extend the anchor lines across to the error plot as well
+                    ax2.axhline(height, color='gray', linestyle=':', alpha=0.8)
 
-    iono = IRI(TIME, ALT_KM, LAT_C, LON_C)
+            # --- COLOR CODING REGIONS ---
+            # Get current y-limits to bound the top and bottom regions seamlessly
+            y_min, y_max = ax1.get_ylim()
 
-    peak_idx = int(iono["ne"].argmax())
-    print(f"  ne peak  : {float(iono['ne'][peak_idx]):.3e} m⁻³"
-          f"  at {float(iono.alt_km[peak_idx]):.0f} km")
-    print(f"  NmF2     : {float(iono['NmF2']):.3e} m⁻³")
-    print(f"  hmF2     : {float(iono['hmF2']):.1f} km")
-    print(f"  foF2     : {float(iono['foF2']):.2f} MHz")
-    print(f"  TEC      : {float(iono['TEC']):.3e} m⁻²")
-    print(f"  B0 / B1  : {float(iono['B0']):.1f} km / {float(iono['B1']):.3f}")
-    print(f"  f107D    : {iono.attrs['f107D']:.1f}   ap : {iono.attrs['ap']:.1f}")
-    print(f"  IG12     : {iono.attrs['IG12']:.1f}   Rz12: {iono.attrs['Rz12']:.1f}")
+            # Define hex colors matched to the plot
+            c_topside = '#9F9FE5'     # 1: Topside (Purple)
+            c_f2      = '#75CFEE'     # 2: F2 (Light Blue)
+            c_f1      = '#8DD8A4'     # 3: F1 (Light Green)
+            c_inter   = '#F8F28A'     # 4: Intermediate (Yellow)
+            c_evalley = '#F9C59A'     # 5: E-Valley (Peach)
+            c_ed      = '#EE7E8B'     # 6: E/D (Red/Pink)
 
-    iri_plots.altprofile(iono)
-    plt.gcf().suptitle(
-        f"§1  Single altitude profile — {TIME}\n"
-        f"lat {LAT_C} °N   lon {LON_C} °E   (IRI default solar indices)",
-        fontsize=9,
-    )
+            # 1. Topside (> hmF2)
+            if anchor_heights['hmF2']:
+                ax1.axhspan(anchor_heights['hmF2'], y_max, color=c_topside, alpha=0.5, zorder=0)
+
+            # 2. F2 (hmF1 to hmF2)
+            if anchor_heights['hmF2'] and anchor_heights['hmF1']:
+                ax1.axhspan(anchor_heights['hmF1'], anchor_heights['hmF2'], color=c_f2, alpha=0.5, zorder=0)
+            elif anchor_heights['hmF2'] and anchor_heights['hEF']:
+                ax1.axhspan(anchor_heights['hEF'], anchor_heights['hmF2'], color=c_f2, alpha=0.5, zorder=0)
+
+            # 3. F1 (hEF to hmF1)
+            if anchor_heights['hmF1'] and anchor_heights['hEF']:
+                ax1.axhspan(anchor_heights['hEF'], anchor_heights['hmF1'], color=c_f1, alpha=0.5, zorder=0)
+
+            # 4 & 5. Intermediate and E-Valley (hmE to hEF)
+            if anchor_heights['hEF'] and anchor_heights['hmE']:
+                # Calculate a midpoint to separate Region 4 and 5 since h_VT is not in the dataset
+                h_mid = (anchor_heights['hmE'] + anchor_heights['hEF']) / 2
+                ax1.axhspan(h_mid, anchor_heights['hEF'], color=c_inter, alpha=0.5, zorder=0)   # 4. Intermediate
+                ax1.axhspan(anchor_heights['hmE'], h_mid, color=c_evalley, alpha=0.5, zorder=0) # 5. E-Valley
+
+            # 6. E/D (< hmE)
+            if anchor_heights['hmE']:
+                # Colors from the very bottom of the plot up to hmE
+                ax1.axhspan(y_min, anchor_heights['hmE'], color=c_ed, alpha=0.5, zorder=0)
+                
+            # Optional: Re-apply the y-limits so the colored spans don't accidentally expand the plot axes
+            ax1.set_ylim(y_min, y_max)
+        
+            ax1.legend(fontsize=12, loc='upper left')
+        
+            # ==========================================
+            # Subplot 2: The Relative Error
+            # ==========================================
+            ax2.plot(error_pct, altitudes, color='purple', linewidth=2)
+            
+            # Draw a solid reference line at 0% error
+            ax2.axvline(0, color='black', linestyle='--', linewidth=1.5)
+            
+            ax2.set_xlabel('Error (%)', fontsize=12, fontweight='bold')
+            ax2.set_title('Relative Error', fontsize=14, fontweight='bold')
+            ax2.grid(True, linestyle=':', alpha=0.6)
+            
+            # Clean up the layout so the plots don't overlap
+            plt.tight_layout()
+            plt.show()
+        # 5. Append the calculated profile back to the xarray dataset for easy comparison
+        iono["ne_calculated"] = (("alt_km"), calculated_edp)
+    
+        # Run the comparison plot
+        plot_edp_comparison(iono)
+        
+        plt.show() # Ensure the plot renders
+        
     return iono
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 #  §2  Three solar-activity scenarios compared on one altitude profile
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1143,14 +1357,12 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
         try:
             if name == 'Point':
                 print("      -> Plotting State Distribution (Temporal variance at Center Point)")
-                # Evaluates over the 50 state samples at the single point
                 eds.plot_edp_statistics(f"{name} Geometry ({n_mc} states)")
             else:
                 print(f"      -> Plotting {name} Geometric Distribution (Spatial variance at base time)")
-                # Isolate the nominal state (sample 0) to view purely spatial variance
                 eds_spatial = EDPSamples.from_xarray(eds.isel(sample=[0]))
                 eds_spatial.plot_edp_statistics(f"{name} Geometry ({n_mc} states)")
-                # Derive center of figure from podTc data
+                
                 tecmax_lat = podTc_data['lat_tecmax_tangent']
                 tecmax_lon = podTc_data['lon_tecmax_tangent']
                 
@@ -1159,18 +1371,63 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
                     save_path=f"./Figures/{name}_mesh_globe.png",
                     podTc_data=podTc_data
                 )
-                print(f"      -> Plotting {name} State Covariance Matrix")
-                # Evaluates over all spatial points AND all 50 states
-                eds.plot_edp_covariance()
+                target_alts = [200.0, 300.0, 400.0]  # <--- Change these altitudes to whatever you want to investigate
                 
-
+                for alt in target_alts:
+                    print(f"      -> Plotting {name} mesh data at {alt} km")
+                    
+                    # 1. Plot Electron Density (Ne) for the Nominal State (sample=0)
+                    eds.plot_mesh_globe(
+                        tecmax_lat, tecmax_lon,
+                        save_path=f"./Figures/{name}_mesh_globe_Ne_{int(alt)}km.png",
+                        podTc_data=podTc_data,
+                        mesh_scalars="Ne",
+                        target_alt=alt,
+                        target_sample=0,
+                        scalar_cmap='plasma'
+                    )
+                    
+                    # 2. Plot Standard Deviation across the full MC ensemble
+                    eds.plot_mesh_globe(
+                        tecmax_lat, tecmax_lon,
+                        save_path=f"./Figures/{name}_mesh_globe_StdDev_{int(alt)}km.png",
+                        podTc_data=podTc_data,
+                        mesh_scalars="StdDev",
+                        target_alt=alt,
+                        scalar_cmap='magma'
+                    )
+                print(f"      -> Plotting {name} State Covariance Matrix")
+                eds.plot_edp_covariance()
                 
         except Exception as e:
             print(f"      [!] Statistical plotting failed: {e}")
             
         print("      -> Running Forward TEC Integration")
-        # Explicitly targets sample_idx=0 (our unmodified base state)
-        results_tec[name] = eds.forward_model_mesh_tec(podTc_data, sample_idx=0, num_segments=1000)
+        
+        # ---------------------------------------------------------
+        # NEW: Find the 5% and 95% sample indices based on total density
+        # ---------------------------------------------------------
+        # Sum the electron density across height and geo dimensions for each sample
+        edp_totals = np.nansum(eds.edps, axis=(0, 1)) 
+        sorted_indices = np.argsort(edp_totals)
+        n_samples = len(sorted_indices)
+        
+        idx_05 = sorted_indices[int(0.05 * n_samples)]
+        idx_95 = sorted_indices[int(0.95 * n_samples)]
+        
+        print(f"         [Ensemble Selection] Nominal: 0 | 5%: {idx_05} | 95%: {idx_95}")
+        
+        # Run forward models for nominal and the two boundary indices
+        tec_nom = eds.forward_model_mesh_tec(podTc_data, sample_idx=0, num_segments=1000)
+        tec_05  = eds.forward_model_mesh_tec(podTc_data, sample_idx=idx_05, num_segments=1000)
+        tec_95  = eds.forward_model_mesh_tec(podTc_data, sample_idx=idx_95, num_segments=1000)
+        
+        # Store as a dictionary to easily unpack in the plotting loop
+        results_tec[name] = {
+            'nominal': tec_nom,
+            'lower': tec_05,
+            'upper': tec_95
+        }
 
     # ---------------------------------------------------------
     # 5. Generate the Comparison Plot
@@ -1195,15 +1452,50 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     }
 
     for name in eds_dict.keys():
+        nom_tec = results_tec[name]['nominal']
+        low_tec = results_tec[name]['lower']
+        upp_tec = results_tec[name]['upper']
+        
+        # Plot nominal line
         ax.plot(
-            results_tec[name], 
+            nom_tec, 
             tangent_alt_km, 
             color=styles[name]['color'], 
             ls=styles[name]['ls'], 
             lw=2, 
             label=f"Modeled ({name})"
         )
-
+        
+        # NEW: Plot the 5% to 95% bounds as a shaded background region
+        ax.fill_betweenx(
+            tangent_alt_km,
+            low_tec,
+            upp_tec,
+            color=styles[name]['color'],
+            alpha=0.1,            # Light transparency so it doesn't block other lines
+            edgecolor='none'
+        )
+        ax.plot(
+            low_tec, 
+            tangent_alt_km, 
+            color=styles[name]['color'], 
+            ls=styles[name]['ls'],  # Match the line style of the nominal line
+            lw=1.0,                 # Thinner line width to distinguish from nominal
+            alpha=0.6,              # Slight transparency
+            label='_nolegend_'      # Keeps it from cluttering the legend
+        )
+        
+        # Upper bound
+        ax.plot(
+            upp_tec, 
+            tangent_alt_km, 
+            color=styles[name]['color'], 
+            ls=styles[name]['ls'], 
+            lw=1.0, 
+            alpha=0.6,
+            label='_nolegend_'
+        )
+        
     ax.set_ylabel("Tangent Altitude (km)")
     ax.set_xlabel("Total Electron Content (TECU)")
     
@@ -1445,7 +1737,7 @@ def main() -> None:
     print("Alaska region:  60–65 °N,  150–140 °W")
     print("=" * 60)
 
-    # section1()
+    section1()
     # section2()
     # section3()
     # section4()
@@ -1479,31 +1771,33 @@ def main() -> None:
     # section15()
     
 
-    alt_grid = np.arange(100.0, 1000.0, 10.0, dtype=float)
-    sampling_df = pd.DataFrame([{
-        "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
-    }])
+    # alt_grid = np.arange(100.0, 1000.0, 10.0, dtype=float)
+    # sampling_df = pd.DataFrame([{
+    #     "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
+    # }])
 
-    podTc2_files = [
-        # "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
-        # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
-        # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
-        # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
-        # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
-        "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
-        # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
-    ]
+    # podTc2_files = [
+    #     # "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
+    #     # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
+    #     # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
+    #     # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
+    #     # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
+    #     # "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
+    #     # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
+    #     # "podTc2_GN04.2025.152.06.23.0026.G31.01_0000.0001_nc" # Very wide occultation
+    #     "podTc2_GN04.2025.152.06.27.0042.C40.01_0000.0001_nc"
+    # ]
 
-    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
+    # base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
 
-    for f_string in podTc2_files:
-            full_path = os.path.join(base_path, f_string)
+    # for f_string in podTc2_files:
+    #         full_path = os.path.join(base_path, f_string)
             
             # Run the geometry comparison suite
-            eds_dict, tec_results = section16(full_path, alt_grid, sampling_df)
+            # eds_dict, tec_results = section16(full_path, alt_grid, sampling_df)
             
             # Run the assimilation test
-            prior_x, post_x = section17(full_path, alt_grid, sampling_df)
+            # prior_x, post_x = section17(full_path, alt_grid, sampling_df)
 
     print("\n" + "=" * 60)
     print("All sections complete — displaying figures.")
