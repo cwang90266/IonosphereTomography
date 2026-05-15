@@ -153,6 +153,7 @@ do iSample =1, nSample
         WRITE(*,*) 'Ne contains NaN for sample, point ', iSample, iPts
     ENDIF   
     WRITE(20) (outf(1,i),i=1,nheight)
+    WRITE(20) (OARR(i),i=1,12), OARR(35)
   enddo
 enddo
 
