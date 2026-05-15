@@ -155,7 +155,7 @@ def parse_podTc2_nc_file(file_path):
             
             # Guard clause: Ensure we actually have data left after masking
             if not np.any(valid_alt_mask):
-                print(f"No valid descending tangent points found. Skipping.")
+                print("No valid descending tangent points found. Skipping.")
                 return None
             
             tec_masked = podTc2_data['TEC_podTc2'][valid_alt_mask]
@@ -166,9 +166,9 @@ def parse_podTc2_nc_file(file_path):
 
             # 5. Determine occultation type (Rising vs Setting) and conditionally flip
             # We determine this using the unmasked array to see the true direction of the pass
-            is_setting = tangent_alt_km[0] > tangent_alt_km[-1]
+            is_rising = tangent_alt_km[0] < tangent_alt_km[-1]
             
-            if is_setting:
+            if is_rising:
                 # Reassign back into dictionary, flipped
                 podTc2_data['TEC_podTc2'] = np.flip(tec_masked)
                 podTc2_data['LEO'] = np.flip(leo_masked, axis=1) # Axis 1 for 2D arrays
@@ -516,3 +516,87 @@ def forward_model_func(Ne_grid,grid_alt,LEO,GNSS,grid_lats,grid_lons,tangent_rad
     TEC = TEC / 1e16  # Convert to TECU (1 TECU = 1e16 electrons/m^2)
     print('\n')
     return TEC, Ne_x, x, Ne_tangent
+
+import numpy as np
+import pyproj
+from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+
+def forward_model_mesh_tec(edp_dataset, podTc2_data, sample_idx=0, num_segments=1000):
+    # ... [Keep your existing docstring and variable extractions] ...
+    
+    # 1. Extract Mesh and EDP Data
+    altitude = edp_dataset.coords['altitude'].values  # 1D array of heights (km)
+    geolocation = edp_dataset.data_vars['geolocation'].values  # (n_geo, 2) array [lat, lon]
+    raw_edps = edp_dataset.data_vars['EDPs'].values[:, :, sample_idx].T
+    edps_2d = np.nan_to_num(raw_edps, nan=0.0)
+    
+    print("Building spatial interpolators for the occultation mesh...")
+    
+    # Primary: High accuracy inside the mesh (Do NOT use fill_value=0.0 anymore)
+    spatial_interp_lin = LinearNDInterpolator(geolocation, edps_2d)
+    
+    # Fallback: Graceful extrapolation for the ray tails outside the mesh
+    spatial_interp_near = NearestNDInterpolator(geolocation, edps_2d)
+
+    # 2. Extract Satellite Geometry
+    LEO = podTc2_data['LEO']
+    GNSS = podTc2_data['GNSS']
+    n_rays = LEO.shape[1]
+    
+    TEC = np.zeros(n_rays)
+    
+    transformer = pyproj.Transformer.from_crs(
+        pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
+        pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+        always_xy=True
+    )
+
+    # 3. Ray Tracing & Integration
+    for i in tqdm(range(n_rays), desc="Processing Occultation Rays"):
+        
+        t = np.linspace(0, 1, num_segments)
+        ray_points = GNSS[:, i:i+1] + (LEO[:, i:i+1] - GNSS[:, i:i+1]) * t
+        
+        diffs = np.diff(ray_points, axis=1) 
+        dl_km = np.linalg.norm(diffs, axis=0)
+        dl_m = dl_km * 1000.0 
+        
+        midpoints = (ray_points[:, :-1] + ray_points[:, 1:]) / 2.0
+        
+        lons, lats, alts_m = transformer.transform(
+            midpoints[0, :] * 1e3, 
+            midpoints[1, :] * 1e3, 
+            midpoints[2, :] * 1e3
+        )
+        alts_km = alts_m / 1000.0 
+        
+        # 4. Interpolate Electron Density with Hybrid Fallback
+        
+        # Step A: Try linear interpolation first
+        ray_profiles = spatial_interp_lin(lons, lats)
+        
+        # Step B: Find the points that fell outside the mesh (LinearND returns NaN)
+        nan_mask = np.isnan(ray_profiles[:, 0])
+        
+        # Step C: Fill those outside points using the nearest neighbor instead of 0.0
+        if np.any(nan_mask):
+            ray_profiles[nan_mask, :] = spatial_interp_near(lons[nan_mask], lats[nan_mask])
+            
+        Ne_along_ray = np.zeros(num_segments - 1)
+        
+        for j in range(num_segments - 1):
+            # Safe 1D altitude interpolation (right=0.0 is safe here because 
+            # it only drops density to 0 if the ray goes higher than your max IRI altitude grid)
+            Ne_along_ray[j] = np.interp(
+                alts_km[j], 
+                altitude, 
+                ray_profiles[j, :], 
+                left=0.0, 
+                right=0.0
+            )
+            
+        # 5. Integrate to calculate TEC (Ne * dl)
+        tec_ray = np.nansum(Ne_along_ray * dl_m)
+        TEC[i] = tec_ray / 1e16 
+
+    return TEC

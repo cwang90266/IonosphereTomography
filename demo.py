@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/home/austinhunter/Downloads/PlanetiQ_Code/venv311/bin/python3.11
+
 """
 demo.py — End-to-end demonstration of the IonosphereTomography codebase.
 
@@ -13,7 +14,7 @@ Or, with any venv that has the packages installed:
 
 Sections
 --------
- §1  Single IRI altitude profile at the region centre (default solar indices)
+ §1  Single IRI altitude profile at the region center (default solar indices)
  §2  Three solar-activity scenarios compared on one altitude profile
  §3  Sensitivity to ionospheric shape parameters (foF2, hmF2, B0, B1)
  §4  24-hour time profile at a fixed location
@@ -38,7 +39,11 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "EDPSamples" / "Locate in mesh" / "outputs"))
 sys.path.insert(0, str(ROOT / "iri2020_new" / "src" ))
 
+<<<<<<< HEAD
 print(ROOT)
+=======
+import os
+>>>>>>> main
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -61,6 +66,8 @@ from EDPSamples.edp_samples import (
 from EDPSamples.generate_rect_tri_mesh import generate_rect_tri_mesh
 from EDPSamples.generate_polar_mesh import generate_ploar_mesh   # note: typo in source
 
+from Ionosphere_Tomography_Inverter.Ionophy_Tomography_Inverter import Ionosphere_Tomography_Inverter
+
 # Standalone spherical point-in-triangle algorithm (no WGS84 altitude bug)
 from locate_in_mesh import find_containing_triangles as find_triangle_sphere
 
@@ -74,9 +81,9 @@ from IRI_Sample_Inputs.IRI_Sample_inputs import IRI_Sample_Inputs
 # ─────────────────────────────────────────────────────────────────────────────
 
 TIME     = "2025-06-15 04:00"      # simulation UTC time
-LAT_C    = 62.5                    # centre latitude  (°N)
-LON_C    = -145.0                  # centre longitude (°E, = 145 °W)
-ALT_KM   = [80, 700, 1]         # altitude grid: [start, stop, step] km
+LAT_C    = 62.5                    # center latitude  (°N)
+LON_C    = -145.0                  # center longitude (°E, = 145 °W)
+ALT_KM   = [80, 1000, 1]         # altitude grid: [start, stop, step] km
 
 # Alaska region bounds (used for sweeps and mesh generation)
 LAT_MIN, LAT_MAX, DLAT = 60.0, 65.0, 1.5
@@ -128,7 +135,7 @@ def _banner(title: str) -> None:
 # =============================================================================
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  §1  Single IRI altitude profile at the region centre
+#  §1  Single IRI altitude profile at the region center
 # ─────────────────────────────────────────────────────────────────────────────
 
 def section1() -> xr.Dataset:
@@ -422,18 +429,18 @@ def section8(rect_vertices: np.ndarray, rect_triangles: np.ndarray) -> EDPSample
         f"Alaska rect mesh  ({n_geo} vertices)   {TIME}"
     )
 
-    # Vertex closest to the centre of the region
+    # Vertex closest to the center of the region
     dists    = np.hypot(rect_vertices[:, 0] - LON_C, rect_vertices[:, 1] - LAT_C)
-    i_centre = int(np.argmin(dists))
+    i_center = int(np.argmin(dists))
 
     for i_s, (sc, ax, color) in enumerate(zip(SCENARIOS, axes, COLORS)):
         for i_g in range(n_geo):
             ax.plot(edps[:, i_g, i_s], alt_grid, color="lightgray", lw=0.7)
         ax.plot(
-            edps[:, i_centre, i_s], alt_grid,
+            edps[:, i_center, i_s], alt_grid,
             color=color, lw=2.5,
-            label=(f"centre  ({rect_vertices[i_centre,1]:.1f} °N, "
-                   f"{rect_vertices[i_centre,0]:.1f} °E)"),
+            label=(f"center  ({rect_vertices[i_center,1]:.1f} °N, "
+                   f"{rect_vertices[i_center,0]:.1f} °E)"),
         )
         ax.set_xscale("log")
         ax.set_xlabel("ne (m⁻³)")
@@ -464,7 +471,7 @@ def section8(rect_vertices: np.ndarray, rect_triangles: np.ndarray) -> EDPSample
     # geolocation passed as (lat, lon) — the convention of locate_in_mesh.py
     geoloc_latlon = rect_vertices[:, [1, 0]]   # swap (lon,lat) → (lat,lon)
     query_pts = np.array([
-        [62.5, -145.0],   # region centre
+        [62.5, -145.0],   # region center
         [61.0, -148.0],   # SW
         [64.0, -142.0],   # NE
     ])
@@ -586,7 +593,7 @@ def section11() -> None:
             geo_type="Point",
             altitude=alt_grid,
             sampling_parameters=samples,
-            evaluate_iri=1,
+            evaluate_iri=0,
             Lon=LON_C,
             Lat=LAT_C,
         )
@@ -667,33 +674,41 @@ def section11() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # §12  Occultation Defined Grid Points
 # ─────────────────────────────────────────────────────────────────────────────
-def section12() -> tuple[np.ndarray, np.ndarray]:
+def section12(podTc2_file: str) -> tuple[np.ndarray, np.ndarray, tuple, tuple, tuple]:
     from EDPSamples.generate_occultation_tri_mesh import generate_occultation_mesh
     from EDPSamples.plot_mesh_globe import plot_globe_occultation_mesh
     from TEC_model.podTc_file_processing import parse_podTc2_nc_file
+    
     _banner("§12 Occultation Defined Grid Points")
     
+<<<<<<< HEAD
     
     # podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
     podTc2_string = "podTc2_GN05.2025.315.00.04.0032.G23.01_0000.0001_nc"
     podTc2_file = f"/Users/cwang/Documents/Consulting/PlanetIQ/Data/SampleData/2025.315/{podTc2_string}"
     
     
+=======
+    # Extract the filename from the path to use in the save string
+    podTc2_string = podTc2_file.split('/')[-1]
+>>>>>>> main
     save_path = f"./Figures/Examples/{podTc2_string}_mesh_geometry.png"
+    
     podTc_data = parse_podTc2_nc_file(podTc2_file)
     
     print("Generating Occultation Mesh...")
-    vertices_podTc, triangles_podTc, pt1, pt2, pt3 = generate_occultation_mesh(filename=podTc2_file,dLat=5,dLon=5)
+    vertices_podTc, triangles_podTc, pt1, pt2, pt3 = generate_occultation_mesh(filename=podTc2_file, dLat=5, dLon=5)
     print("Complete\n")
     
     print("Running plotting code...")
     plot_globe_occultation_mesh(vertices_podTc, triangles_podTc, podTc_data['lat_tecmax_tangent'], podTc_data['lon_tecmax_tangent'], save_path)
     print("Complete\n")
     
-    return vertices_podTc, triangles_podTc, pt1, pt2, pt3
-    
+    return vertices_podTc, triangles_podTc, pt1, pt2, pt3   
+
 def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple, pt2: tuple, pt3: tuple) -> EDPSamples:
-    _banner("§8  EDPSamples  —  Alaska rect mesh × 3 solar scenarios")
+    from EDPSamples.EDPS_plotting import plot_edp_statistics
+    _banner("§13  EDPSamples  —  Occultation Mesh × 3 solar scenarios")
 
     # Altitude grid (1-D numpy array)
     alt_grid = np.arange(ALT_KM[0], ALT_KM[1] + 1, ALT_KM[2], dtype=float)
@@ -764,18 +779,18 @@ def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple,
         f"Alaska rect mesh  ({n_geo} vertices)   {TIME}"
     )
 
-    # Vertex closest to the centre of the region
+    # Vertex closest to the center of the region
     dists    = np.hypot(rect_vertices[:, 0] - LON_C, rect_vertices[:, 1] - LAT_C)
-    i_centre = int(np.argmin(dists))
+    i_center = int(np.argmin(dists))
 
     for i_s, (sc, ax, color) in enumerate(zip(SCENARIOS, axes, COLORS)):
         for i_g in range(n_geo):
             ax.plot(edps[:, i_g, i_s], alt_grid, color="lightgray", lw=0.7)
         ax.plot(
-            edps[:, i_centre, i_s], alt_grid,
+            edps[:, i_center, i_s], alt_grid,
             color=color, lw=2.5,
-            label=(f"centre  ({rect_vertices[i_centre,1]:.1f} °N, "
-                   f"{rect_vertices[i_centre,0]:.1f} °E)"),
+            label=(f"center  ({rect_vertices[i_center,1]:.1f} °N, "
+                   f"{rect_vertices[i_center,0]:.1f} °E)"),
         )
         ax.set_xscale("log")
         ax.set_xlabel("ne (m⁻³)")
@@ -806,7 +821,7 @@ def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple,
     # geolocation passed as (lat, lon) — the convention of locate_in_mesh.py
     geoloc_latlon = rect_vertices[:, [1, 0]]   # swap (lon,lat) → (lat,lon)
     query_pts = np.array([
-        [62.5, -145.0],   # region centre
+        [62.5, -145.0],   # region center
         [61.0, -148.0],   # SW
         [64.0, -142.0],   # NE
     ])
@@ -817,8 +832,622 @@ def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple,
     for q, ti, b in zip(query_pts, tri_idx, bary):
         print(f"    ({q[0]:.1f} °N, {q[1]:.1f} °E)  →  triangle {ti}"
               f"   bary = {b.round(3)}")
+        
+    plot_edp_statistics(eds)
+    return eds
+
+
+def section14(eds, podTc_filename: str):
+    from TEC_model.podTc_file_processing import parse_podTc2_nc_file
+    from TEC_model.podTc_file_processing import forward_model_mesh_tec
+    from TEC_model.podTc_file_processing import rayTangent
+    """
+    Tests the modeled TEC against measured TEC from a podTc2 file.
+    
+    Parameters:
+    -----------
+    eds : EDPSamples
+        The initialized and populated EDPSamples dataset (from section 13).
+    podTc_filename : str
+        Path to the podTc2 NetCDF file containing the measured RO pass.
+    """
+    try:
+        _banner("§8  Section 14  —  Modeled vs Measured TEC Comparison")
+    except NameError:
+        print("\n=== Section 14 — Modeled vs Measured TEC Comparison ===")
+
+    # 1. Parse the observed data
+    print(f"  Loading measured data from : {podTc_filename}")
+    data = parse_podTc2_nc_file(podTc_filename)
+    
+    LEO = data['LEO']
+    GNSS = data['GNSS']
+    
+    # Safely extract TEC (keys can vary based on your parser implementation)
+    if 'TEC' in data:
+        measured_tec = data['TEC']
+    elif 'TEC_podTc2' in data:
+        measured_tec = data['TEC_podTc2']
+    else:
+        print("  [!] Warning: Could not find 'TEC' or 'absolute_TEC' key in podTc2 data.")
+        measured_tec = np.zeros(LEO.shape[1])
+
+    n_rays = LEO.shape[1]
+    n_samples = eds.sizes.get('sample', 1) # Support 1 or multiple solar scenarios
+    print(f"  Total Occultation Rays   : {n_rays}")
+    print(f"  Evaluating Scenarios     : {n_samples}")
+
+    # 2. Calculate Tangent Altitudes for the plot's Y-axis
+    print("  Calculating tangent altitudes for profile geometry...")
+    _, _, tangent_alt = rayTangent(LEO, GNSS, units='km')
+
+    # 3. Compute Forward Modeled TEC for each scenario
+    modeled_tecs = []
+    for i_s in range(n_samples):
+        print(f"  Running forward model for scenario {i_s + 1}/{n_samples}...")
+        # Make sure forward_model_mesh_tec is imported/available in this scope
+        tec = forward_model_mesh_tec(eds, data, sample_idx=i_s, num_segments=1000)
+        modeled_tecs.append(tec)
+
+    # 4. Generate the Comparison Plot
+    print("  Generating comparison plot...")
+    fig, ax = plt.subplots(figsize=(7, 9))
+    fig.suptitle(
+        f"§8  Section 14 — Measured vs. Modeled TEC\n"
+        f"Occultation Pass: {podTc_filename.split('/')[-1]}",
+        fontsize=12
+    )
+
+    # Plot Measured TEC
+    print(f"{measured_tec.shape},  {tangent_alt.shape}")
+    print(f"Measured TEC - Min: {np.nanmin(measured_tec)}, Max: {np.nanmax(measured_tec)}, NaNs: {np.isnan(measured_tec).sum()}")
+    print(f"Modeled TEC 1 - Min: {np.nanmin(modeled_tecs[0])}, Max: {np.nanmax(modeled_tecs[0])}, NaNs: {np.isnan(modeled_tecs[0]).sum()}")
+    ax.plot(measured_tec, tangent_alt*1e-3, color='black', lw=2.5, label="Measured TEC (podTc2)")
+
+    # Plot Modeled TEC Scenarios
+    colors = ['tab:red', 'tab:blue', 'tab:green', 'tab:orange', 'tab:purple']
+    
+    # Try to grab scenario labels if they exist in your sampling parameters
+    try:
+        sample_params = eds.data_vars['sampling_parameters'].values
+    except KeyError:
+        sample_params = None
+
+    for i_s in range(n_samples):
+        c = colors[i_s % len(colors)]
+        label = f"Modeled TEC (Scenario {i_s + 1})"
+        
+        ax.plot(modeled_tecs[i_s], tangent_alt*1e-3, color=c, lw=1.5, linestyle='--', label=label)
+
+    # Formatting the plot to match typical RO profiles
+    ax.set_ylabel("Tangent Altitude (km)")
+    ax.set_xlabel("Total Electron Content (TECU)")
+    
+    # Restrict Y-axis to the valid altitude envelope
+    valid_alts = tangent_alt[tangent_alt >= 0]
+    if len(valid_alts) > 0:
+        ax.set_ylim(0, min(np.max(valid_alts) + 50, eds.coords['altitude'].values[-1]))
+    else:
+        ax.set_ylim(0, 600)
+        
+    ax.grid(True, alpha=0.4, linestyle=':')
+    ax.legend(loc='upper right', fontsize=9)
+    
+    plt.tight_layout()
+    # plt.show()
+
+    return modeled_tecs, tangent_alt
+
+
+
+def section15(lon_point: float = -145.0, lat_point: float = 62.5, n_mc_samples: int = 100):
+    """
+    Evaluates a single geographical point across a large Monte Carlo ensemble 
+    of IRI input parameters to test statistical EDPSamples generation.
+    """
+    from EDPSamples.EDPS_plotting import plot_edp_statistics
+    
+    try:
+        _banner("§15  EDPSamples  —  Single Point × Monte Carlo Ensemble")
+    except NameError:
+        print("\n=== Section 15 — Single Point × Monte Carlo Ensemble ===")
+
+    # 1. Altitude grid (1-D numpy array)
+    alt_grid = np.arange(ALT_KM[0], ALT_KM[1] + 1, ALT_KM[2], dtype=float)
+    n_height = len(alt_grid)
+    n_geo = 1  # Single point
+
+    # 2. Generate a large range of varying input parameters (Monte Carlo)
+    print(f"  Generating {n_mc_samples} synthetic solar scenarios...")
+    np.random.seed(42) # Set seed for reproducible testing
+    
+    # Create normal distributions for typical solar/geomagnetic parameters, 
+    # clipped to realistic boundaries to prevent IRI model crashes.
+    sampling_df = pd.DataFrame({
+        "hour": np.full(n_mc_samples, 12.0),
+        "f107": np.random.normal(loc=130, scale=30, size=n_mc_samples).clip(70, 250),
+        "ap":   np.random.normal(loc=15, scale=12, size=n_mc_samples).clip(0, 400),
+        "ig12": np.random.normal(loc=100, scale=25, size=n_mc_samples).clip(50, 200),
+        "rz12": np.random.normal(loc=100, scale=25, size=n_mc_samples).clip(50, 200),
+    })
+
+    print(f"  Altitude levels : {n_height}  ({alt_grid[0]:.0f}–{alt_grid[-1]:.0f} km)")
+    print(f"  Mesh vertices   : {n_geo}  (Point: {lat_point}°N, {lon_point}°E)")
+    print(f"  Solar scenarios : {n_mc_samples} (Monte Carlo Distribution)")
+    print(f"  Total IRI calls : {n_geo * n_mc_samples}")
+
+    # 3. Run IRI for the single vertex across ALL scenarios
+    # edps shape: (height, geo_vertex, sample)
+    edps = np.full((n_height, n_geo, n_mc_samples), np.nan)
+
+    for i_s in range(n_mc_samples):
+        sc = sampling_df.iloc[i_s]
+        
+        # Display a simple progress tracker
+        if (i_s + 1) % 10 == 0 or i_s == 0:
+            print(f"    Running sample {i_s + 1}/{n_mc_samples}...", end="\r", flush=True)
+            
+        iono = IRI(
+            TIME, ALT_KM, lat_point, lon_point,
+            f107D=sc["f107"], ap=sc["ap"],
+            IG12=sc["ig12"], Rz12=sc["rz12"],
+        )
+        edps[:, 0, i_s] = iono["ne"].values
+        
+    print(f"    Running sample {n_mc_samples}/{n_mc_samples}... Done!  ")
+
+    # 4. Construct the EDPSamples Object
+    # Note: geo_type is explicitly "Point", and we pass Lon/Lat instead of pt1/pt2/pt3
+    eds = EDPSamples(
+        DateTime=TIME,
+        geo_type="Point",
+        altitude=alt_grid,
+        sampling_parameters=sampling_df,
+        edps=edps,
+        Lon=lon_point,
+        Lat=lat_point
+    )
+
+    print(f"\n  EDPSamples dims  : {dict(eds.sizes)}")
+    print(f"  EDPs shape       : {eds.edps.shape}   (height, geo_vertex, sample)")
+
+    # 5. Plot the raw "Spaghetti" Plot
+    fig, ax = plt.subplots(figsize=(6, 8))
+    fig.suptitle(f"§15 EDPSamples — Raw Monte Carlo Ensemble\nPoint: {lat_point}°N, {lon_point}°E at {TIME}")
+    
+    # Plot all samples lightly in the background
+    for i_s in range(n_mc_samples):
+        ax.plot(edps[:, 0, i_s], alt_grid, color="tab:blue", alpha=0.1, lw=1.0)
+        
+    # Plot the mean line over the top
+    mean_profile = np.nanmean(edps[:, 0, :], axis=1)
+    ax.plot(mean_profile, alt_grid, color="black", lw=2.5, label="Ensemble Mean")
+    
+    ax.set_xscale("log")
+    ax.set_xlabel("ne (m⁻³)")
+    ax.set_ylabel("Altitude (km)")
+    ax.grid(True, alpha=0.4, linestyle=':')
+    ax.legend()
+    plt.tight_layout()
+    # plt.show()
+
+    # 6. Call the Statistical Plotting Code
+    print("\n  Generating Statistical Distribution Plots...")
+    plot_edp_statistics(eds)
 
     return eds
+
+
+def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame) -> tuple[dict, dict]:
+    """
+    §16 Comparative Mesh Analysis
+    Generates 4 distinct EDPSamples meshes (Point, Occultation, Rectangle, Polar)
+    across an ensemble of states (±3 hours), evaluates the nominal TEC, and plots 
+    the spatial and state covariances.
+    """
+    from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
+    from EDPSamples.edp_samples import EDPSamples
+    
+    try:
+        _banner("§16  Comparing 4 Mesh Types Across State Range")
+    except NameError:
+        print("\n=== §16  Comparing 4 Mesh Types Across State Range ===")
+        
+    filename = podTc2_file.split('/')[-1]
+    print(f"Processing File: {filename}")
+
+    # 1. Parse podTc2 data to anchor the geometry
+    podTc_data = parse_podTc2_nc_file(podTc2_file)
+    if podTc_data is None:
+        print(" [!] Invalid or skipped podTc data. Aborting comparison.")
+        return {}, {}
+
+    lat_c = podTc_data['lat_tecmax_tangent']
+    lon_c = podTc_data['lon_tecmax_tangent']
+    dlat_step = 5
+    dlon_step = 5
+
+    # ---------------------------------------------------------
+    # 2. Generate State Ensemble (±3 Hours + Solar Variance)
+    # ---------------------------------------------------------
+    print("\n  -> Generating State Ensemble (±3 hours, varying solar parameters)")
+    time_str = "2015-06-01 12:00:00"  # Base nominal time
+    
+    # Extract the base scenario
+    base_sc = sampling_df.iloc[0]
+    n_mc = 50  # Number of states to simulate for the covariance matrix
+    np.random.seed(42)
+
+    # Vary hour by ±3 hours, wrapping around midnight
+    mc_hours = (base_sc['hour'] + np.random.uniform(-3, 3, size=n_mc)) % 24
+
+    mc_df = pd.DataFrame({
+        "hour": mc_hours,
+        "f107": np.random.normal(loc=base_sc.get('f107', 130), scale=10, size=n_mc).clip(70, 250),
+        "ap":   np.random.normal(loc=base_sc.get('ap', 15), scale=5, size=n_mc).clip(0, 400),
+        "ig12": np.random.normal(loc=base_sc.get('ig12', 100), scale=10, size=n_mc).clip(50, 200),
+        "rz12": np.random.normal(loc=base_sc.get('rz12', 100), scale=10, size=n_mc).clip(50, 200),
+    })
+
+    # CRITICAL: Force the 0th sample to be the EXACT nominal base state 
+    # so the forward TEC model calculates exactly as it did before.
+    mc_df.iloc[0] = base_sc
+
+    eds_dict = {}
+
+    # ---------------------------------------------------------
+    # 3. Generate EDPSamples for each Geo Type
+    # ---------------------------------------------------------
+    
+    # A. POINT (State Distribution anchor)
+    print("  -> Generating [Point] EDPSamples")
+    eds_dict['Point'] = EDPSamples(
+        DateTime=time_str, geo_type="Point", altitude=alt_grid,
+        sampling_parameters=mc_df, evaluate_iri=1,
+        Lon=lon_c, Lat=lat_c
+    )
+
+    # B. OCCULTATION
+    print("  -> Generating [Occultation] EDPSamples")
+    eds_dict['Occultation'] = EDPSamples(
+        DateTime=time_str, geo_type="Occultation", altitude=alt_grid,
+        sampling_parameters=mc_df, evaluate_iri=1,
+        filename=podTc2_file, dLat=dlat_step, dLon=dlon_step
+    )
+    
+    lat_lons = np.array([
+        eds_dict['Occultation'].attrs['pt1'], 
+        eds_dict['Occultation'].attrs['pt2'], 
+        eds_dict['Occultation'].attrs['pt3']
+    ])
+
+    # C. RECTANGLE
+    print("  -> Generating [Rectangle] EDPSamples")
+    eds_dict['Rectangle'] = EDPSamples(
+        DateTime=time_str, geo_type="Rectangle", altitude=alt_grid,
+        sampling_parameters=mc_df, evaluate_iri=1,
+        minLon=np.min(lat_lons[:,1]), maxLon=np.max(lat_lons[:,1]), dLon=dlon_step,
+        minLat=np.min(lat_lons[:,0]), maxLat=np.max(lat_lons[:,0]), dLat=dlat_step
+    )
+
+    # D. POLAR
+    print("  -> Generating [Polar] EDPSamples")
+    lats = lat_lons[:, 0]
+    if np.mean(lats) > 0: 
+        min_lat_polar = np.max([np.min(lats[lats > 0]), 1.0]) if np.any(lats > 0) else 1.0
+    else:
+        min_lat_polar = np.min([np.max(lats[lats <= 0]), -1.0]) if np.any(lats <= 0) else -1.0
+        
+    print(f"     Polar Plot edge: {min_lat_polar:.2f}°")
+    eds_dict['Polar'] = EDPSamples(
+        DateTime=time_str, geo_type="Polar", altitude=alt_grid,
+        sampling_parameters=mc_df, evaluate_iri=1,
+        minLat=min_lat_polar, dLat=dlat_step
+    )
+    
+    # ---------------------------------------------------------
+    # 4. Analysis: Plots, Covariance, and TEC Models
+    # ---------------------------------------------------------
+    print("\n  -> Running Analysis and Forward Models...")
+    results_tec = {}
+    
+    for name, eds in eds_dict.items():
+        print(f"\n     --- Evaluating {name} mesh ---")
+        
+        try:
+            if name == 'Point':
+                print("      -> Plotting State Distribution (Temporal variance at Center Point)")
+                # Evaluates over the 50 state samples at the single point
+                eds.plot_edp_statistics(f"{name} Geometry ({n_mc} states)")
+            else:
+                print(f"      -> Plotting {name} Geometric Distribution (Spatial variance at base time)")
+                # Isolate the nominal state (sample 0) to view purely spatial variance
+                eds_spatial = EDPSamples.from_xarray(eds.isel(sample=[0]))
+                eds_spatial.plot_edp_statistics(f"{name} Geometry ({n_mc} states)")
+                # Derive center of figure from podTc data
+                tecmax_lat = podTc_data['lat_tecmax_tangent']
+                tecmax_lon = podTc_data['lon_tecmax_tangent']
+                
+                eds_spatial.plot_mesh_globe(
+                    tecmax_lat, tecmax_lon,
+                    save_path=f"./Figures/{name}_mesh_globe.png",
+                    podTc_data=podTc_data
+                )
+                print(f"      -> Plotting {name} State Covariance Matrix")
+                # Evaluates over all spatial points AND all 50 states
+                eds.plot_edp_covariance()
+                
+
+                
+        except Exception as e:
+            print(f"      [!] Statistical plotting failed: {e}")
+            
+        print("      -> Running Forward TEC Integration")
+        # Explicitly targets sample_idx=0 (our unmodified base state)
+        results_tec[name] = eds.forward_model_mesh_tec(podTc_data, sample_idx=0, num_segments=1000)
+
+    # ---------------------------------------------------------
+    # 5. Generate the Comparison Plot
+    # ---------------------------------------------------------
+    print("\n  -> Generating TEC Comparison Plot...")
+    
+    _, _, tangent_alt_raw = rayTangent(podTc_data['LEO'], podTc_data['GNSS'], units='km')
+    tangent_alt_km = tangent_alt_raw * 1e-3
+
+    measured_tec = podTc_data.get('TEC_podTc2', podTc_data.get('TEC', np.zeros_like(tangent_alt_km)))
+
+    fig, ax = plt.subplots(figsize=(8, 10))
+    fig.suptitle(f"§16 Mesh Geometry Comparison\nOccultation: {filename}", fontsize=12)
+
+    ax.plot(measured_tec, tangent_alt_km, color='black', lw=3, label="Measured TEC")
+
+    styles = {
+        'Point':       {'color': 'tab:red',    'ls': ':'},
+        'Occultation': {'color': 'tab:blue',   'ls': '--'},
+        'Rectangle':   {'color': 'tab:green',  'ls': '-.'},
+        'Polar':       {'color': 'tab:purple', 'ls': '-'}
+    }
+
+    for name in eds_dict.keys():
+        ax.plot(
+            results_tec[name], 
+            tangent_alt_km, 
+            color=styles[name]['color'], 
+            ls=styles[name]['ls'], 
+            lw=2, 
+            label=f"Modeled ({name})"
+        )
+
+    ax.set_ylabel("Tangent Altitude (km)")
+    ax.set_xlabel("Total Electron Content (TECU)")
+    
+    valid_alts = tangent_alt_km[tangent_alt_km >= 0]
+    if len(valid_alts) > 0:
+        ax.set_ylim(0, min(np.max(valid_alts) + 50, alt_grid[-1]))
+    else:
+        ax.set_ylim(0, 600)
+        
+    ax.grid(True, alpha=0.4, linestyle=':')
+    ax.legend(loc='upper right', fontsize=10)
+    plt.tight_layout()
+
+    save_dir = "./Figures/Section16_Comparisons/"
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"{filename}_mesh_comparison.png")
+    fig.savefig(save_path, dpi=150)
+    print(f"  -> Saved figure to {save_path}\n")
+
+    return eds_dict, results_tec
+
+def section17(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame):
+    """
+    §17 Tomography Data Assimilation Test
+    Initializes the Ionosphere_Tomography_Inverter, assimilates measured TEC data,
+    and plots the Prior vs. Posterior states to evaluate filter performance.
+    """
+    from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
+    from EDPSamples.edp_samples import EDPSamples
+    
+    # Make sure this matches where you saved the inverter class!
+    # from EDPSamples.tomography_inverter import Ionosphere_Tomography_Inverter 
+    
+    try:
+        _banner("§17  Tomography Data Assimilation (Kalman Filter)")
+    except NameError:
+        print("\n=== §17  Tomography Data Assimilation (Kalman Filter) ===")
+        
+    filename = podTc2_file.split('/')[-1]
+    print(f"Processing File: {filename}")
+
+    # 1. Parse Data and Clean NaNs
+    podTc_data = parse_podTc2_nc_file(podTc2_file)
+    if podTc_data is None:
+        print(" [!] Invalid or skipped podTc data. Aborting.")
+        return
+
+    _, _, tangent_alt_raw = rayTangent(podTc_data['LEO'], podTc_data['GNSS'], units='km')
+    tangent_alt_km = tangent_alt_raw * 1e-3
+    measured_tec = podTc_data.get('TEC_podTc2', podTc_data.get('TEC', np.zeros_like(tangent_alt_km)))
+    
+    # CRITICAL: Kalman Filters cannot process NaNs. We must filter out invalid rays.
+    valid_mask = ~np.isnan(measured_tec) & (measured_tec > 0)
+    measured_tec_clean = measured_tec[valid_mask]
+    tangent_alt_clean = tangent_alt_km[valid_mask]
+    
+    # Create a subset of the geometry dictionary for the filter
+    podTc_clean = {
+        'LEO': podTc_data['LEO'][:, valid_mask],
+        'GNSS': podTc_data['GNSS'][:, valid_mask]
+    }
+    
+    print(f"  -> Filtered {np.sum(~valid_mask)} invalid/NaN rays. {np.sum(valid_mask)} rays remaining.")
+
+    # 2. Generate Prior Ensemble (Required for P and Q matrices)
+    print("  -> Generating Prior State Ensemble...")
+    base_sc = sampling_df.iloc[0]
+    n_mc = 50  
+    np.random.seed(42)
+
+    mc_hours = (base_sc['hour'] + np.random.uniform(-3, 3, size=n_mc)) % 24
+    mc_df = pd.DataFrame({
+        "hour": mc_hours,
+        "f107": np.random.normal(loc=base_sc.get('f107', 130), scale=10, size=n_mc).clip(70, 250),
+        "ap":   np.random.normal(loc=base_sc.get('ap', 15), scale=5, size=n_mc).clip(0, 400),
+        "ig12": np.random.normal(loc=base_sc.get('ig12', 100), scale=10, size=n_mc).clip(50, 200),
+        "rz12": np.random.normal(loc=base_sc.get('rz12', 100), scale=10, size=n_mc).clip(50, 200),
+    })
+    mc_df.iloc[0] = base_sc  # Ensure 0th index is the baseline
+
+    eds_occ = EDPSamples(
+        DateTime="2015-06-01 12:00:00", geo_type="Occultation", altitude=alt_grid,
+        sampling_parameters=mc_df, evaluate_iri=1,
+        filename=podTc2_file, dLat=5, dLon=5
+    )
+
+    # 3. Initialize the Tomography Inverter
+    print("  -> Initializing Kalman Filter...")
+    # Initialize using meanscale=1 to use fractional perturbations
+    inverter = Ionosphere_Tomography_Inverter(EDPSam=eds_occ, meanscale=1)
+    
+    # Calculate the unscaled H matrix explicitly so we can use it to calculate absolute TEC
+    print("  -> Building Observation Operator (H)...")
+    H_unscaled = inverter.get_observation_operator(podTc_clean)
+    # ---------------------------------------------------------
+    # Plot the H Matrix Structure
+    # ---------------------------------------------------------
+    print("  -> Plotting H Matrix Structure...")
+    from matplotlib.colors import LogNorm
+    
+    fig_H, ax_H = plt.subplots(figsize=(10, 8))
+    fig_H.suptitle(f"Observation Operator (H Matrix)\n{filename}", fontsize=14)
+    
+    # Mask exactly zero values so they appear blank (white) instead of skewing the colormap
+    H_masked = np.ma.masked_where(H_unscaled == 0, H_unscaled)
+    
+    # Plot using a heatmap. aspect='auto' prevents it from squishing to a tiny square
+    im_H = ax_H.imshow(H_masked, aspect='auto', cmap='viridis', interpolation='none', norm=LogNorm())
+    
+    ax_H.set_title(f"Matrix Shape: {H_unscaled.shape[0]} Rays × {H_unscaled.shape[1]} State Variables", fontsize=11)
+    ax_H.set_xlabel("State Vector Index (Flattened Altitude + Geo)")
+    ax_H.set_ylabel("Observation Index (RO Ray Number)")
+    
+    # Add a colorbar
+    cbar_H = fig_H.colorbar(im_H, ax=ax_H)
+    cbar_H.set_label('Ray Path Length within Grid Cell (Scaled)')
+    
+    plt.tight_layout()
+    plt.show()
+    # ---------------------------------------------------------
+    # 4. Run Assimilation
+    print("\n  -> Running Data Assimilation...")
+    posterior_state_flat = inverter.assimilate(
+        obs=measured_tec_clean, 
+        podTc2_data=None, # Passed None because we pre-calculated H below
+        obs_operator=H_unscaled, 
+        relaxation=0.95, 
+        measurement_err=10.0 # Assumes ~1 TECU variance in measurement noise
+    )
+
+    # 5. Evaluate Results (Prior vs Posterior)
+    print("  -> Calculating TEC and Reshaping States...")
+    # Get Prior Mean State and Posterior State
+    prior_state_flat = inverter.attrs['initial_edps_mean']
+    
+    # Strip masked array metadata to prevent NumPy mask broadcasting bugs
+    H_clean = np.asarray(H_unscaled)
+    prior_state_clean = np.asarray(prior_state_flat)
+    posterior_state_clean = np.asarray(posterior_state_flat)
+
+    # Calculate TEC: Z = H * x
+    # NOTE: .flatten() is added here to convert (N, 1) column vectors to (N,) 1D arrays for matplotlib
+    prior_tec = (H_clean @ prior_state_clean).flatten()
+    posterior_tec = (H_clean @ posterior_state_clean).flatten()
+    
+    print("\n  --- DEBUG: TEC Arrays ---")
+    print(f"  Y-Axis (tangent_alt_clean) shape: {tangent_alt_clean.shape}")
+    print(f"  prior_tec shape: {prior_tec.shape} | NaNs: {np.isnan(prior_tec).sum()} | Min: {np.nanmin(prior_tec):.2e} | Max: {np.nanmax(prior_tec):.2e}")
+    print(f"  posterior_tec shape: {posterior_tec.shape} | NaNs: {np.isnan(posterior_tec).sum()} | Min: {np.nanmin(posterior_tec):.2e} | Max: {np.nanmax(posterior_tec):.2e}")
+    
+    # --- NEW: Calculate Forward Modeled TEC directly via the integration method ---
+    print("  -> Running standard Forward TEC Integration for verification...")
+    # Compute forward model TEC for the base state (sample 0) using the full uncleaned data
+    forward_tec_full = eds_occ.forward_model_mesh_tec(podTc_data, sample_idx=0, num_segments=1000)
+    
+    # Filter it down to the same valid rays used in the Kalman filter for a direct 1:1 plot match
+    forward_tec_clean = forward_tec_full[valid_mask]
+    
+    # Reshape the 1D state vectors back into (n_height, n_geo) for plotting the vertical profiles
+    n_height = len(alt_grid)
+    n_geo = eds_occ.geolocation.shape[0]
+    
+    prior_edp_3d = prior_state_flat.reshape(n_height, n_geo)
+    posterior_edp_3d = posterior_state_flat.reshape(n_height, n_geo)
+    
+    # Extract the center vertex to plot a representative vertical profile
+    center_idx = n_geo // 2 
+    prior_profile = prior_edp_3d[:, center_idx]
+    posterior_profile = posterior_edp_3d[:, center_idx]
+    
+    print("\n  --- DEBUG: EDP Profiles ---")
+    print(f"  Y-Axis (alt_grid) shape: {alt_grid.shape}")
+    print(f"  prior_profile shape: {prior_profile.shape} | NaNs: {np.isnan(prior_profile).sum()} | Min: {np.nanmin(prior_profile):.2e} | Max: {np.nanmax(prior_profile):.2e}")
+    print(f"  posterior_profile shape: {posterior_profile.shape} | NaNs: {np.isnan(posterior_profile).sum()} | Min: {np.nanmin(posterior_profile):.2e} | Max: {np.nanmax(posterior_profile):.2e}")
+    
+    # Check for Log-Scale Violations
+    if np.nanmin(posterior_profile) <= 0:
+        print("  [!] WARNING: Posterior profile contains negative or zero values. Matplotlib's log scale will hide these points!")
+
+    # ---------------------------------------------------------
+    # 6. Generate the Assessment Plot
+    # ---------------------------------------------------------
+    print("  -> Plotting Assimilation Results...")
+    fig, axes = plt.subplots(1, 2, figsize=(14, 8), sharey=True)
+    fig.suptitle(f"§17 Tomography Assimilation Results\n{filename}", fontsize=14)
+
+    # --- Panel 1: Observation Space (TEC) ---
+    ax1 = axes[0]
+    ax1.plot(measured_tec_clean, tangent_alt_clean, color='black', lw=3, label="Measured TEC")
+    
+    # Plot both the Matrix Multiplied Prior and the Forward Integrated Prior
+    ax1.plot(prior_tec, tangent_alt_clean, color='tab:red', lw=3, ls='--', label="Prior (H Matrix)")
+    ax1.plot(forward_tec_clean, tangent_alt_clean, color='tab:green', lw=2, ls=':', label="Prior (Forward Model)")
+    
+    ax1.plot(posterior_tec, tangent_alt_clean, color='tab:blue', lw=2, label="Posterior (Assimilated)")
+    
+    ax1.set_ylabel("Tangent Altitude (km)")
+    ax1.set_xlabel("Total Electron Content (TECU)")
+    ax1.set_title("Observation Space: TEC Adjustment")
+    ax1.grid(True, alpha=0.4, linestyle=':')
+    ax1.legend(loc='upper right')
+    
+    if len(tangent_alt_clean) > 0:
+        ax1.set_ylim(0, min(np.max(tangent_alt_clean) + 50, alt_grid[-1]))
+
+    # --- Panel 2: State Space (Electron Density) ---
+    ax2 = axes[1]
+    ax2.plot(prior_profile, alt_grid, color='tab:red', lw=2, ls='--', label="Prior Mean Density")
+    ax2.plot(posterior_profile, alt_grid, color='tab:blue', lw=2, label="Posterior Density")
+    
+    # Highlight the difference
+    ax2.fill_betweenx(alt_grid, prior_profile, posterior_profile, color='tab:blue', alpha=0.15, label="Assimilation Delta")
+
+    ax2.set_xlabel("Electron Density (m⁻³)")
+    ax2.set_title("State Space: 3D Mesh Adjustment (Center Vertex)")
+    ax2.set_xscale("log")
+    ax2.grid(True, alpha=0.4, linestyle=':')
+    ax2.legend(loc='upper right')
+
+    plt.tight_layout()
+    
+    # Save output
+    save_dir = "./Figures/Section17_Assimilation/"
+    import os
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"{filename}_assimilation.png")
+    fig.savefig(save_path, dpi=150)
+    print(f"  -> Saved figure to {save_path}\n")
+
+    return prior_state_flat, posterior_state_flat
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Main
@@ -835,22 +1464,66 @@ def main() -> None:
     # section3()
     # section4()
     # section5()
-    v_rect, t_rect = section6()
+    # v_rect, t_rect = section6()
     # section7()
-    section8(v_rect, t_rect)
+    # section8(v_rect, t_rect)
     # section9()
     # section10()
     # section11()
-    v_occ, t_occ, pt1, pt2, pt3 = section12()
-    section13(v_occ, t_occ, pt1, pt2, pt3)
+
+    # --- Define the file here so both section12 and section14 can use it ---
+    # podTc2_string = "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc" #North polar
+    # podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc" #West coast pacific
+    # podTc2_string = "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc" #Wide occultation polar
+    # podTc2_string = "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc" #South America vertical occultation
+    # podTc2_string = "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc" #South America wider occultation
+    # podTc2_string = "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc" #Easter coast of South America
+    # podTc2_string = 'podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc' #North America vertical occultation
+    # podTc2_file = f"/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/{podTc2_string}"
+
+    # # Pass the file to section12
+    # v_occ, t_occ, pt1, pt2, pt3 = section12(podTc2_file)
+    
+    # # Capture the generated EDPSamples dataset from section13
+    # eds = section13(v_occ, t_occ, pt1, pt2, pt3)
+    
+    # # Call section14 using the dataset and the original file
+    # tec = section14(eds, podTc2_file)
+    
+    # section15()
+    
+
+    alt_grid = np.arange(100.0, 1000.0, 10.0, dtype=float)
+    sampling_df = pd.DataFrame([{
+        "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
+    }])
+
+    podTc2_files = [
+        # "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
+        # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
+        # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
+        # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
+        # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
+        "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
+        # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
+    ]
+
+    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
+
+    for f_string in podTc2_files:
+            full_path = os.path.join(base_path, f_string)
+            
+            # Run the geometry comparison suite
+            eds_dict, tec_results = section16(full_path, alt_grid, sampling_df)
+            
+            # Run the assimilation test
+            prior_x, post_x = section17(full_path, alt_grid, sampling_df)
 
     print("\n" + "=" * 60)
     print("All sections complete — displaying figures.")
     print("=" * 60)
     plt.tight_layout()
     plt.show()
-    
-
 
 if __name__ == "__main__":
     main()
