@@ -1776,6 +1776,7 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     # 2. Generate Prior Ensemble
     print("  -> Generating Prior State Ensemble...")
     base_sc = sampling_df.iloc[0]
+    base_sc['hour'] = podTc_data['hour']
     n_mc = 50  
     np.random.seed(42)
 
@@ -1840,6 +1841,11 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
 
     save_dir = "./Figures/Section18_Visual_Assessments2/"
     os.makedirs(save_dir, exist_ok=True)
+    
+    # Calculate Abel Inversion:
+    from Abel_Inverter import run_abel_inversion
+    abel = run_abel_inversion(podTc_data)
+    plt.plot(abel["Ne"],abel["alt_km"])
 
     # =========================================================
     # PLOT 1: Observation Space (TEC) & State Space (Linear EDP)
@@ -1866,7 +1872,11 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax1_2.plot(prior_profile, alt_grid, color='tab:red', lw=2, ls='--', label="Prior Mean Density")
     ax1_2.plot(posterior_profile, alt_grid, color='tab:blue', lw=2, label="Posterior Density")
     ax1_2.fill_betweenx(alt_grid, prior_profile, posterior_profile, color='tab:blue', alpha=0.15, label="Assimilation Delta")
-    
+    if abel is not None:
+        ax1_2.plot(abel['Ne'], abel['alt_km'],
+                   color='tab:green', lw=2, ls=':', label="Abel Inversion (Lei)")
+        ax1_2.legend(loc='upper right')  # re-draw legend with new entries
+        
     ax1_2.set_xlabel("Electron Density (m⁻³)")
     ax1_2.set_title("State Space: Center Vertex (Linear Scale)")
     
@@ -1900,6 +1910,11 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax2.plot(prior_profile, alt_grid, color='darkred', lw=2, ls='--', label="Prior (Center Vertex)")
     ax2.plot(posterior_profile, alt_grid, color='darkblue', lw=2, label="Posterior (Center Vertex)")
 
+    if abel is not None:
+        print("Plotting Abel Inversion")
+        ax2.plot(abel['Ne'], abel['alt_km'],
+                 color='tab:green', lw=2.5, ls=':', label="Abel Inversion (Lei)")
+        
     ax2.set_ylabel("Altitude (km)")
     ax2.set_xlabel("Electron Density (m⁻³)")
     ax2.xaxis.set_major_formatter(formatter)
@@ -1923,7 +1938,7 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     # =========================================================
     # PLOT 3: 3x3 Globe Grid (Altitudes vs States)
     # =========================================================
-    print("  -> Generating Plot 3: 3x3 Globe Map...")
+    print("  -> Generating Plot 3: Globe Map...")
     
     target_alts = [200.0, 300.0, 400.0, 500.0, 600.0]
     
@@ -1952,6 +1967,12 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     
     verts = eds_occ.geolocation
     tris = eds_occ.mesh
+    
+    # Pre-filter triangles whose vertices carry NaN coordinates.
+    # triplot routes coordinates through shapely for geodetic projection;
+    # NaN coordinates produce a RuntimeWarning there.
+    _nan_vert = np.any(np.isnan(verts), axis=1)
+    clean_tris = tris[~np.any(_nan_vert[tris], axis=1)]
 
     # --- NEW: Calculate global color bounds across ALL target altitudes ---
     # This ensures the colormap scale is identical for every row.
@@ -1970,13 +1991,13 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
         # Extract data for this altitude slice
         prior_slice = prior_edp_3d[alt_idx, :]
         post_slice = posterior_edp_3d[alt_idx, :]
-        delta_slice = post_slice - prior_slice
         
+        delta_slice = post_slice - prior_slice
 
         # Column 0: Prior
         ax_prior = axes3[i, 0]
         ax_prior.set_global()
-        ax_prior.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, color='gray')
+        ax_prior.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, edgecolor='gray')
         tc1 = ax_prior.tripcolor(verts[:, 0], verts[:, 1], tris, prior_slice,
                                  transform=ccrs.Geodetic(), cmap='plasma', shading='flat', 
                                  edgecolors='face', vmin=vmin_edp, vmax=vmax_edp)
@@ -1987,7 +2008,7 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
         # Column 1: Posterior
         ax_post = axes3[i, 1]
         ax_post.set_global()
-        ax_post.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, color='gray')
+        ax_post.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, edgecolor='gray')
         tc2 = ax_post.tripcolor(verts[:, 0], verts[:, 1], tris, post_slice,
                                 transform=ccrs.Geodetic(), cmap='plasma', shading='flat', 
                                 edgecolors='face', vmin=vmin_edp, vmax=vmax_edp)
@@ -1996,15 +2017,18 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
         # Column 2: Delta
         ax_delta = axes3[i, 2]
         ax_delta.set_global()
-        ax_delta.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, color='gray')
+        ax_delta.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, edgecolor='gray')
         tc3 = ax_delta.tripcolor(verts[:, 0], verts[:, 1], tris, delta_slice,
                                  transform=ccrs.Geodetic(), cmap='coolwarm', shading='flat', 
                                  edgecolors='face', vmin=-max_delta, vmax=max_delta)
         if i == 0: ax_delta.set_title("Delta (Post - Prior)", fontsize=14)
         
         # Plot faint wireframe overlay on all
-        for ax in [ax_prior, ax_post, ax_delta]:
-            ax.triplot(verts[:, 0], verts[:, 1], tris, transform=ccrs.Geodetic(), color='black', linewidth=0.2, alpha=0.3)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=RuntimeWarning, module='shapely')
+            for ax in [ax_prior, ax_post, ax_delta]:
+                ax.triplot(verts[:, 0], verts[:, 1], clean_tris, transform=ccrs.Geodetic(), color='black', linewidth=0.2, alpha=0.4)
 
     # --- NEW: Add a single set of global colorbars OUTSIDE the loop ---
     # Global Colorbar for Prior/Posterior (spans the first two columns)
@@ -2084,7 +2108,7 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     delta_slice = post_slice - prior_slice
 
     # 4. Plotting the 3x1 Vertical Slices
-    fig4, axes4 = plt.subplots(3, 1, figsize=(10, 12), sharex=True, sharey=True)
+    fig4, axes4 = plt.subplots(3, 1, figsize=(10, 12), sharex=True, sharey=True, layout='constrained')
     fig4.suptitle(f"Vertical EDP Slice Along Lowest Occultation Ray\n{filename}", fontsize=16)
 
     # This forces Plot 4 to share the exact same scale as Plot 3
@@ -2141,16 +2165,391 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     # Clip Y-axis to the actual alt_grid limits
     ax4_3.set_ylim(alt_grid[0], alt_grid[-1])
 
-    plt.tight_layout()
+
     fig4.savefig(os.path.join(save_dir, f"{filename}_plot4_vertical_slice.png"), dpi=150)
     print(f"  -> Saved all figures to {save_dir}\n")
     
     return prior_state_flat, posterior_state_flat
-# ─────────────────────────────────────────────────────────────────────────────
+
+def section19(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame):
+    
+
+    """
+    §18 Tomography Data Assimilation Visual Assessment
+    Assimilates measured TEC data and produces three sets of plots:
+    1. TEC Fit & Linear Center EDP
+    2. Vertical Profile Spread (All mesh points)
+    3. 3x3 Globe Grid (Altitudes vs. Prior/Posterior/Delta)
+    """
+    from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
+    from EDPSamples.edp_samples import EDPSamples
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import os
+    from matplotlib.ticker import ScalarFormatter
+    
+    try:
+        _banner("§18  Tomography Data Assimilation Visual Assessment")
+    except NameError:
+        print("\n=== §18  Tomography Data Assimilation Visual Assessment ===")
+        
+    filename = podTc2_file.split('/')[-1]
+    print(f"Processing File: {filename}")
+
+    # 1. Parse Data and Clean NaNs
+    podTc_data = parse_podTc2_nc_file(podTc2_file)
+    if podTc_data is None:
+        print(" [!] Invalid or skipped podTc data. Aborting.")
+        return
+    
+    from Abel_Inverter import run_abel_inversion
+    abel = run_abel_inversion(podTc_data)
+    
+def extract_robust_f2_peak(profile: np.ndarray, alt_grid: np.ndarray, min_alt: float = 150.0, max_alt: float = 650.0):
+    """
+    Robustly finds NmF2 and hmF2 by restricting the search to physical 
+    F-region altitudes and applying a 3-point parabolic fit for sub-grid resolution.
+    """
+    # 1. Restrict search to physical F-region bounds
+    search_mask = (alt_grid >= min_alt) & (alt_grid <= max_alt) & ~np.isnan(profile)
+    
+    if not np.any(search_mask):
+        return np.nan, np.nan
+        
+    # Extract the restricted window
+    search_alts = alt_grid[search_mask]
+    search_prof = profile[search_mask]
+    
+    # 2. Find the discrete maximum within the F-region window
+    local_max_idx = np.argmax(search_prof)
+    discrete_hmF2 = search_alts[local_max_idx]
+    discrete_NmF2 = search_prof[local_max_idx]
+    
+    # 3. Sub-grid refinement (3-point parabolic interpolation)
+    # Only apply if the peak has neighboring points within our search window
+    if 0 < local_max_idx < len(search_prof) - 1:
+        h1, h2, h3 = search_alts[local_max_idx-1 : local_max_idx+2]
+        n1, n2, n3 = search_prof[local_max_idx-1 : local_max_idx+2]
+        
+        # Fit a parabola: Ne(h) = a*h^2 + b*h + c
+        try:
+            coeffs = np.polyfit([h1, h2, h3], [n1, n2, n3], deg=2)
+            a, b, c = coeffs
+            
+            # Ensure the parabola opens downwards (a < 0) indicating a true peak
+            if a < 0:
+                # The peak of a parabola is at h = -b / (2a)
+                refined_hmF2 = -b / (2.0 * a)
+                refined_NmF2 = (a * refined_hmF2**2) + (b * refined_hmF2) + c
+                
+                # Safety check: Ensure the interpolated peak didn't swing wildly out of bounds
+                if abs(refined_hmF2 - discrete_hmF2) <= (h3 - h1):
+                    return refined_NmF2, refined_hmF2
+        except np.linalg.LinAlgError:
+            pass # If the fit fails, quietly fall back to the discrete maximum
+            
+    return discrete_NmF2, discrete_hmF2
+    
+def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame, 
+              generate_plots: bool = True, save_dir: str = "./Figures/Section20_Batch/") -> dict:
+    """
+    §20 Tomography vs Abel Statistical Analysis (With Automated Plotting)
+    Runs Data Assimilation and Abel inversions, calculates comparative statistics,
+    and generates a 3-panel summary plot (TEC Fits, hmF2 Delta Map, EDP Dispersion).
+    """
+    from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
+    from EDPSamples.edp_samples import EDPSamples
+    from Abel_Inverter import run_abel_inversion
+    import numpy as np
+    import pandas as pd
+    import gc
+    import os
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import ScalarFormatter
+    from matplotlib.lines import Line2D
+    from scipy.interpolate import interp1d
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    
+    filename = podTc2_file.split('/')[-1]
+    print(f"--- Processing: {filename} ---")
+
+    stats = {
+        "File": filename,
+        "Valid_Rays": 0,
+        "Prior_NmF2": np.nan, "Prior_hmF2": np.nan,
+        "Post_NmF2": np.nan,  "Post_hmF2": np.nan,
+        "Abel_NmF2": np.nan,  "Abel_hmF2": np.nan,
+        "Post_Abel_RMSE": np.nan,
+        "Prior_TEC_RMSE": np.nan, "Prior_TEC_MAE": np.nan,
+        "Post_TEC_RMSE": np.nan,  "Post_TEC_MAE": np.nan,
+        "Status": "Failed"
+    }
+
+    try:
+        # 1. Parse Data
+        podTc_data = parse_podTc2_nc_file(podTc2_file)
+        if podTc_data is None:
+            return stats
+        
+        _, _, tangent_alt_raw = rayTangent(podTc_data['LEO'], podTc_data['GNSS'], units='km')
+        tangent_alt_km = tangent_alt_raw * 1e-3
+        measured_tec = podTc_data.get('TEC_podTc2', podTc_data.get('TEC', np.zeros_like(tangent_alt_km)))
+        
+        valid_mask = ~np.isnan(measured_tec) & (measured_tec > 0)
+        measured_tec_clean = np.asarray(measured_tec[valid_mask], dtype=np.float64).flatten()
+        tangent_alt_clean = tangent_alt_km[valid_mask].flatten()
+        podTc_clean = {
+            'LEO': podTc_data['LEO'][:, valid_mask],
+            'GNSS': podTc_data['GNSS'][:, valid_mask]
+        }
+        stats["Valid_Rays"] = int(np.sum(valid_mask))
+        
+        if stats["Valid_Rays"] < 50:
+            stats["Status"] = "Insufficient Rays"
+            return stats
+
+        # 2. Prior Generation
+        base_sc = sampling_df.iloc[0]
+        n_mc = 50  
+        np.random.seed(42)
+        mc_hours = (base_sc['hour'] + np.random.uniform(-3, 3, size=n_mc)) % 24
+        mc_df = pd.DataFrame({
+            "hour": mc_hours,
+            "f107": np.random.normal(loc=base_sc.get('f107', 130), scale=10, size=n_mc).clip(70, 250),
+            "ap":   np.random.normal(loc=base_sc.get('ap', 15), scale=5, size=n_mc).clip(0, 400),
+            "ig12": np.random.normal(loc=base_sc.get('ig12', 100), scale=10, size=n_mc).clip(50, 200),
+            "rz12": np.random.normal(loc=base_sc.get('rz12', 100), scale=10, size=n_mc).clip(50, 200),
+        })
+        mc_df.iloc[0] = base_sc
+
+        eds_occ = EDPSamples(
+            DateTime="2015-06-01 12:00:00", geo_type="Occultation", altitude=alt_grid,
+            sampling_parameters=mc_df, evaluate_iri=1,
+            filename=podTc2_file, dLat=5, dLon=5
+        )
+
+        # 3. Assimilation
+        inverter = Ionosphere_Tomography_Inverter(EDPSam=eds_occ, meanscale=1)
+        H_unscaled = inverter.get_observation_operator(podTc_clean)
+        
+        posterior_state_flat = inverter.assimilate(
+            obs=measured_tec_clean, podTc2_data=None, obs_operator=H_unscaled, relaxation=0.95, measurement_err=1.0
+        )
+        
+        prior_state_flat = inverter.attrs['initial_edps_mean']
+        
+        # Calculate TEC Residuals (Projects states back into TEC observation space)
+        prior_tec = (np.asarray(H_unscaled) @ np.asarray(prior_state_flat)).flatten()
+        post_tec = (np.asarray(H_unscaled) @ np.asarray(posterior_state_flat)).flatten()
+        
+        # Cast to pure float64 arrays to suppress NumPy 2.0 DeprecationWarnings
+        prior_residuals = np.asarray(measured_tec_clean - prior_tec, dtype=np.float64)
+        post_residuals = np.asarray(measured_tec_clean - post_tec, dtype=np.float64)
+        
+        stats["Prior_TEC_RMSE"] = np.sqrt(np.mean(prior_residuals**2))
+        stats["Prior_TEC_MAE"] = np.mean(np.abs(prior_residuals))
+        stats["Post_TEC_RMSE"] = np.sqrt(np.mean(post_residuals**2))
+        stats["Post_TEC_MAE"] = np.mean(np.abs(post_residuals))
+
+        # Reconstruct 3D Arrays for Mapping & Spaghetti Plots
+        n_height = len(alt_grid)
+        n_geo = eds_occ.geolocation.shape[0]
+        center_idx = n_geo // 2 
+        
+        prior_edp_3d = prior_state_flat.reshape(n_height, n_geo)
+        prior_edp_3d[prior_edp_3d == 0] = np.nan
+        
+        posterior_edp_3d = posterior_state_flat.reshape(n_height, n_geo)
+        posterior_edp_3d[posterior_edp_3d == 0] = np.nan
+        
+        prior_profile = prior_edp_3d[:, center_idx]
+        post_profile = posterior_edp_3d[:, center_idx]
+
+        # 4. Extract Tomography F2 Peak Stats (Robust Method)
+        prior_nm, prior_hm = extract_robust_f2_peak(prior_profile, alt_grid)
+        stats["Prior_NmF2"] = prior_nm
+        stats["Prior_hmF2"] = prior_hm
+        
+        post_nm, post_hm = extract_robust_f2_peak(post_profile, alt_grid)
+        stats["Post_NmF2"] = post_nm
+        stats["Post_hmF2"] = post_hm
+
+        # 5. Abel Inversion & Comparison
+        abel = run_abel_inversion(podTc_data)
+        if abel is not None and len(abel['Ne']) > 0:
+            abel_nm, abel_hm = extract_robust_f2_peak(abel['Ne'], abel['alt_km'])
+            stats["Abel_NmF2"] = abel_nm
+            stats["Abel_hmF2"] = abel_hm
+            
+            valid_abel = ~np.isnan(abel['Ne']) & ~np.isnan(abel['alt_km'])
+            if np.sum(valid_abel) > 2:
+                interp_func = interp1d(abel['alt_km'][valid_abel], abel['Ne'][valid_abel], 
+                                       bounds_error=False, fill_value=np.nan)
+                abel_on_grid = interp_func(alt_grid)
+                
+                valid_rmse = ~np.isnan(post_profile) & ~np.isnan(abel_on_grid)
+                if np.any(valid_rmse):
+                    mse = np.mean((post_profile[valid_rmse] - abel_on_grid[valid_rmse])**2)
+                    stats["Post_Abel_RMSE"] = np.sqrt(mse)
+
+        # =========================================================
+        # 6. OPTIONAL BATCH PLOTTING (3 Subplots)
+        # =========================================================
+        if generate_plots:
+            os.makedirs(save_dir, exist_ok=True)
+            
+            # Setup Figure and Projection
+            fig = plt.figure(figsize=(18, 6))
+            fig.suptitle(f"Tomography Batch Audit: {filename}\nTEC RMSE: Prior {stats['Prior_TEC_RMSE']:.2f} -> Post {stats['Post_TEC_RMSE']:.2f} TECU", fontsize=15)
+            
+            # ---------------------------------------------------------
+            # Subplot 1: TEC Fits
+            # ---------------------------------------------------------
+            ax1 = fig.add_subplot(1, 3, 1)
+            ax1.plot(measured_tec_clean, tangent_alt_clean, color='black', lw=3, label="Measured TEC")
+            ax1.plot(prior_tec, tangent_alt_clean, color='tab:red', lw=2, ls='--', label="Prior TEC")
+            ax1.plot(post_tec, tangent_alt_clean, color='tab:blue', lw=2, label="Posterior TEC")
+            ax1.set_ylabel("Tangent Altitude (km)")
+            ax1.set_xlabel("Total Electron Content (TECU)")
+            ax1.set_title("Observation Space: TEC Adjustment")
+            ax1.grid(True, alpha=0.4, linestyle=':')
+            ax1.legend(loc='upper right')
+            if len(tangent_alt_clean) > 0:
+                ax1.set_ylim(0, min(np.max(tangent_alt_clean) + 50, alt_grid[-1]))
+
+            # ---------------------------------------------------------
+            # Subplot 2: Global Map of Deltas at Posterior hmF2
+            # ---------------------------------------------------------
+            # Calculate Map Center
+            try:
+                lon_center = podTc_data['lon_tecmax_tangent']
+                lat_center = podTc_data['lat_tecmax_tangent']
+            except KeyError:
+                lon_center = np.nanmean(eds_occ.geolocation[:, 0])
+                lat_center = np.nanmean(eds_occ.geolocation[:, 1])
+
+            proj = ccrs.Orthographic(central_longitude=lon_center, central_latitude=lat_center)
+            ax2 = fig.add_subplot(1, 3, 2, projection=proj)
+            ax2.set_global()
+            ax2.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, edgecolor='gray')
+
+            if not np.isnan(stats["Post_hmF2"]):
+                # Find closest altitude slice to the Posterior hmF2
+                alt_idx = int(np.argmin(np.abs(alt_grid - stats["Post_hmF2"])))
+                actual_alt = alt_grid[alt_idx]
+                delta_slice = posterior_edp_3d[alt_idx, :] - prior_edp_3d[alt_idx, :]
+                
+                verts = eds_occ.geolocation
+                tris = eds_occ.mesh
+                
+                # Plot the Delta Map
+                max_delta = np.nanmax(np.abs(delta_slice))
+                tc = ax2.tripcolor(verts[:, 0], verts[:, 1], tris, delta_slice,
+                                   transform=ccrs.Geodetic(), cmap='coolwarm', shading='flat',
+                                   edgecolors='face', vmin=-max_delta, vmax=max_delta)
+                
+                cbar = fig.colorbar(tc, ax=ax2, orientation='horizontal', shrink=0.8, pad=0.05)
+                cbar.set_label("Δ Density (m⁻³)")
+                cbar.formatter.set_powerlimits((-2, 2))
+                ax2.set_title(f"Δ Assimilation Map at hmF2 (~{actual_alt:.0f} km)")
+            else:
+                ax2.set_title("hmF2 Assimilation Map Unavailable")
+
+            # ---------------------------------------------------------
+            # Subplot 3: EDP Comparisons (Spaghetti Plot + F2 Peaks)
+            # ---------------------------------------------------------
+            ax3 = fig.add_subplot(1, 3, 3, sharey=ax1)
+            formatter = ScalarFormatter(useMathText=True)
+            formatter.set_powerlimits((-2, 2))
+            
+            # Spaghetti Lines
+            ax3.plot(prior_edp_3d, alt_grid, color='tab:red', alpha=0.1, lw=1)
+            ax3.plot(posterior_edp_3d, alt_grid, color='tab:blue', alpha=0.1, lw=1)
+            
+            # Center Profiles
+            ax3.plot(prior_profile, alt_grid, color='darkred', lw=2, ls='--', label="Prior (Center)")
+            ax3.plot(post_profile, alt_grid, color='darkblue', lw=2, label="Posterior (Center)")
+
+            # --- NEW: Plot the extracted F2 Peaks ---
+            if not np.isnan(stats["Prior_NmF2"]):
+                ax3.plot(stats["Prior_NmF2"], stats["Prior_hmF2"], marker='o', markersize=8, 
+                         color='darkred', markeredgecolor='black', zorder=5)
+                         
+            if not np.isnan(stats["Post_NmF2"]):
+                ax3.plot(stats["Post_NmF2"], stats["Post_hmF2"], marker='o', markersize=8, 
+                         color='darkblue', markeredgecolor='black', zorder=5)
+            # ----------------------------------------
+
+            # Legend Setup
+            custom_lines = [
+                Line2D([0], [0], color='tab:red', lw=2, alpha=0.5),
+                Line2D([0], [0], color='tab:blue', lw=2, alpha=0.5),
+                Line2D([0], [0], color='darkred', lw=2, ls='--'),
+                Line2D([0], [0], color='darkblue', lw=2),
+                # Add a legend entry for the peak markers
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markeredgecolor='black', markersize=8)
+            ]
+            legend_labels = ['Prior (All Vertices)', 'Posterior (All Vertices)', 'Prior (Center)', 'Posterior (Center)', 'F2 Peak']
+
+            # Plot Abel Inversion if available
+            if abel is not None and len(abel['Ne']) > 0:
+                ax3.plot(abel['Ne'], abel['alt_km'], color='tab:green', lw=2.5, ls=':', label="Abel Inversion (Lei)")
+                
+                # Plot Abel Peak
+                if not np.isnan(stats["Abel_NmF2"]):
+                    ax3.plot(stats["Abel_NmF2"], stats["Abel_hmF2"], marker='o', markersize=8, 
+                             color='tab:green', markeredgecolor='black', zorder=5)
+                             
+                custom_lines.insert(4, Line2D([0], [0], color='tab:green', lw=2.5, ls=':'))
+                legend_labels.insert(4, 'Abel Inversion (Lei)')
+                
+            ax3.set_xlabel("Electron Density (m⁻³)")
+            ax3.set_title("State Space: Vertical Profile Dispersion")
+            ax3.xaxis.set_major_formatter(formatter)
+            
+            # Set dynamic limits
+            max_edp = max(np.nanmax(prior_edp_3d), np.nanmax(posterior_edp_3d))
+            if abel is not None and len(abel['Ne']) > 0:
+                max_edp = max(max_edp, np.nanmax(abel['Ne']))
+                
+            ax3.set_xlim(left=0, right=max_edp * 1.1)
+            ax3.grid(True, alpha=0.4, linestyle=':')
+            ax3.legend(custom_lines, legend_labels, loc='upper right')
+            
+            # Final Layout & Save
+            plt.tight_layout()
+            fig.savefig(os.path.join(save_dir, f"{filename}_summary.png"), dpi=100)
+            plt.close(fig)
+
+        stats["Status"] = "Success"
+
+    except Exception as e:
+        print(f" [!] Error processing {filename}: {e}")
+        stats["Status"] = f"Error: {str(e)}"
+        
+    finally:
+        plt.close('all')
+        
+        local_vars = ['podTc_data', 'eds_occ', 'inverter', 'H_unscaled', 
+                      'prior_state_flat', 'posterior_state_flat', 'prior_tec', 'post_tec']
+        for var in local_vars:
+            if var in locals():
+                del locals()[var]
+        gc.collect()
+
+    return stats
+# ────────────────────────────────────────────────────────
 #  Main
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────
 
 def main() -> None:
+    import os
+    import pandas as pd
+    
     print("=" * 60)
     print("IonosphereTomography demo")
     print("Alaska region:  60–65 °N,  150–140 °W")
@@ -2196,7 +2595,7 @@ def main() -> None:
     }])
 
     podTc2_files = [
-        # "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
+        "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
         # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
         # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
         # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
@@ -2206,7 +2605,7 @@ def main() -> None:
         # "podTc2_GN04.2025.152.06.23.0026.G31.01_0000.0001_nc" # Very wide occultation
         # "podTc2_GN05.2025.152.06.04.0032.C36.00_0000.0001_nc"
         # "podTc2_GN04.2025.152.06.27.0042.C40.01_0000.0001_nc"
-        "podTc2_GN05.2025.152.03.01.0027.E03.01_0000.0001_nc"
+        # "podTc2_GN05.2025.152.03.01.0027.E03.01_0000.0001_nc"
     ]
 
     base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
@@ -2219,12 +2618,88 @@ def main() -> None:
             
             # Run the assimilation test
             prior_x, post_x = section18(full_path, alt_grid, sampling_df)
+            # section19(full_path, alt_grid, sampling_df)
 
     print("\n" + "=" * 60)
     print("All sections complete — displaying figures.")
     print("=" * 60)
-    plt.tight_layout()
+    # plt.tight_layout()
     plt.show()
+    
+
+    
+    print("=" * 60)
+    print("IonosphereTomography Batch Processing")
+    print("=" * 60)
+
+    alt_grid = np.arange(60.0, 1000.0, 10.0, dtype=float)
+    sampling_df = pd.DataFrame([{
+        "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
+    }])
+
+    # Updated path to 2025.151
+    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.151/"
+    
+    # Dynamically find all .0001_nc files in the target directory
+    if not os.path.exists(base_path):
+        print(f"Directory not found: {base_path}")
+        return
+
+    podTc2_files = [f for f in os.listdir(base_path) if f.endswith(".0001_nc")]
+    podTc2_files.sort() # Ensure consistent ordering
+    
+    print(f"Found {len(podTc2_files)} files to process in {base_path}\n")
+
+    # List to hold the statistical dictionaries
+    batch_statistics = []
+    
+    # Set to None to run all files, or an integer (e.g., 30) to limit the run
+    MAX_FILES = 5 
+    
+    files_to_process = podTc2_files[5:10] if MAX_FILES else podTc2_files
+    print(f"Processing {len(files_to_process)} out of {len(podTc2_files)} available files...\n")
+
+    for idx, f_string in enumerate(files_to_process):
+        print(f"\n[{idx+1}/{len(podTc2_files)}] ", end="")
+        full_path = os.path.join(base_path, f_string)
+        
+        # Run Section 20 and collect stats
+        file_stats = section20(full_path, alt_grid, sampling_df)
+        batch_statistics.append(file_stats)
+        
+        # Optional: Save a rolling backup in case it crashes midway
+        if (idx + 1) % 10 == 0:
+            temp_df = pd.DataFrame(batch_statistics)
+            temp_df.to_csv("rolling_stats_backup.csv", index=False)
+
+    print("\n" + "=" * 60)
+    print("Batch processing complete. Compiling results...")
+    print("=" * 60)
+    
+    # Convert list of dictionaries to a pandas DataFrame
+    stats_df = pd.DataFrame(batch_statistics)
+    
+    # Save final results
+    stats_df.to_csv("Tomography_vs_Abel_Stats_2025_151.csv", index=False)
+    
+    # Print a quick summary of the successful runs
+    success_df = stats_df[stats_df["Status"] == "Success"]
+    print(f"\nSuccessfully processed {len(success_df)} out of {len(stats_df)} files.")
+    if len(success_df) > 0:
+        print("\n--- Summary Statistics ---")
+        print("Mean hmF2 Comparison:")
+        print(f"  Prior:     {success_df['Prior_hmF2'].mean():.1f} km")
+        print(f"  Posterior: {success_df['Post_hmF2'].mean():.1f} km")
+        print(f"  Abel:      {success_df['Abel_hmF2'].mean():.1f} km")
+        
+        print("\nMean TEC Residuals (RMSE):")
+        print(f"  Prior:     {success_df['Prior_TEC_RMSE'].mean():.3f} TECU")
+        print(f"  Posterior: {success_df['Post_TEC_RMSE'].mean():.3f} TECU")
+        
+        # Calculate the average percentage improvement
+        improvement = ((success_df['Prior_TEC_RMSE'].mean() - success_df['Post_TEC_RMSE'].mean()) 
+                       / success_df['Prior_TEC_RMSE'].mean()) * 100
+        print(f"  Avg Filter Assimilation Improvement: {improvement:.1f}%")
 
 if __name__ == "__main__":
     main()
