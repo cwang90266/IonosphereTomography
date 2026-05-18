@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 *.png
 build/
+*.nc
+*.dat
+*.nml
