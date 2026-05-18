@@ -764,7 +764,7 @@ class EDPSamples(xr.Dataset):
                 v1 = TopCurrentColumn + j
                 v2 = TopLeftColumn + j+1
                 triangles.append([v0, v1, v2])
-                TopLeftColumn=TopRightColumn
+            TopLeftColumn=TopRightColumn
 
         triangles = np.array(triangles, dtype=int)
         return vertices, triangles
@@ -1466,12 +1466,28 @@ class EDPSamples(xr.Dataset):
                     plot_polar_mesh(self.geolocation, self.mesh, pole= "south")  
                     
     def plot_mesh_globe(self, tecmax_lat, tecmax_lon, save_path,
-                        podTc_data=None, tangent_lla=None, alt_limit=600.0):
+                        podTc_data=None, tangent_lla=None, alt_limit=600.0,
+                        mesh_scalars=None, target_alt=None, target_sample=0,
+                        scalar_cmap='viridis', scalar_label=None):
+        """
+        Plots the occultation mesh on an orthographic globe. 
+        Optionally plots scalar data mapped to the mesh vertices.
 
+        Parameters:
+        -----------
+        mesh_scalars : str or np.ndarray, optional
+            If str, must be 'Ne', 'Median', or 'StdDev'. The function will compute/extract 
+            the 1D array automatically based on `target_alt_idx`.
+            If np.ndarray, it must be a 1D array of length n_geo.
+        target_alt_idx : int, optional
+            The altitude index to slice if `mesh_scalars` is a string.
+        target_sample : int, optional
+            The ensemble sample index to plot if `mesh_scalars` == 'Ne' (default is 0).
+        """
         vertices  = self.geolocation  # (n_geo, 2): col 0 = lon, col 1 = lat
         triangles = self.mesh
     
-        fig = plt.figure(figsize=(6, 6))
+        fig = plt.figure(figsize=(8, 8))
         ax = plt.axes(projection=ccrs.Orthographic(central_longitude=tecmax_lon,
                                                    central_latitude=tecmax_lat))
         ax.set_global()
@@ -1480,11 +1496,74 @@ class EDPSamples(xr.Dataset):
         ax.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5)
         ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5)
     
-        print("attempting to plot occultation mesh region...")
-        print("Any NaNs in mesh?", np.isnan(vertices).any())
-        ax.triplot(vertices[:, 0], vertices[:, 1], triangles,
-                   transform=ccrs.Geodetic(), color='darkorange', linewidth=0.8, alpha=0.7)
+        # ---------------------------------------------------------
+        # Parse mesh_scalars string and extract/compute data
+        # ---------------------------------------------------------
+        scalar_data = None
+        if isinstance(mesh_scalars, str):
+            if target_alt is None:
+                raise ValueError("target_alt must be provided if mesh_scalars is a string.")
+            
+            # Find the index of the closest altitude in the grid
+            target_alt_idx = int(np.argmin(np.abs(self.altitude - target_alt)))
+            actual_alt = self.altitude[target_alt_idx]
+            
+            print(f"Requested Alt: {target_alt} km -> Using closest grid Alt: {actual_alt:.2f} km (Index: {target_alt_idx})")
+            
+            var_req = mesh_scalars.lower()
+            
+            if var_req in ['ne', 'edp']:
+                scalar_data = self.edps[target_alt_idx, :, target_sample]
+                if scalar_label is None:
+                    scalar_label = f'Electron Density (m⁻³) [Alt: {actual_alt:.1f} km, Sample: {target_sample}]'
+            
+            elif var_req in ['median']:
+                scalar_data = np.nanmedian(self.edps[target_alt_idx, :, :], axis=1)
+                if scalar_label is None:
+                    scalar_label = f'Median Ne (m⁻³) [Alt: {actual_alt:.1f} km]'
+                    
+            elif var_req in ['std', 'stddev']:
+                scalar_data = np.nanstd(self.edps[target_alt_idx, :, :], axis=1)
+                if scalar_label is None:
+                    scalar_label = f'Ne Std Dev (m⁻³) [Alt: {actual_alt:.1f} km]'
+                    
+            else:
+                raise ValueError(f"Unknown mesh_scalars string: '{mesh_scalars}'. Try 'Ne', 'Median', or 'StdDev'.")
+        else:
+            # Fallback if the user passes a pre-sliced numpy array directly
+            scalar_data = mesh_scalars
+            if scalar_label is None:
+                scalar_label = 'Data Value'
+
+        # ---------------------------------------------------------
+        # Plot the Mesh (Filled or Wireframe)
+        # ---------------------------------------------------------
+        if scalar_data is not None:
+            if len(scalar_data) != vertices.shape[0]:
+                raise ValueError(f"Extracted/Provided data must have length {vertices.shape[0]} (n_geo), got {len(scalar_data)}")
+            
+            print(f"Plotting filled mesh using variable type: {mesh_scalars}")
+            
+            # Switch back to ccrs.Geodetic() so the 360 -> 0 connection wraps correctly
+            tc = ax.tripcolor(vertices[:, 0], vertices[:, 1], triangles, scalar_data,
+                              transform=ccrs.Geodetic(), cmap=scalar_cmap, 
+                              shading='flat', edgecolors='face', alpha=0.85)
+            
+            # Match the triplot transform to Geodetic as well
+            ax.triplot(vertices[:, 0], vertices[:, 1], triangles,
+                       transform=ccrs.Geodetic(), color='black', linewidth=0.3, alpha=0.4)
+            
+            cbar = plt.colorbar(tc, ax=ax, orientation='horizontal', shrink=0.7, pad=0.05)
+            cbar.set_label(scalar_label)
+            
+        else:
+            print("Attempting to plot occultation mesh region (wireframe only)...")
+            ax.triplot(vertices[:, 0], vertices[:, 1], triangles,
+                       transform=ccrs.Geodetic(), color='darkorange', linewidth=0.8, alpha=0.7)
     
+        # ---------------------------------------------------------
+        # Plot Satellite / Ray geometry
+        # ---------------------------------------------------------
         if podTc_data is not None:
             transformer = pyproj.Transformer.from_crs(
                 pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
@@ -1495,7 +1574,6 @@ class EDPSamples(xr.Dataset):
             leo  = podTc_data['LEO']   # (3, N)
             gnss = podTc_data['GNSS']  # (3, N)
     
-            # Plot start position of LEO and GNSS (first column only)
             lon_leo,  lat_leo,  _ = transformer.transform(leo[0, 0]  * 1e3, leo[1, 0]  * 1e3, leo[2, 0]  * 1e3)
             lon_gnss, lat_gnss, _ = transformer.transform(gnss[0, 0] * 1e3, gnss[1, 0] * 1e3, gnss[2, 0] * 1e3)
     
@@ -1504,7 +1582,6 @@ class EDPSamples(xr.Dataset):
             ax.plot(lon_gnss, lat_gnss, transform=ccrs.Geodetic(),
                     color='r', marker='s', markersize=6, label='GNSS Start')
     
-            # Plot the ray paths (all columns)
             lons_leo,  lats_leo,  _ = transformer.transform(leo[0, :]  * 1e3, leo[1, :]  * 1e3, leo[2, :]  * 1e3)
             lons_gnss, lats_gnss, _ = transformer.transform(gnss[0, :] * 1e3, gnss[1, :] * 1e3, gnss[2, :] * 1e3)
     
@@ -1521,7 +1598,7 @@ class EDPSamples(xr.Dataset):
         plt.title(f"Occultation Mesh Geometry Below {alt_limit} km")
     
         if podTc_data is not None:
-            plt.legend(loc='lower left')
+            plt.legend(loc='upper right')
     
         fig.savefig(save_path, dpi=300, bbox_inches='tight')
         
