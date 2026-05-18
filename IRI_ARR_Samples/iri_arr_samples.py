@@ -136,17 +136,13 @@ def calculate_iri_electron_density(altitudes, iri_params):
     # ---------------------------------------------------------
     # D-Region & E-Bottomside Shared Parameters
     # ---------------------------------------------------------
-    F1 = 0.02
+    F1 = 0.05
     F2 = -1.25e-3
-    F3 = 8.79e-3
+    F3a = 8.79e-3
+    F3b = 1.707e-4
 
-    if hmD is not None and hmE is not None:
-        # Approximate HDX as the midpoint between the E-peak and D-inflection
-        HDX = (hmE + hmD) / 2.0
-    elif hmD is not None:
-        HDX = hmD # Fallback if E-region is missing
-    else:
-        HDX = None
+    # Anchor HDX firmly at the D-inflection point to prevent polynomial explosion
+    HDX = 85.6#hmD if hmD is not None else None
 
     # ---------------------------------------------------------
     # 5. E Bottomside Region (between HDX and hmE)
@@ -156,10 +152,10 @@ def calculate_iri_electron_density(altitudes, iri_params):
         if np.any(m_eb):
             # 1. Evaluate the D-region polynomial exactly at HDX
             x_HDX = HDX - hmD
-            NDX = NmD * np.exp(F1 * x_HDX + F2 * x_HDX**2 + F3 * x_HDX**3)
+            NDX = NmD * np.exp(F1 * x_HDX + F2 * x_HDX**2 + F3a * x_HDX**3)
             
             # 2. Calculate the derivative (DN) of the polynomial at HDX
-            DN = NDX * (F1 + 2.0 * F2 * x_HDX + 3.0 * F3 * x_HDX**2)
+            DN = NDX * (F1 + 2.0 * F2 * x_HDX + 3.0 * F3a * x_HDX**2)
             
             # 3. Calculate continuity coefficients (K and D1)
             if NDX > 0 and NmE > 0 and NmE != NDX and hmE != HDX:
@@ -186,6 +182,5 @@ def calculate_iri_electron_density(altitudes, iri_params):
         if np.any(m_d):
             x = (h[m_d] - hmD)
             # Eq. 30: 3rd-degree exponential polynomial
-            ne_profile[m_d] = NmD * np.exp(F1 * x + F2 * x**2 + F3 * x**3)
-
+            ne_profile[m_d] = NmD * np.exp(F1 * x + F2 * x**2 + F3b * x**3)
     return ne_profile

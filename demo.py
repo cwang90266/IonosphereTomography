@@ -78,7 +78,7 @@ from datetime import datetime, timedelta
 TIME     = "2025-06-15 19:00"      # simulation UTC time
 LAT_C    = 40                    # center latitude  (°N)
 LON_C    = -105.0                  # center longitude (°E, = 145 °W)
-ALT_KM   = [80, 1000, 1]         # altitude grid: [start, stop, step] km
+ALT_KM   = [60, 1000, 1]         # altitude grid: [start, stop, step] km
 
 # Alaska region bounds (used for sweeps and mesh generation)
 LAT_MIN, LAT_MAX, DLAT = 60.0, 65.0, 1.5
@@ -138,7 +138,7 @@ def _banner(title: str) -> None:
 def section1() -> xr.Dataset:
     # _banner("§1  Single IRI altitude profile (default solar indices)") # Un-comment if _banner is defined
     START_TIME = datetime(2025,6,15,0)
-    for hour_i in range(0,23,1):
+    for hour_i in [5]:#range(0,23,1):
         time_in = START_TIME + timedelta(hours=hour_i)
         # 1. Run the official IRI executable via your base.py wrapper
         iono = IRI(time_in, ALT_KM, LAT_C, LON_C)
@@ -1577,7 +1577,7 @@ def section17(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     mc_df.iloc[0] = base_sc  # Ensure 0th index is the baseline
 
     eds_occ = EDPSamples(
-        DateTime="2015-06-01 12:00:00", geo_type="Occultation", altitude=alt_grid,
+        DateTime=podTc_data['date'], geo_type="Occultation", altitude=alt_grid,
         sampling_parameters=mc_df, evaluate_iri=1,
         filename=podTc2_file, dLat=5, dLon=5
     )
@@ -1726,7 +1726,426 @@ def section17(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     print(f"  -> Saved figure to {save_path}\n")
 
     return prior_state_flat, posterior_state_flat
+#+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame):
+    """
+    §18 Tomography Data Assimilation Visual Assessment
+    Assimilates measured TEC data and produces three sets of plots:
+    1. TEC Fit & Linear Center EDP
+    2. Vertical Profile Spread (All mesh points)
+    3. 3x3 Globe Grid (Altitudes vs. Prior/Posterior/Delta)
+    """
+    from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
+    from EDPSamples.edp_samples import EDPSamples
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import os
+    from matplotlib.ticker import ScalarFormatter
+    
+    try:
+        _banner("§18  Tomography Data Assimilation Visual Assessment")
+    except NameError:
+        print("\n=== §18  Tomography Data Assimilation Visual Assessment ===")
+        
+    filename = podTc2_file.split('/')[-1]
+    print(f"Processing File: {filename}")
 
+    # 1. Parse Data and Clean NaNs
+    podTc_data = parse_podTc2_nc_file(podTc2_file)
+    if podTc_data is None:
+        print(" [!] Invalid or skipped podTc data. Aborting.")
+        return
+
+    _, _, tangent_alt_raw = rayTangent(podTc_data['LEO'], podTc_data['GNSS'], units='km')
+    tangent_alt_km = tangent_alt_raw * 1e-3
+    measured_tec = podTc_data.get('TEC_podTc2', podTc_data.get('TEC', np.zeros_like(tangent_alt_km)))
+    
+    valid_mask = ~np.isnan(measured_tec) & (measured_tec > 0)
+    measured_tec_clean = measured_tec[valid_mask]
+    tangent_alt_clean = tangent_alt_km[valid_mask]
+    
+    podTc_clean = {
+        'LEO': podTc_data['LEO'][:, valid_mask],
+        'GNSS': podTc_data['GNSS'][:, valid_mask]
+    }
+    print(f"  -> Filtered {np.sum(~valid_mask)} invalid/NaN rays. {np.sum(valid_mask)} rays remaining.")
+
+    # 2. Generate Prior Ensemble
+    print("  -> Generating Prior State Ensemble...")
+    base_sc = sampling_df.iloc[0]
+    n_mc = 50  
+    np.random.seed(42)
+
+    mc_hours = (base_sc['hour'] + np.random.uniform(-3, 3, size=n_mc)) % 24
+    mc_df = pd.DataFrame({
+        "hour": mc_hours,
+        "f107": np.random.normal(loc=base_sc.get('f107', 130), scale=10, size=n_mc).clip(70, 250),
+        "ap":   np.random.normal(loc=base_sc.get('ap', 15), scale=5, size=n_mc).clip(0, 400),
+        "ig12": np.random.normal(loc=base_sc.get('ig12', 100), scale=10, size=n_mc).clip(50, 200),
+        "rz12": np.random.normal(loc=base_sc.get('rz12', 100), scale=10, size=n_mc).clip(50, 200),
+    })
+    mc_df.iloc[0] = base_sc
+
+    eds_occ = EDPSamples(
+        DateTime="2015-06-01 12:00:00", geo_type="Occultation", altitude=alt_grid,
+        sampling_parameters=mc_df, evaluate_iri=1,
+        filename=podTc2_file, dLat=5, dLon=5
+    )
+
+    # 3. Initialize Inverter
+    print("  -> Initializing Kalman Filter...")
+    # Make sure Ionosphere_Tomography_Inverter is imported locally or globally
+    # from EDPSamples.tomography_inverter import Ionosphere_Tomography_Inverter 
+    inverter = Ionosphere_Tomography_Inverter(EDPSam=eds_occ, meanscale=1)
+    
+    print("  -> Building Observation Operator (H)...")
+    H_unscaled = inverter.get_observation_operator(podTc_clean)
+
+    # 4. Run Assimilation
+    print("\n  -> Running Data Assimilation...")
+    posterior_state_flat = inverter.assimilate(
+        obs=measured_tec_clean, 
+        podTc2_data=None, 
+        obs_operator=H_unscaled, 
+        relaxation=0.95, 
+        measurement_err=1.0
+    )
+
+    # 5. Evaluate Results & Reshape
+    print("  -> Calculating TEC and Reshaping States...")
+    prior_state_flat = inverter.attrs['initial_edps_mean']
+    
+    H_clean = np.asarray(H_unscaled)
+    prior_state_clean = np.asarray(prior_state_flat)
+    posterior_state_clean = np.asarray(posterior_state_flat)
+
+    prior_tec = (H_clean @ prior_state_clean).flatten()
+    posterior_tec = (H_clean @ posterior_state_clean).flatten()
+    
+    n_height = len(alt_grid)
+    n_geo = eds_occ.geolocation.shape[0]
+    
+    prior_edp_3d = prior_state_flat.reshape(n_height, n_geo)
+    prior_edp_3d[prior_edp_3d == 0] = np.nan
+    
+    posterior_edp_3d = posterior_state_flat.reshape(n_height, n_geo)
+    posterior_edp_3d[posterior_edp_3d == 0] = np.nan
+    
+    center_idx = n_geo // 2 
+    prior_profile = prior_edp_3d[:, center_idx]
+    posterior_profile = posterior_edp_3d[:, center_idx]
+
+    save_dir = "./Figures/Section18_Visual_Assessments2/"
+    os.makedirs(save_dir, exist_ok=True)
+
+    # =========================================================
+    # PLOT 1: Observation Space (TEC) & State Space (Linear EDP)
+    # =========================================================
+    print("  -> Generating Plot 1: TEC Fit & Center Profile...")
+    fig1, axes1 = plt.subplots(1, 2, figsize=(14, 8), sharey=True)
+    fig1.suptitle(f"§18 Tomography Assimilation Results\n{filename}", fontsize=14)
+
+    # Panel 1: TEC
+    ax1_1 = axes1[0]
+    ax1_1.plot(measured_tec_clean, tangent_alt_clean, color='black', lw=3, label="Measured TEC")
+    ax1_1.plot(prior_tec, tangent_alt_clean, color='tab:red', lw=2, ls='--', label="Prior (H Matrix)")
+    ax1_1.plot(posterior_tec, tangent_alt_clean, color='tab:blue', lw=2, label="Posterior (Assimilated)")
+    ax1_1.set_ylabel("Tangent Altitude (km)")
+    ax1_1.set_xlabel("Total Electron Content (TECU)")
+    ax1_1.set_title("Observation Space: TEC Adjustment")
+    ax1_1.grid(True, alpha=0.4, linestyle=':')
+    ax1_1.legend(loc='upper right')
+    if len(tangent_alt_clean) > 0:
+        ax1_1.set_ylim(0, min(np.max(tangent_alt_clean) + 50, alt_grid[-1]))
+
+    # Panel 2: EDP (Linear Scale)
+    ax1_2 = axes1[1]
+    ax1_2.plot(prior_profile, alt_grid, color='tab:red', lw=2, ls='--', label="Prior Mean Density")
+    ax1_2.plot(posterior_profile, alt_grid, color='tab:blue', lw=2, label="Posterior Density")
+    ax1_2.fill_betweenx(alt_grid, prior_profile, posterior_profile, color='tab:blue', alpha=0.15, label="Assimilation Delta")
+    
+    ax1_2.set_xlabel("Electron Density (m⁻³)")
+    ax1_2.set_title("State Space: Center Vertex (Linear Scale)")
+    
+    # Format X axis for scientific notation so linear values don't overlap
+    formatter = ScalarFormatter(useMathText=True)
+    formatter.set_powerlimits((-2, 2))
+    ax1_2.xaxis.set_major_formatter(formatter)
+    
+    # Optional: adjust xlim to ensure non-NaN data is clearly visible
+    max_edp = max(np.nanmax(prior_profile), np.nanmax(posterior_profile))
+    ax1_2.set_xlim(left=0, right=max_edp * 1.1)
+    
+    ax1_2.grid(True, alpha=0.4, linestyle=':')
+    ax1_2.legend(loc='upper right')
+    plt.tight_layout()
+    fig1.savefig(os.path.join(save_dir, f"{filename}_plot1_center_linear.png"), dpi=150)
+
+    # =========================================================
+    # PLOT 2: Spaghetti Plot of ALL Vertical Profiles
+    # =========================================================
+    print("  -> Generating Plot 2: All Vertical Profiles...")
+    fig2, ax2 = plt.subplots(figsize=(8, 10))
+    fig2.suptitle(f"Vertical Profile Dispersion across Mesh\n{filename}", fontsize=14)
+
+    # Plot all prior profiles (red, transparent)
+    ax2.plot(prior_edp_3d, alt_grid, color='tab:red', alpha=0.1, lw=1)
+    # Plot all posterior profiles (blue, transparent)
+    ax2.plot(posterior_edp_3d, alt_grid, color='tab:blue', alpha=0.1, lw=1)
+    
+    # Add strong lines for the center profile to act as a reference
+    ax2.plot(prior_profile, alt_grid, color='darkred', lw=2, ls='--', label="Prior (Center Vertex)")
+    ax2.plot(posterior_profile, alt_grid, color='darkblue', lw=2, label="Posterior (Center Vertex)")
+
+    ax2.set_ylabel("Altitude (km)")
+    ax2.set_xlabel("Electron Density (m⁻³)")
+    ax2.xaxis.set_major_formatter(formatter)
+    ax2.set_xlim(left=0, right=max(np.nanmax(prior_edp_3d), np.nanmax(posterior_edp_3d)) * 1.1)
+    ax2.set_ylim(0, alt_grid[-1])
+    ax2.grid(True, alpha=0.4, linestyle=':')
+    
+    # Custom legend to explain the transparent lines
+    from matplotlib.lines import Line2D
+    custom_lines = [
+        Line2D([0], [0], color='tab:red', lw=2, alpha=0.5),
+        Line2D([0], [0], color='tab:blue', lw=2, alpha=0.5),
+        Line2D([0], [0], color='darkred', lw=2, ls='--'),
+        Line2D([0], [0], color='darkblue', lw=2)
+    ]
+    ax2.legend(custom_lines, ['Prior (All Vertices)', 'Posterior (All Vertices)', 'Prior (Center)', 'Posterior (Center)'], loc='upper right')
+    
+    plt.tight_layout()
+    fig2.savefig(os.path.join(save_dir, f"{filename}_plot2_all_profiles.png"), dpi=150)
+
+    # =========================================================
+    # PLOT 3: 3x3 Globe Grid (Altitudes vs States)
+    # =========================================================
+    print("  -> Generating Plot 3: 3x3 Globe Map...")
+    
+    target_alts = [200.0, 300.0, 400.0, 500.0, 600.0]
+    
+    # Attempt to extract center lat/lon for the Orthographic projection
+    try:
+        tecmax_lat = podTc_data['lat_tecmax_tangent']
+        tecmax_lon = podTc_data['lon_tecmax_tangent']
+    except KeyError:
+        # Fallback if specific tecmax keys aren't in this data structure
+        tecmax_lon = np.nanmean(eds_occ.geolocation[:, 0])
+        tecmax_lat = np.nanmean(eds_occ.geolocation[:, 1])
+
+    proj = ccrs.Orthographic(central_longitude=tecmax_lon, central_latitude=tecmax_lat)
+    
+    # Added squeeze=False and layout='constrained'
+    fig3, axes3 = plt.subplots(
+        len(target_alts), 3, 
+        figsize=(15, len(target_alts) * 5 + 1), 
+        subplot_kw={'projection': proj},
+        squeeze=False,
+        layout='constrained'
+    )
+    
+    # Dropped the y=0.95 since layout='constrained' handles title spacing perfectly
+    fig3.suptitle(f"Spatial Mesh Assimilation Mapping\n{filename}", fontsize=16)
+    
+    verts = eds_occ.geolocation
+    tris = eds_occ.mesh
+
+    # --- NEW: Calculate global color bounds across ALL target altitudes ---
+    # This ensures the colormap scale is identical for every row.
+    alt_indices = [int(np.argmin(np.abs(alt_grid - alt))) for alt in target_alts]
+    
+    vmin_edp = 0
+    vmax_edp = max(np.nanmax(prior_edp_3d[alt_indices, :]), np.nanmax(posterior_edp_3d[alt_indices, :]))
+    max_delta = np.nanmax(np.abs(posterior_edp_3d[alt_indices, :] - prior_edp_3d[alt_indices, :]))
+    # ----------------------------------------------------------------------
+
+    for i, target_alt in enumerate(target_alts):
+        # Find closest altitude index
+        alt_idx = int(np.argmin(np.abs(alt_grid - target_alt)))
+        actual_alt = alt_grid[alt_idx]
+        
+        # Extract data for this altitude slice
+        prior_slice = prior_edp_3d[alt_idx, :]
+        post_slice = posterior_edp_3d[alt_idx, :]
+        delta_slice = post_slice - prior_slice
+        
+
+        # Column 0: Prior
+        ax_prior = axes3[i, 0]
+        ax_prior.set_global()
+        ax_prior.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, color='gray')
+        tc1 = ax_prior.tripcolor(verts[:, 0], verts[:, 1], tris, prior_slice,
+                                 transform=ccrs.Geodetic(), cmap='plasma', shading='flat', 
+                                 edgecolors='face', vmin=vmin_edp, vmax=vmax_edp)
+        if i == 0: ax_prior.set_title("Prior EDP", fontsize=14)
+        ax_prior.text(-0.1, 0.5, f"{actual_alt:.0f} km", va='center', ha='center', 
+                      rotation='vertical', fontsize=14, transform=ax_prior.transAxes, fontweight='bold')
+                      
+        # Column 1: Posterior
+        ax_post = axes3[i, 1]
+        ax_post.set_global()
+        ax_post.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, color='gray')
+        tc2 = ax_post.tripcolor(verts[:, 0], verts[:, 1], tris, post_slice,
+                                transform=ccrs.Geodetic(), cmap='plasma', shading='flat', 
+                                edgecolors='face', vmin=vmin_edp, vmax=vmax_edp)
+        if i == 0: ax_post.set_title("Posterior EDP", fontsize=14)
+        
+        # Column 2: Delta
+        ax_delta = axes3[i, 2]
+        ax_delta.set_global()
+        ax_delta.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, color='gray')
+        tc3 = ax_delta.tripcolor(verts[:, 0], verts[:, 1], tris, delta_slice,
+                                 transform=ccrs.Geodetic(), cmap='coolwarm', shading='flat', 
+                                 edgecolors='face', vmin=-max_delta, vmax=max_delta)
+        if i == 0: ax_delta.set_title("Delta (Post - Prior)", fontsize=14)
+        
+        # Plot faint wireframe overlay on all
+        for ax in [ax_prior, ax_post, ax_delta]:
+            ax.triplot(verts[:, 0], verts[:, 1], tris, transform=ccrs.Geodetic(), color='black', linewidth=0.2, alpha=0.3)
+
+    # --- NEW: Add a single set of global colorbars OUTSIDE the loop ---
+    # Global Colorbar for Prior/Posterior (spans the first two columns)
+    cbar1 = fig3.colorbar(tc2, ax=axes3[:, 0:2].ravel().tolist(), orientation='vertical', shrink=0.7, pad=0.02)
+    cbar1.set_label("Electron Density (m⁻³)", fontsize=14)
+    cbar1.formatter.set_powerlimits((-2, 2))
+
+    # Global Colorbar for Delta (spans the third column)
+    cbar2 = fig3.colorbar(tc3, ax=axes3[:, 2].ravel().tolist(), orientation='vertical', shrink=0.7, pad=0.02)
+    cbar2.set_label("Δ Density (m⁻³)", fontsize=14)
+    cbar2.formatter.set_powerlimits((-2, 2))
+    # ------------------------------------------------------------------
+
+    # Save the plot
+    fig3.savefig(os.path.join(save_dir, f"{filename}_plot3_globe_grid.png"), dpi=150, bbox_inches='tight')
+    
+    # =========================================================
+    # PLOT 4: Vertical Slice of EDP (Prior, Posterior, Delta)
+    # =========================================================
+    print("  -> Generating Plot 4: Vertical EDP Slice along Lowest Ray...")
+    from scipy.interpolate import LinearNDInterpolator
+    import pyproj
+
+    # 1. Identify the lowest ray to define our 2D cross-section
+    idx_lowest = np.argmin(tangent_alt_clean)
+    leo_pt = podTc_clean['LEO'][:, idx_lowest:idx_lowest+1]
+    gnss_pt = podTc_clean['GNSS'][:, idx_lowest:idx_lowest+1]
+
+    # Calculate tangent point to use as the distance origin (0 km)
+    tangent_pt, _, _ = EDPSamples.rayTangent(leo_pt, gnss_pt, units='km')
+
+    transformer = pyproj.Transformer.from_crs(
+        pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
+        pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+        always_xy=True
+    )
+
+    # 2. Sample 300 points along the straight ECEF path between GNSS and LEO
+    t = np.linspace(0, 1, 300)
+    ray_ecef = gnss_pt + (leo_pt - gnss_pt) * t  # Shape: (3, 300)
+
+    # Calculate distance along the ground relative to the tangent point
+    tangent_dist = np.linalg.norm(ray_ecef - tangent_pt, axis=0)
+    
+    # Determine which side of the tangent point each point is on (GNSS side = negative)
+    leo_dist = np.linalg.norm(leo_pt - tangent_pt)
+    dist_to_leo = np.linalg.norm(ray_ecef - leo_pt, axis=0)
+    signs = np.where(dist_to_leo < leo_dist, 1.0, -1.0)
+    distances_km = tangent_dist * signs
+
+    # Convert ray points to Lat/Lon for mesh interpolation
+    ray_lons, ray_lats, _ = transformer.transform(ray_ecef[0]*1e3, ray_ecef[1]*1e3, ray_ecef[2]*1e3)
+
+    # Project mesh and ray to a local metric space (AEQD) to avoid spherical distortion bugs
+    tan_lon, tan_lat, _ = transformer.transform(tangent_pt[0]*1e3, tangent_pt[1]*1e3, tangent_pt[2]*1e3)
+    proj_aeqd = pyproj.Proj(proj='aeqd', lat_0=tan_lat[0], lon_0=tan_lon[0], ellps='WGS84')
+    
+    mesh_x, mesh_y = proj_aeqd(eds_occ.geolocation[:, 0], eds_occ.geolocation[:, 1])
+    ray_x, ray_y = proj_aeqd(ray_lons, ray_lats)
+
+    # 3. Interpolate the 3D grid along this 2D slice
+    prior_slice = np.full((n_height, len(t)), np.nan)
+    post_slice  = np.full((n_height, len(t)), np.nan)
+
+    mesh_points = np.column_stack((mesh_x, mesh_y))
+    ray_points = np.column_stack((ray_x, ray_y))
+
+    # Fast 2D interpolation height-by-height 
+    # (Yields NaNs when the ray leaves the bounds of your occultation mesh)
+    for h in range(n_height):
+        interp_prior = LinearNDInterpolator(mesh_points, prior_edp_3d[h, :])
+        interp_post  = LinearNDInterpolator(mesh_points, posterior_edp_3d[h, :])
+        
+        prior_slice[h, :] = interp_prior(ray_points)
+        post_slice[h, :]  = interp_post(ray_points)
+
+    delta_slice = post_slice - prior_slice
+
+    # 4. Plotting the 3x1 Vertical Slices
+    fig4, axes4 = plt.subplots(3, 1, figsize=(10, 12), sharex=True, sharey=True)
+    fig4.suptitle(f"Vertical EDP Slice Along Lowest Occultation Ray\n{filename}", fontsize=16)
+
+    # This forces Plot 4 to share the exact same scale as Plot 3
+    vmin_edp = 0
+    vmax_edp = max(np.nanmax(prior_edp_3d), np.nanmax(posterior_edp_3d))
+    max_delta = np.nanmax(np.abs(posterior_edp_3d - prior_edp_3d))
+    # ---------------------------------------------------------------
+
+    X, Y = np.meshgrid(distances_km, alt_grid)
+
+    # --- Subplot 1: Prior ---
+    ax4_1 = axes4[0]
+    pcm1 = ax4_1.pcolormesh(X, Y, prior_slice, cmap='plasma', shading='auto', vmin=vmin_edp, vmax=vmax_edp)
+    ax4_1.set_title("Prior EDP Cross-Section", fontsize=14)
+    ax4_1.set_ylabel("Altitude (km)")
+    
+    # --- Subplot 2: Posterior ---
+    ax4_2 = axes4[1]
+    pcm2 = ax4_2.pcolormesh(X, Y, post_slice, cmap='plasma', shading='auto', vmin=vmin_edp, vmax=vmax_edp)
+    ax4_2.set_title("Posterior EDP Cross-Section", fontsize=14)
+    ax4_2.set_ylabel("Altitude (km)")
+
+    # Shared Colorbar for 1 & 2
+    cbar1 = fig4.colorbar(pcm2, ax=axes4[:2], orientation='vertical', fraction=0.03, pad=0.03)
+    cbar1.set_label("Electron Density (m⁻³)", fontsize=14)
+    cbar1.formatter.set_powerlimits((-2, 2))
+
+    # --- Subplot 3: Delta ---
+    ax4_3 = axes4[2]
+    pcm3 = ax4_3.pcolormesh(X, Y, delta_slice, cmap='coolwarm', shading='auto', vmin=-max_delta, vmax=max_delta)
+    ax4_3.set_title("Delta (Post - Prior)", fontsize=14)
+    ax4_3.set_xlabel("Ground Distance from Tangent Point (km) [ GNSS ←  0  → LEO ]")
+    ax4_3.set_ylabel("Altitude (km)")
+
+    # Mark the tangent point (distance = 0)
+    for ax in axes4:
+        ax.axvline(0, color='black', linestyle='--', linewidth=1.5, alpha=0.6, label='Tangent Pt' if ax == axes4[0] else "")
+        ax.grid(True, alpha=0.3, linestyle=':')
+    axes4[0].legend(loc='upper right')
+
+    # Colorbar for Delta
+    cbar2 = fig4.colorbar(pcm3, ax=ax4_3, orientation='vertical', fraction=0.03, pad=0.03)
+    cbar2.set_label("Δ Density (m⁻³)", fontsize=14)
+    cbar2.formatter.set_powerlimits((-2, 2))
+
+    # Zoom X-axis perfectly to the valid mesh boundaries
+    valid_dist_mask = ~np.isnan(prior_slice).all(axis=0)
+    if np.any(valid_dist_mask):
+        min_dist = distances_km[valid_dist_mask].min()
+        max_dist = distances_km[valid_dist_mask].max()
+        pad = (max_dist - min_dist) * 0.05
+        ax4_3.set_xlim(min_dist - pad, max_dist + pad)
+    
+    # Clip Y-axis to the actual alt_grid limits
+    ax4_3.set_ylim(alt_grid[0], alt_grid[-1])
+
+    plt.tight_layout()
+    fig4.savefig(os.path.join(save_dir, f"{filename}_plot4_vertical_slice.png"), dpi=150)
+    print(f"  -> Saved all figures to {save_dir}\n")
+    
+    return prior_state_flat, posterior_state_flat
 # ─────────────────────────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1737,7 +2156,7 @@ def main() -> None:
     print("Alaska region:  60–65 °N,  150–140 °W")
     print("=" * 60)
 
-    section1()
+    # section1()
     # section2()
     # section3()
     # section4()
@@ -1771,33 +2190,35 @@ def main() -> None:
     # section15()
     
 
-    # alt_grid = np.arange(100.0, 1000.0, 10.0, dtype=float)
-    # sampling_df = pd.DataFrame([{
-    #     "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
-    # }])
+    alt_grid = np.arange(60.0, 1000.0, 10.0, dtype=float)
+    sampling_df = pd.DataFrame([{
+        "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
+    }])
 
-    # podTc2_files = [
-    #     # "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
-    #     # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
-    #     # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
-    #     # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
-    #     # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
-    #     # "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
-    #     # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
-    #     # "podTc2_GN04.2025.152.06.23.0026.G31.01_0000.0001_nc" # Very wide occultation
-    #     "podTc2_GN04.2025.152.06.27.0042.C40.01_0000.0001_nc"
-    # ]
+    podTc2_files = [
+        # "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
+        # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
+        # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
+        # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
+        # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
+        # "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
+        # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
+        # "podTc2_GN04.2025.152.06.23.0026.G31.01_0000.0001_nc" # Very wide occultation
+        # "podTc2_GN05.2025.152.06.04.0032.C36.00_0000.0001_nc"
+        # "podTc2_GN04.2025.152.06.27.0042.C40.01_0000.0001_nc"
+        "podTc2_GN05.2025.152.03.01.0027.E03.01_0000.0001_nc"
+    ]
 
-    # base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
+    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
 
-    # for f_string in podTc2_files:
-    #         full_path = os.path.join(base_path, f_string)
+    for f_string in podTc2_files:
+            full_path = os.path.join(base_path, f_string)
             
             # Run the geometry comparison suite
             # eds_dict, tec_results = section16(full_path, alt_grid, sampling_df)
             
             # Run the assimilation test
-            # prior_x, post_x = section17(full_path, alt_grid, sampling_df)
+            prior_x, post_x = section18(full_path, alt_grid, sampling_df)
 
     print("\n" + "=" * 60)
     print("All sections complete — displaying figures.")
