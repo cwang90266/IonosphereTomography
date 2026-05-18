@@ -150,7 +150,7 @@ def get_IRI2020_EDP(DateTime: str,
     # Execute IRI2020_namelist_driver
     #
     # Define exactly where these files live permanently
-    data_dir = "/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/data/" # Or wherever they are
+    data_dir = "/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/iri2020_new/src/iri2020/data/" # Or wherever they are
     apf107 = Path(data_dir) / "apf107.dat"
     ig_rz = Path(data_dir) / "ig_rz.dat"
 
@@ -169,24 +169,32 @@ def get_IRI2020_EDP(DateTime: str,
     # Execute IRI2020_namelist_driver
     # ---------------------------------------------------------
     
-    IRIPath = "/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/"
+    IRIPath = os.getenv("IRI_Root")
     IRIDataPath = IRIPath + "data/"  # Confirmed lowercase 'data'
     exe = IRIPath + "iri2020_namelist_driver"
     
-    # Confirmed these live inside the data/ folder
-    apf107_src = IRIDataPath + "apf107.dat" 
-    ig_rz_src = IRIDataPath + "ig_rz.dat"
 
     # 1. Clean up old output silently
-    cmd = f"rm -f {IRI_output_filename}; "
+    # Confirmed these live inside the data/ folder
+    Run_Folder = os.getenv("Tomography_Run_Folder")
+    cmd = f"cd {Run_Folder};"
+    cmd += f"rm -f {IRI_output_filename}; "
+    
+    if os.path.exists(Run_Folder+"/apf107.dat" ) and os.path.exists(Run_Folder+"/ig_rz.dat" ):
+        apf107_src = Run_Folder + "/apf107.dat" 
+        ig_rz_src = Run_Folder + "/ig_rz.dat"
+    else:
+        apf107_src = IRIPath + "/data/apf107.dat" 
+        ig_rz_src = IRIPath + "/data/ig_rz.dat"
+        cmd += f"ln -s -f {apf107_src} . ; "
+        cmd += f"ln -s -f {ig_rz_src} . ; "
+        
     
     # 2. Link data files to the current working directory
     cmd += f"ln -s -f {IRIDataPath}mcsat*.dat . ; "
     cmd += f"ln -s -f {IRIDataPath}dgrf*.dat . ; "
     cmd += f"ln -s -f {IRIDataPath}igrf*.dat . ; "
     cmd += f"ln -s -f {IRIDataPath}*.asc . ; "
-    cmd += f"ln -s -f {apf107_src} . ; "
-    cmd += f"ln -s -f {ig_rz_src} . ; "
     
    # 3. Execute Fortran driver
     cmd += f"{exe} {namelist_filename} {IRI_output_filename}"
@@ -291,23 +299,10 @@ def write_IRI2020_namelist(DateTime: str,
 
     return 0   
            
-<<<<<<< HEAD
-
 def read_IRI2020_binary_output(IRI_output_filename: str) -> tuple(np.ndarray,np.ndarray):
-=======
-def read_IRI2020_binary_output(IRI_output_filename: str) -> np.ndarray:
->>>>>>> main
     with open(IRI_output_filename, 'rb') as f:
         data = f.read()
     
-<<<<<<< HEAD
-    npts=int.from_bytes(data[0:4],byteorder="little",signed=True) 
-    nSample=int.from_bytes(data[4:8],byteorder="little",signed=True)
-    nheight=int.from_bytes(data[8:12],byteorder="little",signed=True)
-    #print([nheight,npts,nSample])
-    edps = np.ndarray([nheight,npts,nSample])
-    feature_edps = np.ndarray([13,npts,nSample])
-=======
     # 1. Check if file is completely empty or just garbage
     if len(data) < 12:
         raise ValueError(f"File {IRI_output_filename} is too short ({len(data)} bytes). The Fortran driver crashed immediately.")
@@ -317,7 +312,7 @@ def read_IRI2020_binary_output(IRI_output_filename: str) -> np.ndarray:
     nheight = int.from_bytes(data[8:12], byteorder="little", signed=True)
     
     # 2. Pre-calculate expected file size
-    expected_size = 12 + (npts * nSample * nheight * 4)
+    expected_size = 12 + ((npts+13)* nSample * nheight * 4)
     if len(data) < expected_size:
         print(f"DEBUG: npts={npts}, nSample={nSample}, nheight={nheight}")
         raise EOFError(
@@ -328,7 +323,7 @@ def read_IRI2020_binary_output(IRI_output_filename: str) -> np.ndarray:
 
     # 3. Safely extract data using [0] instead of float()
     edps = np.ndarray([nheight, npts, nSample])
->>>>>>> main
+    feature_edps = np.ndarray([13,npts,nSample])
     cbyte = 12
     for idxSample in range(nSample):
         for idxpts in range(npts):
@@ -884,8 +879,6 @@ class EDPSamples(xr.Dataset):
 
         return vertices, triangles
     
-<<<<<<< HEAD
-=======
     @staticmethod
     def rayTangent(LEO, GNSS, units='km'):
         """Calculates the tangent points and altitude of the raypath."""
@@ -1083,7 +1076,6 @@ class EDPSamples(xr.Dataset):
         segment = np.column_stack((np.arange(num_points-1),np.arange(1,num_points)))
         return vertice, segment
 
->>>>>>> main
     def __init__(cls,
         DateTime: str,
         geo_type : Literal["Point","Rectangle","Polar","Occultation"],
@@ -1164,11 +1156,7 @@ class EDPSamples(xr.Dataset):
                 else:
                     pole="south"
 
-<<<<<<< HEAD
-                geolocation, mesh =cls.genPolarArea(pole,minLat,dLat)
-=======
                 geolocation, mesh = cls.genPolarArea(pole,minLat,dLat)
->>>>>>> main
             case "Occultation":
                 if filename is None and (pt1 is None or pt2 is None or pt3 is None):
                     raise ValueError("For geo_type Occultation, you must provide either a 'filename' or all three points ('pt1', 'pt2', 'pt3').")
@@ -1374,29 +1362,8 @@ class EDPSamples(xr.Dataset):
                assert "Lat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (3)."]
                return EDPSamples(ds.attrs["DateTime"],ds.attrs["geo_type"],
                                 altitude, sampling_parameters, 
-<<<<<<< HEAD
                                 Lon=ds.attrs["Lon"],Lat=ds.attrs["Lon"],
                                 edps=edps,feature_edps=feature_edps,attrs=ds.attrs)
-=======
-                                Lon=ds.attrs["Lon"],Lat=ds.attrs["Lon"],edps=edps,attrs=ds.attrs)
-            case "LOS":
-                assert "LOS_LEO" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (4)."]
-                assert "LOS_GNSS" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (5)."]
-                assert "LOS_nb_point" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (6)."]
-                return EDPSamples(ds.attrs["DateTime"],ds.attrs["geo_type"],
-                                altitude, sampling_parameters, 
-                                LOS_LEO=ds.attrs["LOS_LEO"],LOS_GNSS=ds.attrs["LOS_GNSS"],
-                                LOS_nb_point=ds.attrs["LOS_nb_point"],
-                                edps=edps,attrs=ds.attrs)
-            case "Occultation":
-                assert "filename" in ds.attrs, ["Loaded dataset missing Occultation filename."]
-                return EDPSamples(ds.attrs["DateTime"], ds.attrs["geo_type"],
-                                altitude, sampling_parameters, 
-                                filename=ds.attrs["filename"],
-                                pt1=ds.attrs.get("pt1"), pt2=ds.attrs.get("pt2"), pt3=ds.attrs.get("pt3"),
-                                dLat=ds.attrs.get("dLat"), dLon=ds.attrs.get("dLon"),
-                                edps=edps, attrs=ds.attrs)
->>>>>>> main
             case "Rectangle":
                 assert "minLon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (7)."]
                 assert "maxLon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (8)."]

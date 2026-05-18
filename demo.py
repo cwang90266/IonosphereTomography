@@ -39,11 +39,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "EDPSamples" / "Locate in mesh" / "outputs"))
 sys.path.insert(0, str(ROOT / "iri2020_new" / "src" ))
 
-<<<<<<< HEAD
 print(ROOT)
-=======
 import os
->>>>>>> main
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -681,17 +678,13 @@ def section12(podTc2_file: str) -> tuple[np.ndarray, np.ndarray, tuple, tuple, t
     
     _banner("§12 Occultation Defined Grid Points")
     
-<<<<<<< HEAD
-    
     # podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
     podTc2_string = "podTc2_GN05.2025.315.00.04.0032.G23.01_0000.0001_nc"
     podTc2_file = f"/Users/cwang/Documents/Consulting/PlanetIQ/Data/SampleData/2025.315/{podTc2_string}"
     
     
-=======
     # Extract the filename from the path to use in the save string
     podTc2_string = podTc2_file.split('/')[-1]
->>>>>>> main
     save_path = f"./Figures/Examples/{podTc2_string}_mesh_geometry.png"
     
     podTc_data = parse_podTc2_nc_file(podTc2_file)
@@ -1504,11 +1497,11 @@ def main() -> None:
         # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
         # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
         # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
-        "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
+        "podTc2_GN05.2025.315.00.04.0032.G23.01_0000.0001_nc", # Eastern coast of South America
         # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
     ]
 
-    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
+    base_path = "/Users/cwang/Documents/Consulting/PlanetIQ/Data/SampleData/2025.315/"
 
     for f_string in podTc2_files:
             full_path = os.path.join(base_path, f_string)

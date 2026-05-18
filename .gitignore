@@ -10,3 +10,5 @@ __pycache__/
 *.png
 build/
 *.nc
+*.dat
+*.nml
