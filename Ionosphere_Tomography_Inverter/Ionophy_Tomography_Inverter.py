@@ -71,7 +71,7 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             "initial_edps_mean": edps_base  # Keeping the old dict key so you don't have to change the assimilate() code
         }
 
-    def get_observation_operator(self, podTc2_data: dict, num_segments: int = 1000) -> np.ndarray:
+    def get_observation_operator(self, podTc2_data: dict, num_segments: int = 1000, topside_scale_height_m: float = 500000.0) -> np.ndarray:
         """
         Generates the Observation Operator (H matrix) for the Kalman Filter.
         Maps the integration path of RO rays to the flattened state vector.
@@ -110,7 +110,9 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
                 midpoints[0, :] * 1e3, midpoints[1, :] * 1e3, midpoints[2, :] * 1e3
             )
             alts_km = alts_m / 1000.0
-            
+            # -----------------------------------------------------------------
+            # 1. PROCESS 3D MESH
+            # -----------------------------------------------------------------
             valid_mask = (alts_km >= altitude[0]) & (alts_km <= altitude[-1])
             if not np.any(valid_mask):
                 continue
@@ -161,7 +163,62 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
                     
                     np.add.at(H[i], a0_out * n_geo + near_v, dl_out * aw0_out)
                     np.add.at(H[i], a1_out * n_geo + near_v, dl_out * aw1_out)
+            # -----------------------------------------------------------------
+            # 2. PROCESS THE TOPSIDE APPROXIMATION
+            # -----------------------------------------------------------------        
+            topside_mask = (alts_km > altitude[-1])
+            
+            if np.any(topside_mask):
+                # Find the segment closest to the mesh boundary (the pierce point)
+                top_indices = np.where(topside_mask)[0]
+                boundary_idx = top_indices[np.argmin(np.abs(alts_km[top_indices] - altitude[-1]))]
+                
+                pierce_pt_m = midpoints[:, boundary_idx] * 1000.0  # Convert km to meters
+                lat_p = lats[boundary_idx]
+                lon_p = lons[boundary_idx]
+                
+                # Calculate Ray Direction
+                ray_vec = LEO[:, i] - GNSS[:, i]
+                ray_dir = ray_vec / np.linalg.norm(ray_vec)
+                
+                # Calculate Earth Normal at Pierce Point
+                normal_vec = pierce_pt_m / np.linalg.norm(pierce_pt_m)
+                
+                # Calculate Obliquity Factor: sec(chi) = 1 / |cos(chi)|
+                # We use absolute value because the ray direction could be up or down relative to the normal
+                cos_zenith = np.abs(np.dot(ray_dir, normal_vec))
+                cos_zenith = max(cos_zenith, 0.087) # Cap zenith at ~85 degrees to prevent infinite path lengths
+                obliquity = 1.0 / cos_zenith
+                
+                # Calculate Effective Topside Path Length
+                topside_dl_m = topside_scale_height_m * obliquity
+                
+                # Target the highest altitude index in your state vector
+                top_a_idx = n_height - 1
+                
+                if n_geo == 1:
+                    np.add.at(H[i], top_a_idx, topside_dl_m)
+                else:
+                    # Find horizontal nodes for the pierce point
+                    tri_idx, bary = find_containing_triangles(
+                        np.array([[lat_p, lon_p]]), geolocation, self.EDPSam.mesh, return_bary=True
+                    )
+                    
+                    if tri_idx[0] != -1:
+                        # Inside horizontal mesh
+                        v0, v1, v2 = self.EDPSam.mesh[tri_idx[0]]
+                        bw0, bw1, bw2 = bary[0]
+                        
+                        np.add.at(H[i], top_a_idx * n_geo + v0, topside_dl_m * bw0)
+                        np.add.at(H[i], top_a_idx * n_geo + v1, topside_dl_m * bw1)
+                        np.add.at(H[i], top_a_idx * n_geo + v2, topside_dl_m * bw2)
+                    else:
+                        # Outside horizontal mesh - snap to nearest
+                        _, near_v = tree.query(np.array([[lat_p, lon_p]]))
+                        np.add.at(H[i], top_a_idx * n_geo + near_v[0], topside_dl_m)
 
+        H /= 1e16 # Convert to TECU
+        return H
         H /= 1e16 # Convert to TECU
         return H
 
@@ -199,8 +256,9 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         
         # 5. Dynamic Observation Covariance (R)
         # Map the initial ensemble to observation space: Z = H * Ensemble
-        initial_predict_obs = self.H @ self.attrs["initial_edps"]
-        self.R = np.cov(initial_predict_obs) + measurement_err * np.eye(self.dim_z)
+        # initial_predict_obs = self.H @ self.attrs["initial_edps"]
+        # self.R = np.cov(initial_predict_obs) + measurement_err * np.eye(self.dim_z)
+        self.R = measurement_err * np.eye(self.dim_z)
         
         # 6. Execute Kalman Filter Steps
         # predict() advances self.x and self.P based on self.F and self.Q

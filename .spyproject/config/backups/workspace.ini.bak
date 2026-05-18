@@ -4,7 +4,7 @@ save_data_on_exit = True
 save_history = True
 save_non_project_files = False
 project_type = 'empty-project-type'
-recent_files = ['Pipfile', 'iri2020_new/src/iri2020/vprofile.py', 'IRI_Sample_Inputs/IRI_Sample_inputs.py', 'iri2020_new/src/iri2020/get_iri_inputs.py', 'TEC_model/podTc_file_processing.py', 'EDPSamples/EDPS_plotting.py', 'IRI2020_input_namelist.nml', 'iri2020_namelist_driver.log', 'demo.py', 'EDPSamples/edp_samples.py', '.gitignore', 'Ionosphere_Tomography_Inverter/Ionophy_Tomography_Inverter.py']
+recent_files = ['Pipfile', 'iri2020_new/src/iri2020/vprofile.py', 'IRI_Sample_Inputs/IRI_Sample_inputs.py', 'iri2020_new/src/iri2020/get_iri_inputs.py', 'TEC_model/podTc_file_processing.py', 'EDPSamples/EDPS_plotting.py', 'IRI2020_input_namelist.nml', 'iri2020_namelist_driver.log', 'EDPSamples/edp_samples.py', 'Ionosphere_Tomography_Inverter/Ionophy_Tomography_Inverter.py', 'iri2020_new/src/iri2020/__init__.py', 'iri2020_new/src/iri2020/altitude.py', 'iri2020_new/src/iri2020/base.py', 'IRI_ARR_Samples/iri_arr_samples.py', 'demo.py']
 
 [main]
 version = 0.2.0
