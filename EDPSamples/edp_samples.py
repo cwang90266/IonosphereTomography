@@ -139,74 +139,46 @@ def get_IRI2020_EDP(DateTime: str,
                     sampling_parameters: pd.DataFrame,
                     namelist_filename: str = "IRI2020_input_namelist.nml",
                     IRI_output_filename: str = "IRI_output_namelist.dat") -> np.ndarray:
-        
-    flag = write_IRI2020_namelist(DateTime,
-                    altitude,
-                    geolocation,
-                    sampling_parameters,
-                    namelist_filename)
-    assert flag == 0, "Fail to write input namelist for IRI2020"
-    #
-    # Execute IRI2020_namelist_driver
-    #
-    # Define exactly where these files live permanently
-    data_dir = "/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/data/" # Or wherever they are
-    apf107 = Path(data_dir) / "apf107.dat"
-    ig_rz = Path(data_dir) / "ig_rz.dat"
 
-    assert apf107.is_file(), f"The file apf107.dat was not found at {apf107}"
-    assert ig_rz.is_file(), f"The file ig_rz.dat was not found at {ig_rz}"
+    import tempfile
 
-    iri_name = "iri2020_namelist_driver"
-    if os.name == "nt":
-        iri_name += ".exe"
+    IRIPath     = "/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/"
+    IRIDataPath = IRIPath + "data/"
+    exe         = IRIPath + "iri2020_namelist_driver"
+    apf107_src  = IRIDataPath + "apf107.dat"
+    ig_rz_src   = IRIDataPath + "ig_rz.dat"
 
+    # Each call gets its own temp directory so parallel workers never share
+    # IRI_output_namelist.dat or the data symlinks.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        nml_path = os.path.join(tmpdir, namelist_filename)
+        out_path = os.path.join(tmpdir, IRI_output_filename)
 
-    assert flag == 0, "Fail to write input namelist for IRI2020"
-    
-    # ---------------------------------------------------------
-   # ---------------------------------------------------------
-    # Execute IRI2020_namelist_driver
-    # ---------------------------------------------------------
-    
-    IRIPath = "/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/"
-    IRIDataPath = IRIPath + "data/"  # Confirmed lowercase 'data'
-    exe = IRIPath + "iri2020_namelist_driver"
-    
-    # Confirmed these live inside the data/ folder
-    apf107_src = IRIDataPath + "apf107.dat" 
-    ig_rz_src = IRIDataPath + "ig_rz.dat"
+        flag = write_IRI2020_namelist(DateTime, altitude, geolocation,
+                                      sampling_parameters, nml_path)
+        assert flag == 0, "Fail to write input namelist for IRI2020"
 
-    # 1. Clean up old output silently
-    cmd = f"rm -f {IRI_output_filename}; "
-    
-    # 2. Link data files to the current working directory
-    cmd += f"ln -s -f {IRIDataPath}mcsat*.dat . ; "
-    cmd += f"ln -s -f {IRIDataPath}dgrf*.dat . ; "
-    cmd += f"ln -s -f {IRIDataPath}igrf*.dat . ; "
-    cmd += f"ln -s -f {IRIDataPath}*.asc . ; "
-    cmd += f"ln -s -f {apf107_src} . ; "
-    cmd += f"ln -s -f {ig_rz_src} . ; "
-    
-   # 3. Execute Fortran driver
-    cmd += f"{exe} {namelist_filename} {IRI_output_filename}"
-    
-    # print(f"\n--- DEBUG: Executing Fortran ---")
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        # Symlinks land inside tmpdir; subprocess cwd=tmpdir keeps everything isolated.
+        # Pass only filenames (not absolute paths) — the Fortran driver resolves
+        # arguments relative to its working directory.
+        cmd = (
+            f"ln -s -f {IRIDataPath}mcsat*.dat . ; "
+            f"ln -s -f {IRIDataPath}dgrf*.dat . ; "
+            f"ln -s -f {IRIDataPath}igrf*.dat . ; "
+            f"ln -s -f {IRIDataPath}*.asc . ; "
+            f"ln -s -f {apf107_src} . ; "
+            f"ln -s -f {ig_rz_src} . ; "
+            f"{exe} {namelist_filename} {IRI_output_filename}"
+        )
 
-    # UNCONDITIONALLY print the Fortran output so we can see what it did
-    # print(f"\n--- FORTRAN EXECUTION OUTPUT ---")
-    # print(f"Return Code: {result.returncode}")
-    # print(f"STDOUT:\n{result.stdout.strip()}")
-    # print(f"STDERR:\n{result.stderr.strip()}")
-    # print(f"--------------------------------\n")
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=tmpdir)
+        if result.returncode != 0 or not os.path.exists(out_path):
+            raise RuntimeError(
+                f"IRI2020 failed (rc={result.returncode}):\n"
+                f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+            )
 
-    # 4. Clean up symlinks 
-    os.system("rm -f mcsat*.dat dgrf*.dat igrf*.dat *.asc apf107.dat ig_rz.dat")
-
-    # Now proceed to read the file (which will still crash with EOFError, 
-    # but we will finally see the STDOUT/STDERR above it!)
-    return read_IRI2020_binary_output(IRI_output_filename)
+        return read_IRI2020_binary_output(out_path)
     
 def write_IRI2020_namelist(DateTime: str,
                     altitude: np.ndarray,
@@ -290,57 +262,46 @@ def write_IRI2020_namelist(DateTime: str,
         f.write('/ \n')
 
     return 0   
-           
-<<<<<<< HEAD
 
-def read_IRI2020_binary_output(IRI_output_filename: str) -> tuple(np.ndarray,np.ndarray):
-=======
-def read_IRI2020_binary_output(IRI_output_filename: str) -> np.ndarray:
->>>>>>> main
+def read_IRI2020_binary_output(IRI_output_filename: str) -> tuple[np.ndarray, np.ndarray]:
     with open(IRI_output_filename, 'rb') as f:
         data = f.read()
     
-<<<<<<< HEAD
-    npts=int.from_bytes(data[0:4],byteorder="little",signed=True) 
-    nSample=int.from_bytes(data[4:8],byteorder="little",signed=True)
-    nheight=int.from_bytes(data[8:12],byteorder="little",signed=True)
-    #print([nheight,npts,nSample])
-    edps = np.ndarray([nheight,npts,nSample])
-    feature_edps = np.ndarray([13,npts,nSample])
-=======
-    # 1. Check if file is completely empty or just garbage
-    if len(data) < 12:
-        raise ValueError(f"File {IRI_output_filename} is too short ({len(data)} bytes). The Fortran driver crashed immediately.")
-        
+    # 1. Read Header
     npts = int.from_bytes(data[0:4], byteorder="little", signed=True) 
     nSample = int.from_bytes(data[4:8], byteorder="little", signed=True)
     nheight = int.from_bytes(data[8:12], byteorder="little", signed=True)
     
-    # 2. Pre-calculate expected file size
-    expected_size = 12 + (npts * nSample * nheight * 4)
-    if len(data) < expected_size:
-        print(f"DEBUG: npts={npts}, nSample={nSample}, nheight={nheight}")
-        raise EOFError(
-            f"File {IRI_output_filename} is missing data. Expected {expected_size} bytes, "
-            f"but only got {len(data)}. The Fortran driver crashed mid-execution. "
-            f"Check 'iri2020_namelist_driver.log' to see the Fortran error."
+    # 2. Validation Check (This will catch your error safely)
+    expected_bytes = 12 + (nSample * npts * (nheight + 13) * 4)
+    actual_bytes = len(data)
+    
+    if expected_bytes != actual_bytes:
+        print(f"Header Variables: nheight={nheight}, npts={npts}, nSample={nSample}")
+        raise ValueError(
+            f"[!] File size mismatch in {IRI_output_filename}\n"
+            f"    Expected: {expected_bytes} bytes based on header.\n"
+            f"    Actual:   {actual_bytes} bytes.\n"
+            f"    Possible causes: Wrong Endianness, incomplete file write, or Fortran markers."
         )
 
-    # 3. Safely extract data using [0] instead of float()
-    edps = np.ndarray([nheight, npts, nSample])
->>>>>>> main
-    cbyte = 12
-    for idxSample in range(nSample):
-        for idxpts in range(npts):
-            for idxheight in range(nheight):
-                edps[idxheight, idxpts, idxSample] = np.frombuffer(data[cbyte:cbyte+4], dtype=np.float32)[0]
-                cbyte += 4
-                
-            for idx_feature in range(13):
-                feature_edps[idx_feature,idxpts,idxSample] = float(np.frombuffer(data[cbyte:cbyte+4],dtype=np.float32))
-                cbyte += 4
+    # 3. Vectorized Data Parsing (Orders of magnitude faster than nested loops)
+    # Read all remaining floats in one go
+    all_floats = np.frombuffer(data[12:], dtype=np.float32)
+    
+    # Reshape based on your loop structure (Sample -> pts -> [heights + features])
+    reshaped_data = all_floats.reshape((nSample, npts, nheight + 13))
+    
+    # Slice out the EDPs and Features
+    edps_slice = reshaped_data[:, :, :nheight]       # Shape: (nSample, npts, nheight)
+    features_slice = reshaped_data[:, :, nheight:]   # Shape: (nSample, npts, 13)
+    
+    # Transpose the arrays to match your required output shapes
+    # Axis mapping: (Sample=0, Pts=1, Val=2) -> (Val=2, Pts=1, Sample=0)
+    edps = np.transpose(edps_slice, (2, 1, 0)).copy()
+    feature_edps = np.transpose(features_slice, (2, 1, 0)).copy()
+    
     return edps, feature_edps
-
 
 def plot_polar_mesh(vertices: np.ndarray, triangles: np.ndarray, pole: str = "north", ax=None):
     """
@@ -884,8 +845,6 @@ class EDPSamples(xr.Dataset):
 
         return vertices, triangles
     
-<<<<<<< HEAD
-=======
     @staticmethod
     def rayTangent(LEO, GNSS, units='km'):
         """Calculates the tangent points and altitude of the raypath."""
@@ -962,6 +921,88 @@ class EDPSamples(xr.Dataset):
         
         return p1, p2, p3
 
+    @staticmethod
+    def genGlobalArea(dSpace: float) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Approximately equal-area triangular mesh covering the entire globe.
+    
+        Uses a Fibonacci sphere lattice for near-uniform vertex distribution and
+        a convex-hull triangulation (equivalent to Delaunay on the sphere surface)
+        for connectivity.  Unlike ``genRectangularArea(-180,180,dLon,-90,90,dLat)``,
+        this mesh avoids polar over-sampling: every triangle has a similar physical
+        area regardless of latitude.
+    
+        Parameters
+        ----------
+        dSpace : float
+            Target great-circle spacing between adjacent vertices in degrees.
+            Smaller values produce finer meshes.  For reference, dSpace=5 gives
+            roughly the same mid-latitude density as a 5°×5° rectangular grid
+            but with ~75 % fewer vertices at the poles.
+    
+        Returns
+        -------
+        vertices : ndarray, shape (N, 2)
+            Columns are [longitude, latitude] in degrees, matching the convention
+            used by ``genRectangularArea`` and ``genPolarArea``.
+        triangles : ndarray, shape (T, 3)
+            Triangle connectivity — each row holds three indices into ``vertices``.
+        """
+        from scipy.spatial import ConvexHull
+    
+        # Number of vertices so that the average inter-vertex arc ≈ dSpace degrees.
+        # Surface area of the unit sphere = 4π sr; each vertex "owns" roughly
+        # dSpace_rad² of solid angle, so N ≈ 4π / dSpace_rad².
+        dSpace_rad = np.radians(dSpace)
+        n_pts = max(12, int(round(4.0 * np.pi / dSpace_rad ** 2)))
+    
+        # Fibonacci (Vogel's) lattice — the tightest quasi-uniform packing on S².
+        # The golden angle (≈ 137.5°) ensures no two points share the same longitude
+        # spacing, eliminating the meridional banding that plagues regular grids.
+        golden = np.pi * (np.sqrt(5.0) - 1.0)       # golden angle in radians
+        idx    = np.arange(n_pts, dtype=float)
+    
+        # Map index linearly onto sin(lat) ∈ (−1, 1) for equal-area latitude spacing:
+        # equal steps in sin(lat) → equal-area latitude bands.
+        sin_lat = 1.0 - 2.0 * (idx + 0.5) / n_pts
+        lat_deg = np.degrees(np.arcsin(sin_lat))
+    
+        # Longitude spirals by one golden angle per point.
+        lon_deg = np.degrees(golden * idx % (2.0 * np.pi)) - 180.0   # → (−180, 180]
+    
+        # ECEF unit-sphere coordinates (R = 1).
+        cos_lat = np.sqrt(np.clip(1.0 - sin_lat ** 2, 0.0, 1.0))
+        lon_rad = np.radians(lon_deg)
+        xyz = np.column_stack([
+            cos_lat * np.cos(lon_rad),
+            cos_lat * np.sin(lon_rad),
+            sin_lat,
+        ])
+    
+        # ConvexHull of points on the unit sphere ≡ Delaunay triangulation on S².
+        # This sidesteps the periodic-boundary problem at lon = ±180° that plagues
+        # 2-D Delaunay approaches.
+        hull = ConvexHull(xyz)
+    
+        # scipy guarantees outward-pointing face normals, but enforce CCW winding
+        # explicitly so downstream code (tripcolor, barycentric tests) is consistent.
+        simplices = hull.simplices.copy()
+        v0 = xyz[simplices[:, 0]]
+        v1 = xyz[simplices[:, 1]]
+        v2 = xyz[simplices[:, 2]]
+        normals   = np.cross(v1 - v0, v2 - v0)          # (T, 3)
+        centroids = (v0 + v1 + v2) / 3.0                # (T, 3)
+        flip = (normals * centroids).sum(axis=1) < 0     # dot product per triangle
+    
+        # Swap columns 1 and 2 on every flipped triangle (vectorised, no aliasing).
+        simplices[flip, 1], simplices[flip, 2] = (
+            simplices[flip, 2].copy(),
+            simplices[flip, 1].copy(),
+        )
+    
+        vertices  = np.column_stack([lon_deg, lat_deg])
+        triangles = simplices.astype(int)
+        return vertices, triangles
     @staticmethod
     def generate_occultation_mesh(pt1=None, pt2=None, pt3=None, filename=None, dLat=0.5, dLon=0.5, alt_limit=600.0):
         """
@@ -1083,19 +1124,18 @@ class EDPSamples(xr.Dataset):
         segment = np.column_stack((np.arange(num_points-1),np.arange(1,num_points)))
         return vertice, segment
 
->>>>>>> main
     def __init__(cls,
         DateTime: str,
-        geo_type : Literal["Point","Rectangle","Polar","Occultation"],
+        geo_type : Literal["Point", "Rectangle", "Polar", "Occultation", "Global"],
         altitude: np.ndarray,
-        sampling_parameters: pd.Dataframe,
+        sampling_parameters: pd.DataFrame,
         evaluate_iri: int = None,
-        minLon: float =None,
-        maxLon: float =None,
-        dLon: float =None,
-        minLat: float =None,
-        maxLat: float =None,
-        dLat: float =None,
+        minLon: float = None,
+        maxLon: float = None,
+        dLon: float = None,
+        minLat: float = None,
+        maxLat: float = None,
+        dLat: float = None,
         Lon: float = None,
         Lat: float = None,
         filename: str = None,
@@ -1105,6 +1145,7 @@ class EDPSamples(xr.Dataset):
         alt_limit: float = 700.0,
         edps: np.ndarray = None,
         feature_edps: np.ndarray = None,
+        equal_spaced: bool = False,
         attrs = None):
         #) -> EDPSamples:
         """
@@ -1112,7 +1153,7 @@ class EDPSamples(xr.Dataset):
 
         Parameters
         ----------
-        geo_type : Literal["Point",Rectangle","Polar","Occultation"], type of 2D grid
+        geo_type : Literal["Point","Rectangle","Polar","Occultation","Global"], type of 2D grid
         altitude : (n_height,) array
             1D altitude (or height coordinate) for each index along ``height``.
         sampling_parameters: pd.Dataframe,
@@ -1123,19 +1164,19 @@ class EDPSamples(xr.Dataset):
         minLat: float =None, minimum latitude for rectangular lat, lon grid. Also
                 for polar grid.
         maxLat: float =None, maximum latitude for rectangular lat, lon grid.
-        dLat: float =None, Latitude step for rectangular and prolar grid.
+        dLat: float =None, Latitude step for rectangular and polar grid.
         Lon: float = None, Longitude of single control point.
         Lat: float = None, Latitude of single control point.
         filename: str = None, filename for the RO data (needed only if pt1,pt2,pt3 are missing)
         pt1: tuple = None, points that define the triangular region for a RO
         pt2: tuple = None, points that define the triangular region for a RO
         pt3: tuple = None, points that define the triangular region for a RO
-        alt_limit: float = 600.0, altitude defining the traingular region assciated with a RO.
+        alt_limit: float = 700.0, altitude defining the traingular region assciated with a RO.
                                   (needed only if pt1,pt2,pt3 are missing)
         edps: numpy array, sample edps
         feature_edps: np.ndarray = None, sample features of edps
+        equal_spaced: bool = False, if True, generates a globally equal-spaced grid. If False, uses dLat/dLon.
         attrs : mapping, optional Dataset attributes.
-        
         """
         if attrs is None:
             attrs = sampling_parameters.attrs
@@ -1154,21 +1195,16 @@ class EDPSamples(xr.Dataset):
                 mesh = None
             case "Rectangle":
                 if minLon == None or maxLon == None or dLon == None or minLat == None or maxLat == None or dLat == None:
-                    raise ValueError("For geo_type Rectangle, minLon, maxLon, dLon,minLat,maxLat, and dLat cannot be None.")
-                geolocation, mesh = cls.genRectangularArea(minLon, maxLon, dLon,minLat,maxLat, dLat)
+                    raise ValueError("For geo_type Rectangle, minLon, maxLon, dLon, minLat, maxLat, and dLat cannot be None.")
+                geolocation, mesh = cls.genRectangularArea(minLon, maxLon, dLon, minLat, maxLat, dLat)
             case "Polar":
                 if minLat == None or dLat == None :
-                    raise ValueError("For geo_type minLat, and dLat cannot be None.")
+                    raise ValueError("For geo_type Polar, minLat, and dLat cannot be None.")
                 if minLat > 0:
                     pole="north"
                 else:
                     pole="south"
-
-<<<<<<< HEAD
-                geolocation, mesh =cls.genPolarArea(pole,minLat,dLat)
-=======
                 geolocation, mesh = cls.genPolarArea(pole,minLat,dLat)
->>>>>>> main
             case "Occultation":
                 if filename is None and (pt1 is None or pt2 is None or pt3 is None):
                     raise ValueError("For geo_type Occultation, you must provide either a 'filename' or all three points ('pt1', 'pt2', 'pt3').")
@@ -1188,6 +1224,17 @@ class EDPSamples(xr.Dataset):
                         dLat=dLat, dLon=dLon, 
                         alt_limit=alt_limit
                     )
+            case "Global":
+                if equal_spaced:
+                    if dLat is None:
+                        raise ValueError("For geo_type Global with equal_spaced=True, provide dLat as the target average spacing.")
+                    # NOTE: You will need to implement this new method in your class!
+                    geolocation, mesh = cls.genGlobalArea(dSpace=dLat)
+                else:
+                    if dLat is None or dLon is None:
+                        raise ValueError("For geo_type Global with equal_spaced=False, both dLat and dLon must be provided.")
+                    # Re-use the rectangular area spanning the entire globe
+                    geolocation, mesh = cls.genRectangularArea(-180.0, 180.0, dLon, -90.0, 90.0, dLat)
             case _:
                 raise ValueError(f"Invalid geo_type: {geo_type}")
 
@@ -1296,8 +1343,10 @@ class EDPSamples(xr.Dataset):
                 attrs["pt1"] = pt1
                 attrs["pt2"] = pt2
                 attrs["pt3"] = pt3
-                attrs["dLon"] = dLon
-                attrs["dLat"] = dLat
+                # Fixed bug here (dLon/dLat were being forced to 5 below)
+                attrs["dLon"] = dLon if dLon is not None else 5
+                attrs["dLat"] = dLat if dLat is not None else 5
+                attrs["alt_limit"] = alt_limit
             case "Polar":
                 attrs["minLat"] = minLat
                 attrs["dLat"] = dLat
@@ -1305,20 +1354,18 @@ class EDPSamples(xr.Dataset):
                     attrs["pole"] = "north"
                 else:
                     attrs["pole"] = "south"
-            case "Occultation":
-                    attrs["pt1"] = pt1
-                    attrs["pt2"] = pt2 
-                    attrs["pt3"] = pt3 
-                    attrs["filename"] = filename 
-                    attrs["dLat"] = 5
-                    attrs["dLon"] =5 
-                    attrs["alt_limit"] = alt_limit
+            case "Global":
+                # NetCDF cannot save booleans. Convert True/False to 1/0
+                attrs["equal_spaced"] = int(equal_spaced) 
                 
+                # NetCDF also hates 'None' types, so we default them to 0.0 if missing
+                attrs["dLat"] = dLat if dLat is not None else 0.0
+                attrs["dLon"] = dLon if dLon is not None else 0.0
+
         super().__init__(
             data_vars=data_vars,
             coords=coords,
             attrs=attrs)
-        
 
     @classmethod
     def fromNetCDF(cls, path: str | Path, **kwargs: Any) -> EDPSamples:
@@ -1374,11 +1421,9 @@ class EDPSamples(xr.Dataset):
                assert "Lat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (3)."]
                return EDPSamples(ds.attrs["DateTime"],ds.attrs["geo_type"],
                                 altitude, sampling_parameters, 
-<<<<<<< HEAD
                                 Lon=ds.attrs["Lon"],Lat=ds.attrs["Lon"],
                                 edps=edps,feature_edps=feature_edps,attrs=ds.attrs)
-=======
-                                Lon=ds.attrs["Lon"],Lat=ds.attrs["Lon"],edps=edps,attrs=ds.attrs)
+
             case "LOS":
                 assert "LOS_LEO" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (4)."]
                 assert "LOS_GNSS" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (5)."]
@@ -1396,7 +1441,6 @@ class EDPSamples(xr.Dataset):
                                 pt1=ds.attrs.get("pt1"), pt2=ds.attrs.get("pt2"), pt3=ds.attrs.get("pt3"),
                                 dLat=ds.attrs.get("dLat"), dLon=ds.attrs.get("dLon"),
                                 edps=edps, attrs=ds.attrs)
->>>>>>> main
             case "Rectangle":
                 assert "minLon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (7)."]
                 assert "maxLon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (8)."]

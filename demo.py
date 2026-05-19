@@ -39,11 +39,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "EDPSamples" / "Locate in mesh" / "outputs"))
 sys.path.insert(0, str(ROOT / "iri2020_new" / "src" ))
 
-<<<<<<< HEAD
 print(ROOT)
-=======
 import os
->>>>>>> main
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -67,6 +64,7 @@ from EDPSamples.generate_rect_tri_mesh import generate_rect_tri_mesh
 from EDPSamples.generate_polar_mesh import generate_ploar_mesh   # note: typo in source
 
 from Ionosphere_Tomography_Inverter.Ionophy_Tomography_Inverter import Ionosphere_Tomography_Inverter
+from Ionosphere_Tomography_Inverter.Ionophy_Tomography_Inverter_RelTEC import Ionosphere_Tomography_Inverter_RelTEC
 
 # Standalone spherical point-in-triangle algorithm (no WGS84 altitude bug)
 from locate_in_mesh import find_containing_triangles as find_triangle_sphere
@@ -895,17 +893,9 @@ def section12(podTc2_file: str) -> tuple[np.ndarray, np.ndarray, tuple, tuple, t
     
     _banner("§12 Occultation Defined Grid Points")
     
-<<<<<<< HEAD
-    
-    # podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
-    podTc2_string = "podTc2_GN05.2025.315.00.04.0032.G23.01_0000.0001_nc"
-    podTc2_file = f"/Users/cwang/Documents/Consulting/PlanetIQ/Data/SampleData/2025.315/{podTc2_string}"
-    
-    
-=======
     # Extract the filename from the path to use in the save string
     podTc2_string = podTc2_file.split('/')[-1]
->>>>>>> main
+
     save_path = f"./Figures/Examples/{podTc2_string}_mesh_geometry.png"
     
     podTc_data = parse_podTc2_nc_file(podTc2_file)
@@ -1822,11 +1812,23 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     # 4. Run Assimilation
     print("\n  -> Running Data Assimilation...")
     posterior_state_flat = inverter.assimilate(
-        obs=measured_tec_clean, 
-        podTc2_data=None, 
-        obs_operator=H_unscaled, 
-        relaxation=0.95, 
+        obs=measured_tec_clean,
+        podTc2_data=None,
+        obs_operator=H_unscaled,
+        relaxation=0.95,
         measurement_err=1.0
+    )
+
+    # 4b. RelTEC Assimilation (no topside approximation)
+    print("  -> Running RelTEC Assimilation...")
+    rel_inverter = Ionosphere_Tomography_Inverter_RelTEC(EDPSam=eds_occ, meanscale=1)
+    H_rel = rel_inverter.get_observation_operator(podTc_clean)
+    reltec_state_flat = rel_inverter.assimilate(
+        obs=measured_tec_clean,
+        obs_operator=H_rel,
+        tangent_alt_km=tangent_alt_clean,
+        relaxation=0.95,
+        measurement_err=1.0,
     )
 
     # 5. Evaluate Results & Reshape
@@ -1839,19 +1841,24 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
 
     prior_tec = (H_clean @ prior_state_clean).flatten()
     posterior_tec = (H_clean @ posterior_state_clean).flatten()
-    
+    reltec_tec = (np.asarray(H_rel) @ np.asarray(reltec_state_flat)).flatten()
+
     n_height = len(alt_grid)
     n_geo = eds_occ.geolocation.shape[0]
-    
+
     prior_edp_3d = prior_state_flat.reshape(n_height, n_geo)
     prior_edp_3d[prior_edp_3d == 0] = np.nan
-    
+
     posterior_edp_3d = posterior_state_flat.reshape(n_height, n_geo)
     posterior_edp_3d[posterior_edp_3d == 0] = np.nan
-    
-    center_idx = n_geo // 2 
+
+    reltec_edp_3d = np.asarray(reltec_state_flat).reshape(n_height, n_geo)
+    reltec_edp_3d[reltec_edp_3d == 0] = np.nan
+
+    center_idx = n_geo // 2
     prior_profile = prior_edp_3d[:, center_idx]
     posterior_profile = posterior_edp_3d[:, center_idx]
+    reltec_profile = reltec_edp_3d[:, center_idx]
 
     save_dir = "./Figures/Section18_Visual_Assessments2/"
     os.makedirs(save_dir, exist_ok=True)
@@ -1873,6 +1880,7 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax1_1.plot(measured_tec_clean, tangent_alt_clean, color='black', lw=3, label="Measured TEC")
     ax1_1.plot(prior_tec, tangent_alt_clean, color='tab:red', lw=2, ls='--', label="Prior (H Matrix)")
     ax1_1.plot(posterior_tec, tangent_alt_clean, color='tab:blue', lw=2, label="Posterior (Assimilated)")
+    ax1_1.plot(reltec_tec, tangent_alt_clean, color='tab:purple', lw=2, ls='-.', label="RelTEC Posterior")
     ax1_1.set_ylabel("Tangent Altitude (km)")
     ax1_1.set_xlabel("Total Electron Content (TECU)")
     ax1_1.set_title("Observation Space: TEC Adjustment")
@@ -1886,6 +1894,7 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax1_2.plot(prior_profile, alt_grid, color='tab:red', lw=2, ls='--', label="Prior Mean Density")
     ax1_2.plot(posterior_profile, alt_grid, color='tab:blue', lw=2, label="Posterior Density")
     ax1_2.fill_betweenx(alt_grid, prior_profile, posterior_profile, color='tab:blue', alpha=0.15, label="Assimilation Delta")
+    ax1_2.plot(reltec_profile, alt_grid, color='tab:purple', lw=2, ls='-.', label="RelTEC Posterior")
     if abel is not None:
         ax1_2.plot(abel['Ne'], abel['alt_km'],
                    color='tab:green', lw=2, ls=':', label="Abel Inversion (Lei)")
@@ -1900,7 +1909,7 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax1_2.xaxis.set_major_formatter(formatter)
     
     # Optional: adjust xlim to ensure non-NaN data is clearly visible
-    max_edp = max(np.nanmax(prior_profile), np.nanmax(posterior_profile))
+    max_edp = max(np.nanmax(prior_profile), np.nanmax(posterior_profile), np.nanmax(reltec_profile[~np.isnan(reltec_profile)]))
     ax1_2.set_xlim(left=0, right=max_edp * 1.1)
     
     ax1_2.grid(True, alpha=0.4, linestyle=':')
@@ -1919,10 +1928,13 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax2.plot(prior_edp_3d, alt_grid, color='tab:red', alpha=0.1, lw=1)
     # Plot all posterior profiles (blue, transparent)
     ax2.plot(posterior_edp_3d, alt_grid, color='tab:blue', alpha=0.1, lw=1)
-    
+    # Plot all RelTEC profiles (purple, transparent)
+    ax2.plot(reltec_edp_3d, alt_grid, color='tab:purple', alpha=0.1, lw=1)
+
     # Add strong lines for the center profile to act as a reference
     ax2.plot(prior_profile, alt_grid, color='darkred', lw=2, ls='--', label="Prior (Center Vertex)")
     ax2.plot(posterior_profile, alt_grid, color='darkblue', lw=2, label="Posterior (Center Vertex)")
+    ax2.plot(reltec_profile, alt_grid, color='purple', lw=2, ls='-.', label="RelTEC (Center Vertex)")
 
     if abel is not None:
         print("Plotting Abel Inversion")
@@ -1932,7 +1944,7 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax2.set_ylabel("Altitude (km)")
     ax2.set_xlabel("Electron Density (m⁻³)")
     ax2.xaxis.set_major_formatter(formatter)
-    ax2.set_xlim(left=0, right=max(np.nanmax(prior_edp_3d), np.nanmax(posterior_edp_3d)) * 1.1)
+    ax2.set_xlim(left=0, right=max(np.nanmax(prior_edp_3d), np.nanmax(posterior_edp_3d), np.nanmax(reltec_edp_3d[~np.isnan(reltec_edp_3d)])) * 1.1)
     ax2.set_ylim(0, alt_grid[-1])
     ax2.grid(True, alpha=0.4, linestyle=':')
     
@@ -1941,10 +1953,13 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     custom_lines = [
         Line2D([0], [0], color='tab:red', lw=2, alpha=0.5),
         Line2D([0], [0], color='tab:blue', lw=2, alpha=0.5),
+        Line2D([0], [0], color='tab:purple', lw=2, alpha=0.5),
         Line2D([0], [0], color='darkred', lw=2, ls='--'),
-        Line2D([0], [0], color='darkblue', lw=2)
+        Line2D([0], [0], color='darkblue', lw=2),
+        Line2D([0], [0], color='purple', lw=2, ls='-.'),
     ]
-    ax2.legend(custom_lines, ['Prior (All Vertices)', 'Posterior (All Vertices)', 'Prior (Center)', 'Posterior (Center)'], loc='upper right')
+    ax2.legend(custom_lines, ['Prior (All Vertices)', 'Posterior (All Vertices)', 'RelTEC (All Vertices)',
+                               'Prior (Center)', 'Posterior (Center)', 'RelTEC (Center)'], loc='upper right')
     
     plt.tight_layout()
     fig2.savefig(os.path.join(save_dir, f"{filename}_plot2_all_profiles.png"), dpi=150)
@@ -2104,30 +2119,32 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ray_x, ray_y = proj_aeqd(ray_lons, ray_lats)
 
     # 3. Interpolate the 3D grid along this 2D slice
-    prior_slice = np.full((n_height, len(t)), np.nan)
-    post_slice  = np.full((n_height, len(t)), np.nan)
+    prior_slice  = np.full((n_height, len(t)), np.nan)
+    post_slice   = np.full((n_height, len(t)), np.nan)
+    reltec_slice = np.full((n_height, len(t)), np.nan)
 
     mesh_points = np.column_stack((mesh_x, mesh_y))
     ray_points = np.column_stack((ray_x, ray_y))
 
-    # Fast 2D interpolation height-by-height 
+    # Fast 2D interpolation height-by-height
     # (Yields NaNs when the ray leaves the bounds of your occultation mesh)
     for h in range(n_height):
-        interp_prior = LinearNDInterpolator(mesh_points, prior_edp_3d[h, :])
-        interp_post  = LinearNDInterpolator(mesh_points, posterior_edp_3d[h, :])
-        
-        prior_slice[h, :] = interp_prior(ray_points)
-        post_slice[h, :]  = interp_post(ray_points)
+        interp_prior  = LinearNDInterpolator(mesh_points, prior_edp_3d[h, :])
+        interp_post   = LinearNDInterpolator(mesh_points, posterior_edp_3d[h, :])
+        interp_reltec = LinearNDInterpolator(mesh_points, reltec_edp_3d[h, :])
+
+        prior_slice[h, :]  = interp_prior(ray_points)
+        post_slice[h, :]   = interp_post(ray_points)
+        reltec_slice[h, :] = interp_reltec(ray_points)
 
     delta_slice = post_slice - prior_slice
 
-    # 4. Plotting the 3x1 Vertical Slices
-    fig4, axes4 = plt.subplots(3, 1, figsize=(10, 12), sharex=True, sharey=True, layout='constrained')
+    # 4. Plotting the 4x1 Vertical Slices
+    fig4, axes4 = plt.subplots(4, 1, figsize=(10, 16), sharex=True, sharey=True, layout='constrained')
     fig4.suptitle(f"Vertical EDP Slice Along Lowest Occultation Ray\n{filename}", fontsize=16)
 
-    # This forces Plot 4 to share the exact same scale as Plot 3
     vmin_edp = 0
-    vmax_edp = max(np.nanmax(prior_edp_3d), np.nanmax(posterior_edp_3d))
+    vmax_edp = max(np.nanmax(prior_edp_3d), np.nanmax(posterior_edp_3d), np.nanmax(reltec_edp_3d[~np.isnan(reltec_edp_3d)]))
     max_delta = np.nanmax(np.abs(posterior_edp_3d - prior_edp_3d))
     # ---------------------------------------------------------------
 
@@ -2145,17 +2162,23 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax4_2.set_title("Posterior EDP Cross-Section", fontsize=14)
     ax4_2.set_ylabel("Altitude (km)")
 
-    # Shared Colorbar for 1 & 2
-    cbar1 = fig4.colorbar(pcm2, ax=axes4[:2], orientation='vertical', fraction=0.03, pad=0.03)
+    # --- Subplot 3: RelTEC Posterior ---
+    ax4_3 = axes4[2]
+    pcm3 = ax4_3.pcolormesh(X, Y, reltec_slice, cmap='plasma', shading='auto', vmin=vmin_edp, vmax=vmax_edp)
+    ax4_3.set_title("RelTEC Posterior Cross-Section", fontsize=14)
+    ax4_3.set_ylabel("Altitude (km)")
+
+    # Shared Colorbar for subplots 1, 2, and 3
+    cbar1 = fig4.colorbar(pcm3, ax=axes4[:3], orientation='vertical', fraction=0.03, pad=0.03)
     cbar1.set_label("Electron Density (m⁻³)", fontsize=14)
     cbar1.formatter.set_powerlimits((-2, 2))
 
-    # --- Subplot 3: Delta ---
-    ax4_3 = axes4[2]
-    pcm3 = ax4_3.pcolormesh(X, Y, delta_slice, cmap='coolwarm', shading='auto', vmin=-max_delta, vmax=max_delta)
-    ax4_3.set_title("Delta (Post - Prior)", fontsize=14)
-    ax4_3.set_xlabel("Ground Distance from Tangent Point (km) [ GNSS ←  0  → LEO ]")
-    ax4_3.set_ylabel("Altitude (km)")
+    # --- Subplot 4: Delta (Posterior - Prior) ---
+    ax4_4 = axes4[3]
+    pcm4 = ax4_4.pcolormesh(X, Y, delta_slice, cmap='coolwarm', shading='auto', vmin=-max_delta, vmax=max_delta)
+    ax4_4.set_title("Delta (Post - Prior)", fontsize=14)
+    ax4_4.set_xlabel("Ground Distance from Tangent Point (km) [ GNSS ←  0  → LEO ]")
+    ax4_4.set_ylabel("Altitude (km)")
 
     # Mark the tangent point (distance = 0)
     for ax in axes4:
@@ -2164,7 +2187,7 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     axes4[0].legend(loc='upper right')
 
     # Colorbar for Delta
-    cbar2 = fig4.colorbar(pcm3, ax=ax4_3, orientation='vertical', fraction=0.03, pad=0.03)
+    cbar2 = fig4.colorbar(pcm4, ax=ax4_4, orientation='vertical', fraction=0.03, pad=0.03)
     cbar2.set_label("Δ Density (m⁻³)", fontsize=14)
     cbar2.formatter.set_powerlimits((-2, 2))
 
@@ -2174,10 +2197,10 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
         min_dist = distances_km[valid_dist_mask].min()
         max_dist = distances_km[valid_dist_mask].max()
         pad = (max_dist - min_dist) * 0.05
-        ax4_3.set_xlim(min_dist - pad, max_dist + pad)
-    
+        ax4_4.set_xlim(min_dist - pad, max_dist + pad)
+
     # Clip Y-axis to the actual alt_grid limits
-    ax4_3.set_ylim(alt_grid[0], alt_grid[-1])
+    ax4_4.set_ylim(alt_grid[0], alt_grid[-1])
 
 
     fig4.savefig(os.path.join(save_dir, f"{filename}_plot4_vertical_slice.png"), dpi=150)
@@ -2556,6 +2579,272 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
         gc.collect()
 
     return stats
+
+def _process_hourly_mesh(args: tuple) -> tuple:
+    """
+    Parallel worker function to process a single hour's Global EDP generation.
+    Must remain at the top level of the module for multiprocessing to pickle it.
+    """
+    import os
+    import gc
+    import warnings
+    import numpy as np
+    import pandas as pd
+    from EDPSamples.edp_samples import EDPSamples
+    
+    hr, alt_grid, base_sc, n_mc, dLat, dLon, data_dir = args
+    nc_filename = os.path.join(data_dir, f"Global_EDPS_{dLat}_Hour_{hr:02d}.nc")
+    n_height = len(alt_grid)
+    
+    # --- ROBUST Checkpoint Loading ---
+    eds_global = None
+    if os.path.exists(nc_filename):
+        try:
+            eds_global = EDPSamples.fromNetCDF(nc_filename)
+        except Exception:
+            eds_global = None # Force regeneration if corrupted
+            
+    if eds_global is None:
+        np.random.seed(42 + hr) 
+        mc_df = pd.DataFrame({
+            "hour": np.full(n_mc, hr),
+            "f107": np.random.normal(loc=base_sc.get('f107', 130), scale=10, size=n_mc).clip(70, 250),
+            "ap":   np.random.normal(loc=base_sc.get('ap', 15), scale=5, size=n_mc).clip(0, 400),
+            "ig12": np.random.normal(loc=base_sc.get('ig12', 100), scale=10, size=n_mc).clip(50, 200),
+            "rz12": np.random.normal(loc=base_sc.get('rz12', 100), scale=10, size=n_mc).clip(50, 200),
+        })
+        
+        time_str = f"2015-06-01 {hr:02d}:00:00"
+        eds_global = EDPSamples(
+            DateTime=time_str, 
+            geo_type="Global", 
+            altitude=alt_grid,
+            sampling_parameters=mc_df, 
+            evaluate_iri=1,
+            equal_spaced=False, 
+            dLat=dLat, 
+            dLon=dLon
+        )
+        eds_global.saveNetCDF(nc_filename)
+
+    # ==========================================
+    # Calculate Covariance for this hour (Masked Array Approach)
+    # ==========================================
+    edps_3d = eds_global.edps
+    
+    # 1. Safely calculate mean, ignoring warnings if an altitude is 100% NaN
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        mean_edps = np.nanmean(edps_3d, axis=2, keepdims=True)
+    
+    # 2. Subtract to get anomalies
+    anomalies = edps_3d - mean_edps 
+    anomalies_flat = anomalies.reshape(n_height, -1) 
+    
+    # 3. CRITICAL: Use Masked Arrays to hide NaNs element-by-element
+    masked_anomalies = np.ma.masked_invalid(anomalies_flat)
+    
+    # 4. Calculate covariance (np.ma.cov handles the mask automatically!)
+    cov_matrix_ma = np.ma.cov(masked_anomalies)
+    
+    # 5. Convert back to a standard numpy array
+    cov_matrix = cov_matrix_ma.filled(np.nan)
+        
+    # --- Extracted Variance at 300 km ---
+    idx_300 = int(np.argmin(np.abs(alt_grid - 300.0)))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        var_300km = np.nanvar(edps_3d[idx_300, :, :], axis=1) 
+    # ==========================================
+    
+    # Aggressive cleanup
+    del eds_global, edps_3d, mean_edps, anomalies, anomalies_flat
+    gc.collect()
+    
+    return hr, nc_filename, cov_matrix, var_300km
+
+def section21(alt_grid: np.ndarray, sampling_df: pd.DataFrame, 
+              dLat: float = 10.0, dLon: float = 15.0, num_workers: int = 6) -> dict:
+    """
+    §21 Universal Global Covariance Generator (Parallelized)
+    Generates a global mesh for all 24 hours using parallel processing. 
+    Saves each ensemble to NetCDF, calculates vertical covariances, 
+    and outputs a Universal Covariance Matrix and 300km Variance map.
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import SymLogNorm
+    import os
+    import warnings
+    import multiprocessing as mp
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    import xarray as xr
+    
+    try:
+        _banner("§21  Universal Global Covariance Generator")
+    except NameError:
+        print("\n=== §21  Universal Global Covariance Generator ===")
+        
+    data_dir = "./Data/Section21_Global_EDPS/"
+    save_dir = "./Figures/Section21_Universal_Covariance/"
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(save_dir, exist_ok=True)
+    
+    n_mc = 50 
+    base_sc = sampling_df.iloc[0]
+    
+    hourly_nc_paths = {}
+    hourly_covariances = {}
+    hourly_var_300 = {}
+    
+    print(f" -> Generating Global Meshes ({dLat}° x {dLon}°) for 24 hours...")
+    print(f"    Ensemble size: {n_mc} | CPU Workers: {num_workers}")
+
+    tasks = [(hr, alt_grid, base_sc, n_mc, dLat, dLon, data_dir) for hr in range(24)]
+    
+    with mp.Pool(processes=num_workers, maxtasksperchild=1) as pool:
+        for i, result in enumerate(pool.imap_unordered(_process_hourly_mesh, tasks)):
+            hr, nc_filename, cov_matrix, var_300 = result
+            hourly_nc_paths[hr] = nc_filename
+            hourly_covariances[hr] = cov_matrix
+            hourly_var_300[hr] = var_300
+            print(f"    [+] Finished Hour {hr:02d}:00  ({i+1}/24 completed)")
+
+    print("\n -> All 24 hours processed successfully. Consolidating matrix...")
+
+    sorted_covs = [hourly_covariances[h] for h in sorted(hourly_covariances.keys())]
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        universal_cov = np.nanmean(sorted_covs, axis=0)
+        
+    np.save(os.path.join(save_dir, "Universal_Vertical_Covariance.npy"), universal_cov)
+    
+    sorted_vars = [hourly_var_300[h] for h in sorted(hourly_var_300.keys())]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        universal_var_300 = np.nanmean(sorted_vars, axis=0)
+
+    # =========================================================
+    # Plot 1: 24-Hour Covariance Grid
+    # =========================================================
+    print(" -> Generating 24-Panel Hourly Covariance Visualization...")
+    fig1, axes1 = plt.subplots(4, 6, figsize=(20, 14), sharex=True, sharey=True)
+    fig1.suptitle("Hourly Vertical EDP Covariance Matrices (Global Average)", fontsize=18)
+    
+    all_covs = np.array(sorted_covs)
+    
+    # Bulletproof vmax calculation
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        if np.all(np.isnan(all_covs)):
+            vmax = 1e20
+        else:
+            vmax = np.nanmax(np.abs(all_covs))
+            
+    if np.isnan(vmax) or vmax == 0:
+        vmax = 1e20
+        
+    linthresh = max(vmax * 1e-5, 1e-10) 
+    alt_extent = [alt_grid[0], alt_grid[-1], alt_grid[0], alt_grid[-1]]
+    
+    for hr in range(24):
+        ax = axes1[hr // 6, hr % 6]
+        cov_hr = hourly_covariances[hr]
+        
+        pcm = ax.imshow(cov_hr, 
+                        norm=SymLogNorm(linthresh=linthresh, vmin=-vmax, vmax=vmax), 
+                        cmap='coolwarm', 
+                        extent=alt_extent, 
+                        origin='lower', 
+                        aspect='auto')
+                        
+        ax.set_title(f"{hr:02d}:00 UT")
+        if hr % 6 == 0:
+            ax.set_ylabel("Altitude (km)")
+        if hr >= 18:
+            ax.set_xlabel("Altitude (km)")
+            
+    cbar_ax = fig1.add_axes([0.92, 0.15, 0.02, 0.7])
+    fig1.colorbar(pcm, cax=cbar_ax, label="Covariance (m⁻⁶)")
+    
+    fig1.savefig(os.path.join(save_dir, "Hourly_Covariances_24Panel.png"), dpi=150, bbox_inches='tight')
+    plt.close(fig1)
+
+    # =========================================================
+    # Plot 2: The Universal Covariance & Correlation Matrices
+    # =========================================================
+    print(" -> Generating Universal Matrix Summary Plot...")
+    
+    std_devs = np.sqrt(np.diag(universal_cov))
+    outer_std = np.outer(std_devs, std_devs)
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        universal_corr = universal_cov / np.where(outer_std == 0, 1e-10, outer_std)
+    
+    fig2, axes2 = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    fig2.suptitle("Universal Global Vertical Error Statistics", fontsize=16)
+    
+    pcm1 = axes2[0].imshow(universal_cov, 
+                           norm=SymLogNorm(linthresh=linthresh, vmin=-vmax, vmax=vmax), 
+                           cmap='coolwarm', 
+                           extent=alt_extent, 
+                           origin='lower', 
+                           aspect='auto')
+                           
+    axes2[0].set_title("Universal Covariance Matrix ($P$)")
+    axes2[0].set_xlabel("Altitude (km)")
+    axes2[0].set_ylabel("Altitude (km)")
+    fig2.colorbar(pcm1, ax=axes2[0], label="Covariance (m⁻⁶)")
+    
+    pcm2 = axes2[1].imshow(universal_corr, 
+                           cmap='coolwarm', 
+                           vmin=-1, vmax=1, 
+                           extent=alt_extent, 
+                           origin='lower', 
+                           aspect='auto')
+                           
+    axes2[1].set_title("Universal Correlation Matrix")
+    axes2[1].set_xlabel("Altitude (km)")
+    fig2.colorbar(pcm2, ax=axes2[1], label="Correlation Coefficient")
+    
+    fig2.savefig(os.path.join(save_dir, "Universal_Covariance_Summary.png"), dpi=150, bbox_inches='tight')
+    plt.close(fig2)
+
+    # =========================================================
+    # Plot 3: Global Variance Map at 300 km
+    # =========================================================
+    print(" -> Generating Global Variance Map at 300 km...")
+    
+    # Fast bypass read using xarray
+    with xr.open_dataset(hourly_nc_paths[0]) as ds:
+        verts = ds['geolocation'].values
+        tris = ds['Mesh'].values
+    
+    fig3 = plt.figure(figsize=(12, 6))
+    ax3 = fig3.add_subplot(1, 1, 1, projection=ccrs.Robinson())
+    ax3.set_global()
+    ax3.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, edgecolor='gray')
+
+    tc = ax3.tripcolor(verts[:, 0], verts[:, 1], tris, universal_var_300,
+                       transform=ccrs.Geodetic(), cmap='magma', shading='flat')
+
+    cbar = fig3.colorbar(tc, ax=ax3, orientation='horizontal', shrink=0.7, pad=0.05)
+    cbar.set_label("Daily Average Density Variance (m⁻⁶) at 300 km")
+    cbar.formatter.set_powerlimits((-2, 2))
+    ax3.set_title("Universal EDP Variance at 300 km (Monte Carlo Ensemble)")
+
+    fig3.savefig(os.path.join(save_dir, "Universal_Variance_Map_300km.png"), dpi=150, bbox_inches='tight')
+    plt.close(fig3)
+    
+    import gc
+    del verts, tris, universal_var_300
+    gc.collect()
+
+    return hourly_nc_paths
+
 # ────────────────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────────────────
@@ -2603,117 +2892,128 @@ def main() -> None:
     # section15()
     
 
+    # alt_grid = np.arange(60.0, 1000.0, 10.0, dtype=float)
+    # sampling_df = pd.DataFrame([{
+    #     "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
+    # }])
+
+    # podTc2_files = [
+    #     "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
+    #     # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
+    #     # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
+    #     # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
+    #     # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
+    #     # "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
+    #     # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
+    #     # "podTc2_GN04.2025.152.06.23.0026.G31.01_0000.0001_nc" # Very wide occultation
+    #     # "podTc2_GN05.2025.152.06.04.0032.C36.00_0000.0001_nc"
+    #     # "podTc2_GN04.2025.152.06.27.0042.C40.01_0000.0001_nc"
+    #     # "podTc2_GN05.2025.152.03.01.0027.E03.01_0000.0001_nc"
+    # ]
+
+    # base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
+
+    # for f_string in podTc2_files:
+    #         full_path = os.path.join(base_path, f_string)
+            
+    #         # Run the geometry comparison suite
+    #         # eds_dict, tec_results = section16(full_path, alt_grid, sampling_df)
+            
+    #         # Run the assimilation test
+    #         prior_x, post_x = section18(full_path, alt_grid, sampling_df)
+    #         # section19(full_path, alt_grid, sampling_df)
+
+    # print("\n" + "=" * 60)
+    # print("All sections complete — displaying figures.")
+    # print("=" * 60)
+    # # plt.tight_layout()
+    # plt.show()
+    
+
+    
+    # print("=" * 60)
+    # print("IonosphereTomography Batch Processing")
+    # print("=" * 60)
+
     alt_grid = np.arange(60.0, 1000.0, 10.0, dtype=float)
     sampling_df = pd.DataFrame([{
         "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
     }])
 
-    podTc2_files = [
-        "podTc2_GN05.2025.152.06.09.0026.C21.01_0000.0001_nc", # North polar
-        # "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc", # West coast pacific
-        # "podTc2_GN05.2025.152.06.07.0024.E08.01_0000.0001_nc", # Wide occultation polar
-        # "podTc2_GN05.2025.152.03.55.0027.E06.01_0000.0001_nc", # South America vertical occultation
-        # "podTc2_GN05.2025.152.03.53.0031.C39.01_0000.0001_nc", # South America wider occultation
-        # "podTc2_GN05.2025.152.03.52.0027.G24.01_0000.0001_nc", # Eastern coast of South America
-        # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
-        # "podTc2_GN04.2025.152.06.23.0026.G31.01_0000.0001_nc" # Very wide occultation
-        # "podTc2_GN05.2025.152.06.04.0032.C36.00_0000.0001_nc"
-        # "podTc2_GN04.2025.152.06.27.0042.C40.01_0000.0001_nc"
-        # "podTc2_GN05.2025.152.03.01.0027.E03.01_0000.0001_nc"
-    ]
-
-    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.152/"
-
-    for f_string in podTc2_files:
-            full_path = os.path.join(base_path, f_string)
-            
-            # Run the geometry comparison suite
-            # eds_dict, tec_results = section16(full_path, alt_grid, sampling_df)
-            
-            # Run the assimilation test
-            prior_x, post_x = section18(full_path, alt_grid, sampling_df)
-            # section19(full_path, alt_grid, sampling_df)
-
-    print("\n" + "=" * 60)
-    print("All sections complete — displaying figures.")
-    print("=" * 60)
-    # plt.tight_layout()
-    plt.show()
+    # # Updated path to 2025.151
+    # base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.151/"
     
+    # # Dynamically find all .0001_nc files in the target directory
+    # if not os.path.exists(base_path):
+    #     print(f"Directory not found: {base_path}")
+    #     return
 
+    # podTc2_files = [f for f in os.listdir(base_path) if f.endswith(".0001_nc")]
+    # podTc2_files.sort() # Ensure consistent ordering
     
-    print("=" * 60)
-    print("IonosphereTomography Batch Processing")
-    print("=" * 60)
+    # print(f"Found {len(podTc2_files)} files to process in {base_path}\n")
 
-    alt_grid = np.arange(60.0, 1000.0, 10.0, dtype=float)
-    sampling_df = pd.DataFrame([{
-        "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
-    }])
-
-    # Updated path to 2025.151
-    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.151/"
+    # # List to hold the statistical dictionaries
+    # batch_statistics = []
     
-    # Dynamically find all .0001_nc files in the target directory
-    if not os.path.exists(base_path):
-        print(f"Directory not found: {base_path}")
-        return
-
-    podTc2_files = [f for f in os.listdir(base_path) if f.endswith(".0001_nc")]
-    podTc2_files.sort() # Ensure consistent ordering
+    # # Set to None to run all files, or an integer (e.g., 30) to limit the run
+    # MAX_FILES = 5 
     
-    print(f"Found {len(podTc2_files)} files to process in {base_path}\n")
+    # files_to_process = podTc2_files[5:10] if MAX_FILES else podTc2_files
+    # print(f"Processing {len(files_to_process)} out of {len(podTc2_files)} available files...\n")
 
-    # List to hold the statistical dictionaries
-    batch_statistics = []
-    
-    # Set to None to run all files, or an integer (e.g., 30) to limit the run
-    MAX_FILES = 5 
-    
-    files_to_process = podTc2_files[5:10] if MAX_FILES else podTc2_files
-    print(f"Processing {len(files_to_process)} out of {len(podTc2_files)} available files...\n")
-
-    for idx, f_string in enumerate(files_to_process):
-        print(f"\n[{idx+1}/{len(podTc2_files)}] ", end="")
-        full_path = os.path.join(base_path, f_string)
+    # for idx, f_string in enumerate(files_to_process):
+    #     print(f"\n[{idx+1}/{len(podTc2_files)}] ", end="")
+    #     full_path = os.path.join(base_path, f_string)
         
-        # Run Section 20 and collect stats
-        file_stats = section20(full_path, alt_grid, sampling_df)
-        batch_statistics.append(file_stats)
+    #     # Run Section 20 and collect stats
+    #     file_stats = section20(full_path, alt_grid, sampling_df)
+    #     batch_statistics.append(file_stats)
         
-        # Optional: Save a rolling backup in case it crashes midway
-        if (idx + 1) % 10 == 0:
-            temp_df = pd.DataFrame(batch_statistics)
-            temp_df.to_csv("rolling_stats_backup.csv", index=False)
+    #     # Optional: Save a rolling backup in case it crashes midway
+    #     if (idx + 1) % 10 == 0:
+    #         temp_df = pd.DataFrame(batch_statistics)
+    #         temp_df.to_csv("rolling_stats_backup.csv", index=False)
 
-    print("\n" + "=" * 60)
-    print("Batch processing complete. Compiling results...")
-    print("=" * 60)
+    # print("\n" + "=" * 60)
+    # print("Batch processing complete. Compiling results...")
+    # print("=" * 60)
     
-    # Convert list of dictionaries to a pandas DataFrame
-    stats_df = pd.DataFrame(batch_statistics)
+    # # Convert list of dictionaries to a pandas DataFrame
+    # stats_df = pd.DataFrame(batch_statistics)
     
-    # Save final results
-    stats_df.to_csv("Tomography_vs_Abel_Stats_2025_151.csv", index=False)
+    # # Save final results
+    # stats_df.to_csv("Tomography_vs_Abel_Stats_2025_151.csv", index=False)
     
-    # Print a quick summary of the successful runs
-    success_df = stats_df[stats_df["Status"] == "Success"]
-    print(f"\nSuccessfully processed {len(success_df)} out of {len(stats_df)} files.")
-    if len(success_df) > 0:
-        print("\n--- Summary Statistics ---")
-        print("Mean hmF2 Comparison:")
-        print(f"  Prior:     {success_df['Prior_hmF2'].mean():.1f} km")
-        print(f"  Posterior: {success_df['Post_hmF2'].mean():.1f} km")
-        print(f"  Abel:      {success_df['Abel_hmF2'].mean():.1f} km")
+    # # Print a quick summary of the successful runs
+    # success_df = stats_df[stats_df["Status"] == "Success"]
+    # print(f"\nSuccessfully processed {len(success_df)} out of {len(stats_df)} files.")
+    # if len(success_df) > 0:
+    #     print("\n--- Summary Statistics ---")
+    #     print("Mean hmF2 Comparison:")
+    #     print(f"  Prior:     {success_df['Prior_hmF2'].mean():.1f} km")
+    #     print(f"  Posterior: {success_df['Post_hmF2'].mean():.1f} km")
+    #     print(f"  Abel:      {success_df['Abel_hmF2'].mean():.1f} km")
         
-        print("\nMean TEC Residuals (RMSE):")
-        print(f"  Prior:     {success_df['Prior_TEC_RMSE'].mean():.3f} TECU")
-        print(f"  Posterior: {success_df['Post_TEC_RMSE'].mean():.3f} TECU")
+    #     print("\nMean TEC Residuals (RMSE):")
+    #     print(f"  Prior:     {success_df['Prior_TEC_RMSE'].mean():.3f} TECU")
+    #     print(f"  Posterior: {success_df['Post_TEC_RMSE'].mean():.3f} TECU")
         
-        # Calculate the average percentage improvement
-        improvement = ((success_df['Prior_TEC_RMSE'].mean() - success_df['Post_TEC_RMSE'].mean()) 
-                       / success_df['Prior_TEC_RMSE'].mean()) * 100
-        print(f"  Avg Filter Assimilation Improvement: {improvement:.1f}%")
+    #     # Calculate the average percentage improvement
+    #     improvement = ((success_df['Prior_TEC_RMSE'].mean() - success_df['Post_TEC_RMSE'].mean()) 
+    #                    / success_df['Prior_TEC_RMSE'].mean()) * 100
+    #     print(f"  Avg Filter Assimilation Improvement: {improvement:.1f}%")
+        
+        
+    # Ensure alt_grid and sampling_df have been generated before this point
+    # Run the universal covariance generator (using 6 workers to protect RAM)
+    hourly_edp_arrays = section21(
+        alt_grid=alt_grid, 
+        sampling_df=sampling_df, 
+        dLat=10.0, 
+        dLon=5.0, 
+        num_workers=12
+    )
 
 if __name__ == "__main__":
     main()

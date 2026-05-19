@@ -63,7 +63,7 @@ def _lei_abel_invert(p_km, TEC_tecu):
 
     Parameters
     ----------
-    p_km : ndarray (m,)   — tangent-point impact radii in km, descending order
+    p_km : ndarray (m,)   — tangent-point impact radii in km, ascending order
     TEC_tecu : ndarray (m,) — calibrated TEC in TECU
 
     Returns
@@ -75,10 +75,12 @@ def _lei_abel_invert(p_km, TEC_tecu):
     TEC = TEC_tecu * 1e16      # TECU → e-/m²
     p = p_km * 1e3             # km → m
 
-    # Fit top boundary condition
-    a, n, num_top = 10.0, 20e3, 3
-    while a > 0 and n < 250e3:
-        idx = np.where((p[0] - p) <= n)
+    # Fit top boundary condition (Lei et al. 2007 Eq. A4/A5)
+    # p is ascending so p[-1] is the highest impact radius (topside).
+    # Expand the regression window until the slope a < 0 (physical solution).
+    a, n, num_top = 10.0, 20e3, 1
+    while a > 0 and n < 100e3:
+        idx = np.where((p[-1] - p) <= n)
         p_sl, T_sl = p[idx], TEC[idx]
         if len(idx[0]) == 0:
             p_sl, T_sl = p, TEC
@@ -87,11 +89,8 @@ def _lei_abel_invert(p_km, TEC_tecu):
         coeffs, *_ = np.linalg.lstsq(A, T_sl ** 2, rcond=None)
         a, b = coeffs
         if a < 0:
-            w = np.linspace(0.6, 0.3, len(p_sl))
-            N_top = w * np.sqrt(np.abs(a) / (8 * p_sl)) + (1 - w) * np.sqrt(np.abs(b) / (8 * p_sl ** 2))
-            num_top = min(15, len(N_top))
-            for i in range(num_top):
-                N_e[-(i + 1)] = N_top[-(i + 1)]
+            # Paper Eq. A5: N(p_top) = sqrt(|a| / (8 * p_top))
+            N_e[-1] = np.sqrt(np.abs(a) / (8.0 * p[-1]))
             break
         n += 5e3
     else:
@@ -114,13 +113,6 @@ def _lei_abel_invert(p_km, TEC_tecu):
         N_e[i] = Ne if not np.isnan(Ne) else (N_e[i + 1] if i < m - 1 else 0.0)
         i -= 1
 
-    # Smooth transition region
-    ts, te = m - num_top - 3, m - num_top + 2
-    if ts >= 0 and te < m:
-        for i in range(ts, min(te, m)):
-            if 0 < i < m - 1:
-                N_e[i] = 0.25 * N_e[i - 1] + 0.5 * N_e[i] + 0.25 * N_e[i + 1]
-
     return N_e
 
 
@@ -138,11 +130,11 @@ def _lei_abel_invert_m_layers(p_km, TEC_tecu, M=30):
     TEC_uni = np.interp(p_uni, p_km, TEC_tecu)
 
     N_e = np.zeros(M)
-    TEC = TEC_uni * 1e12       # TECU → (CGS-like internal units)
-    p = p_uni * 1e5            # km → cm
+    TEC = TEC_uni * 1e16       # TECU → e-/m²
+    p = p_uni * 1e3            # km → m
 
-    a, n = 10.0, 10e5
-    while a > 0 and n < 200e5:
+    a, n = 10.0, 20e3
+    while a > 0 and n < 100e3:
         if p[-1] - p[0] >= n:
             idx = np.where((p[-1] - p) <= n)
             p_sl, T_sl = (p[idx], TEC[idx]) if len(idx[0]) > 0 else (p, TEC)
@@ -153,8 +145,9 @@ def _lei_abel_invert_m_layers(p_km, TEC_tecu, M=30):
         coeffs, *_ = np.linalg.lstsq(A, T_sl ** 2, rcond=None)
         a, b = coeffs
         if a < 0:
-            N_e[-1] = 0.5 * np.sqrt(np.abs(a) / (8 * p_sl[-1])) + 0.5 * np.sqrt(np.abs(b) / (8 * p_sl[-1] ** 2))
-        n += 5e5
+            N_e[-1] = np.sqrt(np.abs(a) / (8.0 * p_sl[-1]))
+            break
+        n += 5e3
 
     i = M - 2
     while i >= 0:
@@ -172,7 +165,7 @@ def _lei_abel_invert_m_layers(p_km, TEC_tecu, M=30):
         N_e[i] = Ne if not np.isnan(Ne) else N_e[i + 1]
         i -= 1
 
-    return N_e, p * 1e-5, TEC * 1e-12   # back to km / TECU
+    return N_e, p * 1e-3, TEC * 1e-16   # back to km / TECU
 
 
 def _ne_calc_gradient(p_km, TEC_tecu):
@@ -183,8 +176,8 @@ def _ne_calc_gradient(p_km, TEC_tecu):
     -------
     N_e : ndarray (m,) — electron density in e-/m³
     """
-    TEC = TEC_tecu * 1e12
-    p = p_km * 1e5             # km → cm
+    TEC = TEC_tecu * 1e16      # TECU → e-/m²
+    p = p_km * 1e3             # km → m
     dTEC = np.gradient(TEC) / np.gradient(p)
     N_e = np.full(len(p), np.nan)
     for i in range(len(p) - 2):
@@ -202,6 +195,45 @@ def _ne_calc_gradient(p_km, TEC_tecu):
         except Exception:
             pass
     return N_e
+
+
+def _forward_tec(p_km, N_e):
+    """
+    Abel forward model: reconstruct TEC from an electron density profile
+    under the spherical symmetry assumption.
+
+    For each tangent radius p_i, evaluates:
+        TEC(p_i) = 2 * ∫_{p_i}^{p_max} N_e(r) * r / sqrt(r² - p_i²) dr
+
+    p_km must be in ascending order (lowest altitude first), matching the
+    convention used throughout _lei_abel.
+
+    Parameters
+    ----------
+    p_km : ndarray (m,) ascending — impact radii in km
+    N_e  : ndarray (m,) — electron density in e-/m³
+
+    Returns
+    -------
+    TEC_fwd : ndarray (m,) — forward-modeled TEC in TECU
+    """
+    p  = p_km * 1e3                      # km → m
+    Ne = np.nan_to_num(N_e, nan=0.0)
+    m  = len(p)
+    TEC_fwd = np.zeros(m)
+
+    for i in range(m - 1):
+        pi    = p[i]
+        r     = p[i + 1:]               # all radii above tangent point
+        Ne_r  = Ne[i + 1:]
+        denom = np.sqrt(r ** 2 - pi ** 2)
+        valid = denom > pi * 1e-6        # avoid singularity at r ≈ pi
+        if valid.sum() < 2:
+            continue
+        integrand   = Ne_r[valid] * r[valid] / denom[valid]
+        TEC_fwd[i]  = 2.0 * np.trapz(integrand, r[valid])
+
+    return TEC_fwd / 1e16               # e-/m² → TECU
 
 
 def _tec_cal_schreiner(TEC_in, LEO_km, p_km, tangent_point_km):
@@ -270,11 +302,13 @@ def _lei_abel(TEC_in, LEO_km, GNSS_km, time):
     -------
     N_e      : ndarray — electron density from discrete inversion (e-/m³)
     N_e_grad : ndarray — electron density from gradient method (e-/m³)
-    p        : ndarray — impact radii for N_e / N_e_grad (km), ascending
+    alt_km   : ndarray — WGS84 geodetic altitude in km for N_e / N_e_grad
     TEC_cal  : ndarray — calibrated TEC used (TECU)
     time_sel : ndarray — time array for valid arc
     N_e_m    : ndarray — multi-layer inversion (e-/m³, M=30 layers)
-    p_m      : ndarray — impact radii for N_e_m (km)
+    alt_km_m : ndarray — WGS84 geodetic altitude in km for N_e_m
+    TEC_fwd  : ndarray — forward TEC from N_e (TECU)
+    TEC_fwd_m: ndarray — forward TEC from N_e_m (TECU)
     """
     tangent_point, p1, _ = rayTangent(LEO_km, GNSS_km, units='km')
     TEC_cal, r_LEO = _tec_cal_schreiner(TEC_in, LEO_km, p1, tangent_point)
@@ -282,7 +316,8 @@ def _lei_abel(TEC_in, LEO_km, GNSS_km, time):
     valid = np.where((p1 < r_LEO) & (p1 > 0))[0]
     if len(valid) == 0:
         empty = np.full_like(TEC_in, np.nan)
-        return empty, empty, p1, TEC_cal, time, np.full(30, np.nan), np.full(30, np.nan)
+        empty30 = np.full(30, np.nan)
+        return empty, empty, empty, TEC_cal, time, empty30, empty30, empty, empty30
 
     p        = p1[valid].copy()
     TEC_sel  = TEC_cal[valid].copy()
@@ -294,13 +329,14 @@ def _lei_abel(TEC_in, LEO_km, GNSS_km, time):
     TEC_sel  = TEC_sel[asc]
     time_sel = time_sel[asc]
 
-    # altitude in metres (rayTangent returns m above WGS84 regardless of units param)
+    # WGS84 geodetic altitudes in metres — used for Hermite smoothing and output
     _, _, alt_sel_m = rayTangent(LEO_km[:, valid[asc]], GNSS_km[:, valid[asc]], units='km')
 
     if len(p) < 4:
         print(f"  [Abel] Too few valid points ({len(p)}). Skipping.")
         empty = np.full_like(p, np.nan)
-        return empty, empty, p, TEC_sel, time_sel, np.full(30, np.nan), np.full(30, np.nan)
+        empty30 = np.full(30, np.nan)
+        return empty, empty, alt_sel_m / 1000.0, TEC_sel, time_sel, empty30, empty30, empty, empty30
 
     # Hermite smooth TEC → 0 at the top of the ascending profile (index -1).
     # top_smooth_m is in metres to match alt_sel_m.
@@ -322,8 +358,16 @@ def _lei_abel(TEC_in, LEO_km, GNSS_km, time):
     N_e      = _lei_abel_invert(p, TEC_sel)
     N_e_grad = _ne_calc_gradient(p, TEC_sel)
     N_e_m, p_m, _ = _lei_abel_invert_m_layers(p, TEC_sel, M=30)
+    TEC_fwd   = _forward_tec(p,   N_e)
+    TEC_fwd_m = _forward_tec(p_m, N_e_m)
 
-    return N_e, N_e_grad, p, TEC_sel, time_sel, N_e_m, p_m
+    # WGS84 altitude for the primary grid (direct from pyproj)
+    alt_km = alt_sel_m / 1000.0
+
+    # WGS84 altitude for the uniformly-resampled m-layers grid (interpolated from p→alt mapping)
+    alt_km_m = np.interp(p_m, p, alt_km)
+
+    return N_e, N_e_grad, alt_km, TEC_sel, time_sel, N_e_m, alt_km_m, TEC_fwd, TEC_fwd_m
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -366,18 +410,17 @@ def run_abel_inversion(podTc2_data):
         return None
 
     print("  -> Running Lei-Abel inversion...")
-    N_e, N_e_grad, p, TEC_cal, _, N_e_m, p_m = _lei_abel(TEC_in, LEO, GNSS, time)
-
-    # p is Earth-centre distance in km; subtract mean sphere radius for altitude
-    EARTH_RADIUS_KM = 6371.0
-    alt_km   = p   - EARTH_RADIUS_KM
-    alt_km_m = p_m - EARTH_RADIUS_KM
+    N_e, N_e_grad, alt_km, TEC_cal, _, N_e_m, alt_km_m, TEC_fwd, TEC_fwd_m = _lei_abel(
+        TEC_in, LEO, GNSS, time
+    )
 
     return {
-        'alt_km':   alt_km,
-        'Ne':       N_e,
-        'Ne_grad':  N_e_grad,
-        'alt_km_m': alt_km_m,
-        'Ne_m':     N_e_m,
-        'TEC_cal':  TEC_cal,
+        'alt_km':        alt_km,
+        'Ne':            N_e,
+        'Ne_grad':       N_e_grad,
+        'alt_km_m':      alt_km_m,
+        'Ne_m':          N_e_m,
+        'TEC_cal':       TEC_cal,
+        'TEC_forward':   TEC_fwd,    # Abel forward TEC from Lei-Abel Ne (TECU)
+        'TEC_forward_m': TEC_fwd_m,  # Abel forward TEC from multi-layer Ne (TECU)
     }

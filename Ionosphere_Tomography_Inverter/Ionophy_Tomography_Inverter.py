@@ -221,8 +221,9 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         """
         Runs a single Kalman Filter assimilation step.
         """
-        # Ensure obs is a column vector
-        obs = obs.reshape(-1, 1)
+        # Strip masked-array wrapper (netCDF4 returns np.ma.MaskedArray by default).
+        # np.asarray extracts the underlying data; any fill values become ordinary floats.
+        obs = np.asarray(obs).reshape(-1, 1)
 
         # 1. Generate or validate the H matrix
         if obs_operator is None:
@@ -233,43 +234,33 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         assert obs.shape[0] == obs_operator.shape[0], "Observation length must match H matrix rows"
         assert obs_operator.shape[1] == self.dim_x, "H matrix columns must match State vector length"
         
-        # 2. Dynamically resize the filter's observation dimension
-        self.dim_z = obs.shape[0]
+        n_obs = obs.shape[0]
 
-        # 3. Apply Mean Scaling to the H matrix if needed
-        # H_scaled = np.copy(obs_operator)
+        # 2. Apply Mean Scaling to the H matrix if needed (no copy when unscaled)
         if self.attrs["meanscale"] == 1:
-            # Broadcast multiply across columns to map fractional state to absolute TEC
-            H_scaled = obs_operator * self.attrs["initial_edps_mean"].T
+            H = obs_operator * self.attrs["initial_edps_mean"].T
+        else:
+            H = obs_operator
 
-        self.H = H_scaled
-        
-        # 4. Gauss-Markov State Transition & Process Noise
-        # self.F = relaxation * np.eye(self.dim_x)
-        self.Q = (1.0 - relaxation) * np.cov(self.attrs["initial_edps"])
-        
-        # 5. Dynamic Observation Covariance (R)
-        # Map the initial ensemble to observation space: Z = H * Ensemble
-        # initial_predict_obs = self.H @ self.attrs["initial_edps"]
-        # self.R = np.cov(initial_predict_obs) + measurement_err * np.eye(self.dim_z)
-        self.R = measurement_err * np.eye(self.dim_z)
-        
-        # 6. Execute Kalman Filter Steps
-        # predict() advances self.x and self.P based on self.F and self.Q
-        # self.predict()
+        # 3. Gauss-Markov Predict: F = relaxation * I — avoids two O(d³) matrix multiplies
         self.x = relaxation * self.x
-        self.P = (relaxation ** 2) * self.P + self.Q
-        
-        # --- CRITICAL FIX ---
-        # Calculate the Background TEC using the unscaled operator and base state
+        self.P = (relaxation ** 2) * self.P + (1.0 - relaxation) * self.attrs["initial_edps_cov"]
+
+        # 4. Innovation
         background_tec = obs_operator @ self.attrs["initial_edps_mean"]
-        
-        # Because self.x tracks the *perturbation* (initialized to 0), 
-        # the filter must assimilate the difference between the measurement and the background.
-        obs_anomaly = obs - background_tec
-        
-        # update() calculates innovation (obs_anomaly - H*x) and updates self.x and self.P
-        self.update(obs_anomaly)
+        y = (obs - background_tec) - H @ self.x
+
+        # 5. Efficient Update: O(d² × n_obs) vs filterpy's Joseph form O(d³)
+        #    PHT = P @ Hᵀ         (d × n_obs)
+        #    S   = H @ PHT + R    (n_obs × n_obs) — small, cheap to factor
+        #    K   = PHT @ S⁻¹      solved without explicit inverse
+        #    P   = P - K @ PHᵀ   (d² × n_obs flops, not d³)
+        PHT      = self.P @ H.T
+        S        = H @ PHT
+        S       += max(measurement_err, 1e-6) * np.eye(n_obs)
+        K        = np.linalg.solve(S, PHT.T).T
+        self.x   = self.x + K @ y
+        self.P   = self.P - K @ PHT.T
         
         # 7. Reconstruct Absolute Electron Density for output
         # self.x currently represents the anomaly/perturbation from the background mean
