@@ -130,37 +130,19 @@ def _process_single_ray_no_topside(
 
 class Ionosphere_Tomography_Inverter_RelTEC(KalmanFilter):
     """
-    Kalman-filter-based ionospheric tomography inverter using **relative TEC**.
+    EKF-based ionospheric tomography inverter using **relative (differential) TEC**.
 
-    Instead of assimilating absolute (bias-corrected, topside-extended) TEC,
-    this class assimilates differential TEC:
+    Assimilates  ΔTEC_i = TEC_i − TEC_ref  with differential operator
+    ΔH_i = H_i − H_ref, eliminating the need to model the topside ionosphere
+    (see ``compute_relative_tec`` for reference-epoch selection).
 
-        ΔTEC_i = TEC_i − TEC_ref
-
-    with a matching differential observation operator:
-
-        ΔH_i = H_i − H_ref
-
-    The topside ionosphere (above the altitude grid) does not need to be
-    modelled because its contribution cancels in the difference when the
-    reference epoch is chosen appropriately (see ``compute_relative_tec``).
-
-    Parameters
-    ----------
-    EDPSam : EDPSamples
-        Prior ensemble of electron density profiles.
-    meanscale : int, optional
-        0 (default) — state represents absolute electron density perturbations.
-        1 — state represents fractional perturbations (x_i / mean).
-
-    Notes
-    -----
-    The Kalman state ``self.x`` always represents an *anomaly* from the
-    background mean (zero-initialised), matching the convention in the
-    absolute-TEC sibling class ``Ionosphere_Tomography_Inverter``.
+    The state is the log-ratio anomaly  x = log(ne / ne_bg), so the
+    reconstructed EDP  ne = ne_bg * exp(x)  is guaranteed positive for any
+    finite x.  The EKF Jacobian  H_eff = ΔH * ne_hat.T  is re-evaluated at
+    the predicted state each assimilation call.
     """
 
-    def __init__(self, EDPSam: EDPSamples, meanscale: int = 0):
+    def __init__(self, EDPSam: EDPSamples, ne_floor: float = 1.0, meanscale: int = 0):
         self.EDPSam = EDPSam
         edps = EDPSam.edps  # shape: (n_height, n_geo, n_sample)
         n_height, n_geo, n_sample = edps.shape
@@ -168,22 +150,22 @@ class Ionosphere_Tomography_Inverter_RelTEC(KalmanFilter):
 
         edps_flat = edps.reshape(n_state_vars, n_sample)
         edps_flat = np.nan_to_num(edps_flat, nan=0.0)
-        edps_base = edps_flat[:, 0:1]
 
-        if meanscale == 1:
-            safe_base = np.where(edps_base == 0, 1e-10, edps_base)
-            edps_flat = edps_flat / safe_base
+        # Background: first ensemble member, floored so log is defined everywhere.
+        ne_bg = np.maximum(edps_flat[:, 0:1], ne_floor)
+
+        # Log-ratio ensemble: x_i = log(ne_i / ne_bg).
+        log_ensemble = np.log(np.maximum(edps_flat, ne_floor)) - np.log(ne_bg)
 
         super().__init__(dim_x=n_state_vars, dim_z=1)
 
         self.x = np.zeros((n_state_vars, 1))
-        self.P = np.cov(edps_flat)
+        self.P = np.cov(log_ensemble)
 
         self.attrs = {
-            "meanscale": meanscale,
-            "initial_edps": edps_flat,
-            "initial_edps_mean": edps_base,
-            "initial_edps_cov": self.P.copy(),
+            "ne_bg":             ne_bg,          # background EDP (n, 1), always > 0
+            "initial_edps_mean": ne_bg,          # alias kept for backward compatibility
+            "initial_edps_cov":  self.P.copy(),  # log-ratio prior covariance
         }
 
     # ------------------------------------------------------------------
@@ -339,58 +321,25 @@ class Ionosphere_Tomography_Inverter_RelTEC(KalmanFilter):
         delta_H: np.ndarray | None = None,
     ) -> np.ndarray:
         """
-        Single Kalman filter assimilation step using relative (differential) TEC.
+        Single EKF assimilation step using relative (differential) TEC.
 
-        You can supply inputs in two ways:
+        State x = log(ne / ne_bg); reconstructed as ne = ne_bg * exp(x) > 0.
+        The EKF Jacobian  H_eff = ΔH * ne_hat.T  is evaluated at the current
+        predicted state, so the linearisation tracks the evolving solution.
 
-        **Option A — pre-computed differential data** (fastest, recommended when
-        you have already called ``get_observation_operator`` and
-        ``compute_relative_tec`` externally):
+        Option A — pre-computed differential data (fastest):
 
             posterior = inverter.assimilate(
-                obs=None,
-                obs_operator=H,
-                delta_obs=delta_tec,
-                delta_H=delta_H_matrix,
+                obs=None, obs_operator=H,
+                delta_obs=delta_tec, delta_H=delta_H_matrix,
             )
 
-        **Option B — raw absolute TEC + geometry dict** (the inverter computes
-        H internally and then differences it):
+        Option B — raw absolute TEC + geometry dict (differenced internally):
 
             posterior = inverter.assimilate(
-                obs=measured_tec,
-                podTc2_data=podTc_clean,
+                obs=measured_tec, podTc2_data=podTc_clean,
                 tangent_alt_km=tangent_alt_km,
             )
-
-        Parameters
-        ----------
-        obs : ndarray, shape (n_rays,) or None
-            Absolute (or phase-affected) TEC in TECU.  Required for Option B.
-            Ignored when ``delta_obs`` and ``delta_H`` are both supplied.
-        podTc2_data : dict or None
-            LEO/GNSS geometry dict.  Required when ``obs_operator`` is None.
-        obs_operator : ndarray or None
-            Pre-computed unscaled H matrix (shape n_rays × n_state_vars).
-            If None, computed from ``podTc2_data``.
-        tangent_alt_km : ndarray or None
-            Tangent-point altitudes (km) for automatic reference selection.
-        ref_idx : int or None
-            Override the reference epoch index.
-        relaxation : float
-            Gauss-Markov coefficient (0 < r ≤ 1).
-        measurement_err : float
-            Diagonal measurement noise variance (TECU²).
-        delta_obs : ndarray or None
-            Pre-differenced observations (Option A).
-        delta_H : ndarray or None
-            Pre-differenced H matrix (Option A).
-
-        Returns
-        -------
-        analysis_x : ndarray, shape (n_state_vars, 1)
-            Posterior electron density state (absolute units, same as
-            ``initial_edps_mean``).
         """
         # ---- Option A: caller already differenced ----
         if delta_obs is not None and delta_H is not None:
@@ -412,39 +361,28 @@ class Ionosphere_Tomography_Inverter_RelTEC(KalmanFilter):
             delta_obs = delta_obs_1d.reshape(-1, 1)
 
         n_diff = delta_obs.shape[0]
-        assert delta_H.shape[0] == n_diff, "delta_H row count must match delta_obs length."
+        assert delta_H.shape[0] == n_diff,    "delta_H row count must match delta_obs length."
         assert delta_H.shape[1] == self.dim_x, "delta_H column count must match state dimension."
 
-        # ---- Apply mean-scaling to ΔH ----
-        if self.attrs["meanscale"] == 1:
-            H_scaled = delta_H * self.attrs["initial_edps_mean"].T
-        else:
-            H_scaled = delta_H
-
-        self.dim_z = n_diff
-        self.H     = H_scaled
-
-        # ---- Gauss-Markov propagation ----
-        self.Q = (1.0 - relaxation) * self.attrs["initial_edps_cov"]
+        # ---- Gauss-Markov predict ----
         self.x = relaxation * self.x
-        self.P = (relaxation ** 2) * self.P + self.Q
+        self.P = (relaxation ** 2) * self.P + (1.0 - relaxation) * self.attrs["initial_edps_cov"]
 
-        # ---- Observation noise ----
-        self.R = max(measurement_err, 1e-6) * np.eye(n_diff)
+        # ---- EDP at predicted state — always positive by construction ----
+        ne_hat = self.attrs["ne_bg"] * np.exp(self.x)          # (n, 1)
 
-        # ---- Innovation: ΔTEC_measured − ΔH @ (mean + x) ----
-        # background differential TEC predicted by prior mean
-        background_delta_tec = delta_H @ self.attrs["initial_edps_mean"]
-        # x tracks the anomaly from that mean; H_scaled maps fractional or
-        # absolute anomaly to TEC space, matching the update() convention.
-        obs_anomaly = delta_obs - background_delta_tec
+        # ---- EKF Jacobian: d(ΔH @ ne) / dx = ΔH * ne_hat.T ----
+        H_eff = delta_H * ne_hat.T                              # (n_diff, n)
 
-        self.update(obs_anomaly)
+        # ---- Innovation: observed ΔTEC minus nonlinear forward model ----
+        y = delta_obs - delta_H @ ne_hat                        # (n_diff, 1)
 
-        # ---- Reconstruct absolute electron density ----
-        if self.attrs["meanscale"] == 1:
-            analysis_x = self.attrs["initial_edps_mean"] * (1.0 + self.x)
-        else:
-            analysis_x = self.attrs["initial_edps_mean"] + self.x
+        # ---- Kalman update ----
+        PHT = self.P @ H_eff.T                                  # (n, n_diff)
+        S   = H_eff @ PHT + max(measurement_err, 1e-6) * np.eye(n_diff)
+        K   = np.linalg.solve(S, PHT.T).T
+        self.x = self.x + K @ y
+        self.P = self.P - K @ PHT.T
 
-        return analysis_x
+        # ---- Reconstruct absolute EDP — guaranteed positive for any finite x ----
+        return self.attrs["ne_bg"] * np.exp(self.x)

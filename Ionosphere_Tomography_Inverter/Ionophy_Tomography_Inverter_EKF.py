@@ -158,68 +158,65 @@ def _process_single_ray(
 
 class Ionosphere_Tomography_Inverter(KalmanFilter):
     """
-    The class Ionosphere_Tomography_Inverter is a subclass of the KalmanFilter
-    which is dedicated for ionosphere tomographic inversion from the total
-    electron content (TEC) measurements to electron density profiles. The key
-    difference between the standard Kalman filter object is that the dimension
-    of the observation and the observation operator change in each iteration.
-    The state transition matrix is the identity matrix multiplied by a scalar
-    coefficient exp(-delta). This is the Gauss Markov model for a stationary
-    process.
+    Extended Kalman Filter (EKF) for ionospheric tomographic inversion.
+
+    The state is the log-ratio anomaly  x = log(ne / ne_bg), so the
+    reconstructed electron density  ne = ne_bg * exp(x)  is guaranteed
+    positive for any finite x — no separate non-negativity constraint needed.
+
+    The observation model  TEC = H @ ne  is nonlinear in x; the EKF
+    linearises it at the current predicted state each step:
+
+        H_eff = H * ne_hat.T      (each column j scaled by ne_hat[j])
+        y     = TEC_obs - H @ ne_hat          (nonlinear innovation)
+
+    Prior covariance is computed in log-ratio space from the EDP ensemble.
+    The Gauss-Markov model restores variance toward the prior each step.
     """
 
-    def __init__(self, EDPSam: EDPSamples, meanscale: int = 0):
+    def __init__(self, EDPSam: EDPSamples, ne_floor: float = 1.0, meanscale: int = 0):
         self.EDPSam = EDPSam
-        edps = EDPSam.edps  # Original shape: (n_height, n_geo, n_sample)
+        edps = EDPSam.edps  # shape: (n_height, n_geo, n_sample)
         n_height, n_geo, n_sample = edps.shape
         n_state_vars = n_height * n_geo
 
-        # 1. Flatten spatial and altitude dimensions into a state vector
         edps_flat = edps.reshape(n_state_vars, n_sample)
-
-        # CRITICAL FIX: Sanitize the IRI background state.
-        # IRI returns NaNs for regions outside its defined altitude bounds.
-        # We must replace these with 0.0 or the Kalman matrix math will explode.
         edps_flat = np.nan_to_num(edps_flat, nan=0.0)
 
-        # Extract the base state (0th index) instead of the ensemble mean
-        edps_base = edps_flat[:, 0:1]
+        # Background: first ensemble member.  Floor prevents log(0) at low
+        # altitudes where IRI returns near-zero values; 1 e/m^3 is negligible
+        # physically but keeps the log well-defined everywhere.
+        ne_bg = np.maximum(edps_flat[:, 0:1], ne_floor)
 
-        # 2. Scale to fractional perturbations if requested
-        if meanscale == 1:
-            # Avoid division by zero
-            safe_base = np.where(edps_base == 0, 1e-10, edps_base)
-            edps_flat = edps_flat / safe_base
+        # Log-ratio ensemble: x_i = log(ne_i / ne_bg).
+        # Prior mean x = 0 corresponds to ne = ne_bg.
+        log_ensemble = np.log(np.maximum(edps_flat, ne_floor)) - np.log(ne_bg)
 
-        # 3. Initialize the FilterPy parent class
         super().__init__(dim_x=n_state_vars, dim_z=1)
 
-        # 4. Set Initial State and Covariance
         self.x = np.zeros((n_state_vars, 1))
-        self.P = np.cov(edps_flat)
+        self.P = np.cov(log_ensemble)
 
-        # 5. Store metadata (Update the key name here too if you like)
         self.attrs = {
-            "meanscale": meanscale,
-            "initial_edps": edps_flat,
-            "initial_edps_mean": edps_base,  # Keeping the old dict key so you don't have to change the assimilate() code
-            "initial_edps_cov": self.P.copy()
+            "ne_bg":             ne_bg,          # background EDP (n, 1), always > 0
+            "initial_edps_mean": ne_bg,          # alias kept for backward compatibility
+            "initial_edps_cov":  self.P.copy(),  # log-ratio prior covariance
         }
     def get_observation_operator(self, podTc2_data: dict, num_segments: int = 1000,
                                  topside_scale_height_m: float = 150000.0,
                                  topside_n_steps: int = 10) -> np.ndarray:
         from joblib import Parallel, delayed
-
+    
         altitude    = self.EDPSam.altitude
         geolocation = self.EDPSam.geolocation
         n_height    = len(altitude)
         n_geo       = geolocation.shape[0]
         n_state_vars = n_height * n_geo
-
+    
         LEO    = podTc2_data['LEO']
         GNSS   = podTc2_data['GNSS']
         n_rays = LEO.shape[1]
-
+    
         transformer = pyproj.Transformer.from_crs(
             pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
             pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
@@ -227,7 +224,7 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         )
         tree = cKDTree(geolocation) if n_geo > 1 else None
         t    = np.linspace(0, 1, num_segments)  # computed once, shared across all rays
-
+    
         print(f"  -> Building H Matrix ({n_rays} rays, parallel)...")
         rows = Parallel(n_jobs=-1)(
             delayed(_process_single_ray)(
@@ -239,64 +236,50 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             )
             for i in range(n_rays)
         )
-
+    
         H = np.array(rows, dtype=np.float32)
         H /= 1e16
         return H
-
+    
     def assimilate(self, obs: np.ndarray, podTc2_data: dict = None, obs_operator: np.ndarray = None,
                    relaxation: float = 1.0, measurement_err: float = 0.0) -> np.ndarray:
         """
-        Runs a single Kalman Filter assimilation step.
-        """
-        # Strip masked-array wrapper (netCDF4 returns np.ma.MaskedArray by default).
-        # np.asarray extracts the underlying data; any fill values become ordinary floats.
-        obs = np.asarray(obs).reshape(-1, 1)
+        Single EKF assimilation step in log-electron-density space.
 
-        # 1. Generate or validate the H matrix
+        State x = log(ne / ne_bg), reconstructed as ne = ne_bg * exp(x) > 0.
+        The EKF Jacobian H_eff = H * ne_hat.T is re-evaluated at the predicted
+        state each call, so the linearisation tracks the evolving solution.
+        """
+        obs = np.asarray(obs).reshape(-1, 1)
+        n_obs = obs.shape[0]
+
         if obs_operator is None:
             assert podTc2_data is not None, "Must provide podTc2_data if obs_operator is None."
             print("Dynamically calculating observation operator (H)...")
             obs_operator = self.get_observation_operator(podTc2_data)
 
         assert obs.shape[0] == obs_operator.shape[0], "Observation length must match H matrix rows"
-        assert obs_operator.shape[1] == self.dim_x, "H matrix columns must match State vector length"
+        assert obs_operator.shape[1] == self.dim_x,   "H matrix columns must match state vector length"
 
-        n_obs = obs.shape[0]
-
-        # 2. Apply Mean Scaling to the H matrix if needed (no copy when unscaled)
-        if self.attrs["meanscale"] == 1:
-            H = obs_operator * self.attrs["initial_edps_mean"].T
-        else:
-            H = obs_operator
-
-        # 3. Gauss-Markov Predict: F = relaxation * I — avoids two O(d³) matrix multiplies
+        # Gauss-Markov predict
         self.x = relaxation * self.x
         self.P = (relaxation ** 2) * self.P + (1.0 - relaxation) * self.attrs["initial_edps_cov"]
 
-        # 4. Innovation
-        background_tec = obs_operator @ self.attrs["initial_edps_mean"]
-        y = (obs - background_tec) - H @ self.x
+        # EDP at predicted state — always positive by construction
+        ne_hat = self.attrs["ne_bg"] * np.exp(self.x)          # (n, 1)
 
-        # 5. Efficient Update: O(d² × n_obs) vs filterpy's Joseph form O(d³)
-        #    PHT = P @ Hᵀ         (d × n_obs)
-        #    S   = H @ PHT + R    (n_obs × n_obs) — small, cheap to factor
-        #    K   = PHT @ S⁻¹      solved without explicit inverse
-        #    P   = P - K @ PHᵀ   (d² × n_obs flops, not d³)
-        PHT      = self.P @ H.T
-        S        = H @ PHT
-        S       += max(measurement_err, 1e-6) * np.eye(n_obs)
-        K        = np.linalg.solve(S, PHT.T).T
-        self.x   = self.x + K @ y
-        self.P   = self.P - K @ PHT.T
+        # EKF Jacobian: d(H @ ne) / dx = H * ne_hat.T
+        H_eff = obs_operator * ne_hat.T                         # (n_obs, n)
 
-        # 7. Reconstruct Absolute Electron Density for output
-        # self.x currently represents the anomaly/perturbation from the background mean
-        if self.attrs["meanscale"] == 1:
-            # Total State = Mean * (1 + Fractional Anomaly)
-            analysis_x = self.attrs["initial_edps_mean"] * (1.0 + self.x)
-        else:
-            # Total State = Mean + Absolute Anomaly
-            analysis_x = self.attrs["initial_edps_mean"] + self.x
+        # Innovation: observed TEC minus nonlinear forward model
+        y = obs - obs_operator @ ne_hat                         # (n_obs, 1)
 
-        return analysis_x
+        # Kalman update  (O(n² × n_obs), same as original)
+        PHT = self.P @ H_eff.T                                  # (n, n_obs)
+        S   = H_eff @ PHT + max(measurement_err, 1e-6) * np.eye(n_obs)
+        K   = np.linalg.solve(S, PHT.T).T
+        self.x = self.x + K @ y
+        self.P = self.P - K @ PHT.T
+
+        # Reconstruct absolute EDP — guaranteed positive for any finite x
+        return self.attrs["ne_bg"] * np.exp(self.x)

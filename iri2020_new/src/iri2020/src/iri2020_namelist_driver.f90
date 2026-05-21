@@ -5,10 +5,10 @@ use, intrinsic:: iso_fortran_env, only: stderr=>error_unit, stdout=>output_unit
 implicit none
 
 ! Default size of arrays for inputs.
-integer, parameter :: max_npts=1000
-integer, parameter :: max_nheight=1000
-integer, parameter :: max_nParam=9
-integer, parameter :: max_nSample=5000
+integer, parameter :: max_npts=1000000
+integer, parameter :: max_nheight=10000
+integer, parameter :: max_nParam=90
+integer, parameter :: max_nSample=50000
 
 ! Definition of input variables in the namelist
 integer :: npts, nheight, nSample

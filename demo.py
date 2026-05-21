@@ -1795,7 +1795,7 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     mc_df.iloc[0] = base_sc
 
     eds_occ = EDPSamples(
-        DateTime="2015-06-01 12:00:00", geo_type="Occultation", altitude=alt_grid,
+        "2015-06-01 12:DateTime=00:00", geo_type="Occultation", altitude=alt_grid,
         sampling_parameters=mc_df, evaluate_iri=1,
         filename=podTc2_file, dLat=5, dLon=5
     )
@@ -1866,7 +1866,6 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     # Calculate Abel Inversion:
     from Abel_Inverter import run_abel_inversion
     abel = run_abel_inversion(podTc_data)
-    plt.plot(abel["Ne"],abel["alt_km"])
 
     # =========================================================
     # PLOT 1: Observation Space (TEC) & State Space (Linear EDP)
@@ -1881,6 +1880,9 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax1_1.plot(prior_tec, tangent_alt_clean, color='tab:red', lw=2, ls='--', label="Prior (H Matrix)")
     ax1_1.plot(posterior_tec, tangent_alt_clean, color='tab:blue', lw=2, label="Posterior (Assimilated)")
     ax1_1.plot(reltec_tec, tangent_alt_clean, color='tab:purple', lw=2, ls='-.', label="RelTEC Posterior")
+    if abel is not None:
+        ax1_1.plot(abel['TEC_cal'],     abel['alt_km'],   color='black', lw=2, ls='--',  label='Calibrated TEC')
+        ax1_1.plot(abel['TEC_forward'], abel['alt_km'],   color='tab:green', lw=1.5, ls='--', label='Forward TEC (discrete)')
     ax1_1.set_ylabel("Tangent Altitude (km)")
     ax1_1.set_xlabel("Total Electron Content (TECU)")
     ax1_1.set_title("Observation Space: TEC Adjustment")
@@ -2290,27 +2292,144 @@ def extract_robust_f2_peak(profile: np.ndarray, alt_grid: np.ndarray, min_alt: f
             
     return discrete_NmF2, discrete_hmF2
     
-def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame, 
+
+def _build_hourly_global_edp(args: tuple) -> tuple:
+    """
+    Module-level worker: generate and save one hour's global EDP grid to NetCDF.
+    Returns (hr, nc_path). EDPSamples object is NOT returned through the queue;
+    the caller loads it from the saved NetCDF after the pool finishes.
+    """
+    import os
+    import gc
+    import numpy as np
+    import pandas as pd
+    from EDPSamples.edp_samples import EDPSamples
+
+    (hr, alt_grid, f107_center, ap_center, ig12_center, rz12_center,
+     n_mc, dLat, dLon, data_dir, date_tag, date_ymd) = args
+
+    nc_path = os.path.join(data_dir, f"GlobalEDP_{dLat}deg_{date_tag}_{hr:02d}h.nc")
+
+    if os.path.exists(nc_path):
+        try:
+            EDPSamples.fromNetCDF(nc_path)  # validate — raises if corrupt
+            return hr, nc_path
+        except Exception:
+            pass  # fall through to regenerate
+
+    np.random.seed(42 + hr)
+    mc_df = pd.DataFrame({
+        "hour": np.full(n_mc, float(hr)),
+        "f107": np.random.normal(loc=f107_center, scale=10, size=n_mc).clip(70, 250),
+        "ap":   np.random.normal(loc=ap_center,   scale=5,  size=n_mc).clip(0,  400),
+        "ig12": np.random.normal(loc=ig12_center, scale=10, size=n_mc).clip(50, 200),
+        "rz12": np.random.normal(loc=rz12_center, scale=10, size=n_mc).clip(50, 200),
+    })
+    mc_df.iloc[0] = {
+        "hour": float(hr), "f107": f107_center, "ap": ap_center,
+        "ig12": ig12_center, "rz12": rz12_center,
+    }
+
+    eds = EDPSamples(
+        DateTime=f"{date_ymd} {hr:02d}:00:00",
+        geo_type="Global",
+        altitude=alt_grid,
+        sampling_parameters=mc_df,
+        evaluate_iri=1,
+        equal_spaced=True,
+        dLat=dLat,
+        dLon=dLon,
+    )
+    eds.saveNetCDF(nc_path)
+    del eds
+    gc.collect()
+
+    return hr, nc_path
+
+
+def build_daily_global_edps(
+    date: "pd.Timestamp",
+    alt_grid: "np.ndarray",
+    dLat: float = 5.0,
+    dLon: float = 5.0,
+    n_mc: int = 50,
+    data_dir: str = "./Data/Section20_Global_EDPS/",
+    num_workers: int = 8,
+) -> dict:
+    """
+    Generate (or load from NetCDF cache) global EDP grids for all 24 hours of `date`.
+    IRI solar inputs (F10.7, Ap, IG12, Rz12) are looked up once for the actual date.
+    The 24 hourly grids are built in parallel; results are loaded from NetCDF after
+    the pool finishes. Returns a dict keyed by integer hour (0-23) -> EDPSamples.
+    """
+    from IRI_Sample_Inputs.IRI_Sample_inputs import IRI_Sample_Inputs
+    from EDPSamples.edp_samples import EDPSamples
+    import multiprocessing as mp
+    import os
+
+    os.makedirs(data_dir, exist_ok=True)
+
+    # Fetch solar indices once in the main process (requires network access)
+    inp = IRI_Sample_Inputs(date.strftime("%Y-%m-%d 12:00:00"))
+    f107_center = float(inp.apf107['f107'][inp.current_idx_f107])
+    ap_center   = float(inp.apf107['iapda'][inp.current_idx_f107])
+    ig12_center = float(inp.ig_rz['ig'][inp.current_idx_igrz])
+    rz12_center = float(inp.ig_rz['rz'][inp.current_idx_igrz])
+
+    print(f" -> IRI center inputs for {date.date()}: "
+          f"F10.7={f107_center:.1f}, Ap={ap_center:.0f}, "
+          f"IG12={ig12_center:.1f}, Rz12={rz12_center:.1f}")
+    print(f" -> Building 24 hourly global grids with {num_workers} workers ...")
+
+    date_tag = date.strftime("%Y%m%d")
+    date_ymd = date.strftime("%Y-%m-%d")
+
+    tasks = [
+        (hr, alt_grid, f107_center, ap_center, ig12_center, rz12_center,
+         n_mc, dLat, dLon, data_dir, date_tag, date_ymd)
+        for hr in range(24)
+    ]
+
+    nc_paths = {}
+    with mp.Pool(processes=num_workers, maxtasksperchild=1) as pool:
+        for i, (hr, nc_path) in enumerate(
+            pool.imap_unordered(_build_hourly_global_edp, tasks)
+        ):
+            nc_paths[hr] = nc_path
+            print(f"    [Hour {hr:02d}] done ({i+1}/24)")
+
+    # Load all grids from NetCDF in the main process after workers finish
+    hourly_grids = {hr: EDPSamples.fromNetCDF(nc_paths[hr]) for hr in range(24)}
+    print(" -> All 24 hourly global EDP grids loaded.")
+
+    return hourly_grids
+
+
+def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
               generate_plots: bool = True, save_dir: str = "./Figures/Section20_Batch/") -> dict:
     """
     §20 Tomography vs Abel Statistical Analysis (With Automated Plotting)
     Runs Data Assimilation and Abel inversions, calculates comparative statistics,
     and generates a 3-panel summary plot (TEC Fits, hmF2 Delta Map, EDP Dispersion).
+    Uses a pre-computed global EDP grid (keyed by hour) as the prior instead of
+    calling IRI per file.
     """
     from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
-    from EDPSamples.edp_samples import EDPSamples
     from Abel_Inverter import run_abel_inversion
     import numpy as np
     import pandas as pd
     import gc
     import os
+    import time
     import matplotlib.pyplot as plt
     from matplotlib.ticker import ScalarFormatter
     from matplotlib.lines import Line2D
     from scipy.interpolate import interp1d
     import cartopy.crs as ccrs
     import cartopy.feature as cfeature
-    
+    import pyproj
+
+    t_start = time.time()
     filename = podTc2_file.split('/')[-1]
     print(f"--- Processing: {filename} ---")
 
@@ -2323,6 +2442,10 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
         "Post_Abel_RMSE": np.nan,
         "Prior_TEC_RMSE": np.nan, "Prior_TEC_MAE": np.nan,
         "Post_TEC_RMSE": np.nan,  "Post_TEC_MAE": np.nan,
+        "RelTEC_TEC_RMSE": np.nan, "RelTEC_TEC_MAE": np.nan,
+        "RelTEC_TEC_bias_TECU": np.nan,
+        "RelTEC_NmF2": np.nan,    "RelTEC_hmF2": np.nan,
+        "Processing_Time_s": np.nan,
         "Status": "Failed"
     }
 
@@ -2331,11 +2454,11 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
         podTc_data = parse_podTc2_nc_file(podTc2_file)
         if podTc_data is None:
             return stats
-        
+
         _, _, tangent_alt_raw = rayTangent(podTc_data['LEO'], podTc_data['GNSS'], units='km')
         tangent_alt_km = tangent_alt_raw * 1e-3
         measured_tec = podTc_data.get('TEC_podTc2', podTc_data.get('TEC', np.zeros_like(tangent_alt_km)))
-        
+
         valid_mask = ~np.isnan(measured_tec) & (measured_tec > 0)
         measured_tec_clean = np.asarray(measured_tec[valid_mask], dtype=np.float64).flatten()
         tangent_alt_clean = tangent_alt_km[valid_mask].flatten()
@@ -2344,29 +2467,64 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
             'GNSS': podTc_data['GNSS'][:, valid_mask]
         }
         stats["Valid_Rays"] = int(np.sum(valid_mask))
-        
+
         if stats["Valid_Rays"] < 50:
             stats["Status"] = "Insufficient Rays"
+        elif stats["Valid_Rays"] > 1000:
+            stats["Status"] = "Occultation too long"
             return stats
 
-        # 2. Prior Generation
-        base_sc = sampling_df.iloc[0]
-        n_mc = 50  
-        np.random.seed(42)
-        mc_hours = (base_sc['hour'] + np.random.uniform(-3, 3, size=n_mc)) % 24
-        mc_df = pd.DataFrame({
-            "hour": mc_hours,
-            "f107": np.random.normal(loc=base_sc.get('f107', 130), scale=10, size=n_mc).clip(70, 250),
-            "ap":   np.random.normal(loc=base_sc.get('ap', 15), scale=5, size=n_mc).clip(0, 400),
-            "ig12": np.random.normal(loc=base_sc.get('ig12', 100), scale=10, size=n_mc).clip(50, 200),
-            "rz12": np.random.normal(loc=base_sc.get('rz12', 100), scale=10, size=n_mc).clip(50, 200),
-        })
-        mc_df.iloc[0] = base_sc
+        # 2. Prior: subset the global EDP grid to the occultation region
+        profile_dt = podTc_data['date']
+        profile_hour = profile_dt.hour  # floor to integer hour; rounding would wrap 23:30+ to 0
 
-        eds_occ = EDPSamples(
-            DateTime="2015-06-01 12:00:00", geo_type="Occultation", altitude=alt_grid,
-            sampling_parameters=mc_df, evaluate_iri=1,
-            filename=podTc2_file, dLat=5, dLon=5
+        # Derive the 3 bounding points of the occultation geometry (same logic used
+        # internally by EDPSamples when geo_type="Occultation")
+        pt1, pt2, pt3 = EDPSamples.get_occultation_extrema(
+            podTc_data['LEO'], podTc_data['GNSS'], alt_limit=700.0
+        )
+        pts_lat = [pt1[0], pt2[0], pt3[0]]
+        pts_lon = [pt1[1], pt2[1], pt3[1]]
+        center_lat = np.mean(pts_lat)
+
+        MARGIN = 10.0
+
+        if abs(center_lat) > 65:
+            # Polar region: longitude is ill-conditioned near the poles — all ray planes
+            # through the pole look identical in longitude. Select by latitude cap only
+            # and include all longitudes, matching the polar-mesh convention (±60° boundary).
+            if center_lat > 0:
+                lat_min = max(center_lat - MARGIN, 60.0)
+                lat_max = 90.0
+            else:
+                lat_min = -90.0
+                lat_max = min(center_lat + MARGIN, -60.0)
+            lon_min, lon_max = -180.0, 180.0
+
+        else:
+            # Non-polar: compute lat bounds normally.
+            lat_min = max(min(pts_lat) - MARGIN, -90.0)
+            lat_max = min(max(pts_lat) + MARGIN,  90.0)
+
+            lon_spread = max(pts_lon) - min(pts_lon)
+            if lon_spread <= 180.0:
+                # Normal case: occultation does not cross the antimeridian.
+                lon_min = max(min(pts_lon) - MARGIN, -180.0)
+                lon_max = min(max(pts_lon) + MARGIN,  180.0)
+            else:
+                # Antimeridian crossing: the short arc goes through ±180°.
+                # Convert to [0, 360) so the short arc is contiguous, apply margins,
+                # then fold back. lon_min > lon_max signals the crossing to subset_region.
+                lons_360 = [(l + 360) % 360 for l in pts_lon]
+                raw_min = min(lons_360) - MARGIN
+                raw_max = max(lons_360) + MARGIN
+                lon_min = raw_min - 360 if raw_min > 180 else raw_min
+                lon_max = raw_max - 360 if raw_max > 180 else raw_max
+
+        eds_occ = global_edp_cache[profile_hour].subset_region(
+            lat_min, lat_max, lon_min, lon_max,
+            clip_pts=(pt1, pt2, pt3),
+            clip_margin_deg=10.0,
         )
 
         # 3. Assimilation
@@ -2391,6 +2549,46 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
         stats["Prior_TEC_MAE"] = np.mean(np.abs(prior_residuals))
         stats["Post_TEC_RMSE"] = np.sqrt(np.mean(post_residuals**2))
         stats["Post_TEC_MAE"] = np.mean(np.abs(post_residuals))
+        
+        # --- RelTEC assimilation (same ensemble, no topside approximation) ---
+        rel_inverter = Ionosphere_Tomography_Inverter_RelTEC(EDPSam=eds_occ, meanscale=1)
+        H_rel = rel_inverter.get_observation_operator(podTc_clean)
+        reltec_state_flat = rel_inverter.assimilate(
+            obs=measured_tec_clean, obs_operator=H_rel,
+            tangent_alt_km=tangent_alt_clean,
+            relaxation=0.95, measurement_err=1.0,
+        )
+        reltec_tec = (np.asarray(H_rel) @ np.asarray(reltec_state_flat)).flatten()
+
+        # Re-derive the same reference epoch that assimilate() selected internally.
+        # RelTEC uses the ray with the highest tangent altitude above the grid top
+        # as its reference; everything above the grid has H_ref ≈ 0.
+        _alt_top = eds_occ.altitude[-1]
+        _above   = np.where(tangent_alt_clean > _alt_top)[0]
+        ref_idx_rel = int(_above[np.argmax(tangent_alt_clean[_above])]) if _above.size > 0 else 0
+
+        # Build the differential mask (all epochs except the reference).
+        _keep = np.ones(len(measured_tec_clean), dtype=bool)
+        _keep[ref_idx_rel] = False
+
+        # ΔTEC for both measured and RelTEC-predicted.  The common-mode topside
+        # offset (and any phase bias) cancels in the subtraction, leaving only
+        # the within-grid fitting error — the only ambiguity-free metric for RelTEC.
+        delta_meas    = (measured_tec_clean[_keep] - measured_tec_clean[ref_idx_rel]).astype(np.float64)
+        delta_reltec  = (reltec_tec[_keep]         - reltec_tec[ref_idx_rel]        ).astype(np.float64)
+        reltec_diff_residuals = delta_meas - delta_reltec
+
+        stats["RelTEC_TEC_RMSE"] = np.sqrt(np.mean(reltec_diff_residuals**2))
+        stats["RelTEC_TEC_MAE"]  = np.mean(np.abs(reltec_diff_residuals))
+
+        # Absolute bias ≈ mean topside TEC the RelTEC model cannot see.
+        # Positive means measured > predicted (normal: topside is missing from H_rel).
+        reltec_bias = float(np.mean(np.asarray(measured_tec_clean - reltec_tec, dtype=np.float64)))
+        stats["RelTEC_TEC_bias_TECU"] = reltec_bias
+
+        # Bias-corrected absolute TEC: shifts the RelTEC prediction onto the same
+        # absolute axis as the measured and posterior curves for plotting only.
+        reltec_tec_plot = reltec_tec + reltec_bias
 
         # Reconstruct 3D Arrays for Mapping & Spaghetti Plots
         n_height = len(alt_grid)
@@ -2414,6 +2612,13 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
         post_nm, post_hm = extract_robust_f2_peak(post_profile, alt_grid)
         stats["Post_NmF2"] = post_nm
         stats["Post_hmF2"] = post_hm
+        
+        reltec_edp_3d  = reltec_state_flat.reshape(n_height, n_geo)
+        reltec_edp_3d[reltec_edp_3d == 0] = np.nan
+        reltec_profile = reltec_edp_3d[:, center_idx]
+        reltec_nm, reltec_hm = extract_robust_f2_peak(reltec_profile, alt_grid)
+        stats["RelTEC_NmF2"] = reltec_nm
+        stats["RelTEC_hmF2"] = reltec_hm
 
         # 5. Abel Inversion & Comparison
         abel = run_abel_inversion(podTc_data)
@@ -2441,7 +2646,12 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
             
             # Setup Figure and Projection
             fig = plt.figure(figsize=(18, 6))
-            fig.suptitle(f"Tomography Batch Audit: {filename}\nTEC RMSE: Prior {stats['Prior_TEC_RMSE']:.2f} -> Post {stats['Post_TEC_RMSE']:.2f} TECU", fontsize=15)
+            fig.suptitle(
+                f"Tomography Batch Audit: {filename}\n"
+                f"TEC RMSE (abs): Prior {stats['Prior_TEC_RMSE']:.2f} → Post {stats['Post_TEC_RMSE']:.2f} TECU  |  "
+                f"RelTEC RMSE (diff): {stats['RelTEC_TEC_RMSE']:.2f} TECU  |  RelTEC bias: {stats['RelTEC_TEC_bias_TECU']:+.1f} TECU",
+                fontsize=13
+            )
             
             # ---------------------------------------------------------
             # Subplot 1: TEC Fits
@@ -2450,13 +2660,19 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
             ax1.plot(measured_tec_clean, tangent_alt_clean, color='black', lw=3, label="Measured TEC")
             ax1.plot(prior_tec, tangent_alt_clean, color='tab:red', lw=2, ls='--', label="Prior TEC")
             ax1.plot(post_tec, tangent_alt_clean, color='tab:blue', lw=2, label="Posterior TEC")
+            ax1.plot(reltec_tec_plot, tangent_alt_clean, color='tab:purple', lw=2, ls='-.',
+                     label=f"RelTEC Posterior (bias-corrected, +{stats['RelTEC_TEC_bias_TECU']:.1f} TECU)")
+            # Plot Abel Inversion
+            if abel is not None:
+                ax1.plot(abel['TEC_cal'],     abel['alt_km'],   color='black', lw=2, ls='--',  label='Calibrated TEC')
+                ax1.plot(abel['TEC_forward'], abel['alt_km'],   color='tab:green', lw=1.5, ls='--', label='Forward TEC (discrete)')
             ax1.set_ylabel("Tangent Altitude (km)")
             ax1.set_xlabel("Total Electron Content (TECU)")
             ax1.set_title("Observation Space: TEC Adjustment")
             ax1.grid(True, alpha=0.4, linestyle=':')
             ax1.legend(loc='upper right')
             if len(tangent_alt_clean) > 0:
-                ax1.set_ylim(0, min(np.max(tangent_alt_clean) + 50, alt_grid[-1]))
+                ax1.set_ylim(0, max(np.max(tangent_alt_clean) + 50, alt_grid[-1]))
 
             # ---------------------------------------------------------
             # Subplot 2: Global Map of Deltas at Posterior hmF2
@@ -2473,7 +2689,7 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
             ax2 = fig.add_subplot(1, 3, 2, projection=proj)
             ax2.set_global()
             ax2.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, edgecolor='gray')
-
+            
             if not np.isnan(stats["Post_hmF2"]):
                 # Find closest altitude slice to the Posterior hmF2
                 alt_idx = int(np.argmin(np.abs(alt_grid - stats["Post_hmF2"])))
@@ -2489,13 +2705,69 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
                                    transform=ccrs.Geodetic(), cmap='coolwarm', shading='flat',
                                    edgecolors='face', vmin=-max_delta, vmax=max_delta)
                 
+                ax2.plot(lon_center, lat_center, marker='*', color='yellow', markersize=15, 
+                         markeredgecolor='black', transform=ccrs.Geodetic(), zorder=5, label='Map Center')
+                
                 cbar = fig.colorbar(tc, ax=ax2, orientation='horizontal', shrink=0.8, pad=0.05)
                 cbar.set_label("Δ Density (m⁻³)")
                 cbar.formatter.set_powerlimits((-2, 2))
                 ax2.set_title(f"Δ Assimilation Map at hmF2 (~{actual_alt:.0f} km)")
             else:
                 ax2.set_title("hmF2 Assimilation Map Unavailable")
-
+            # ---------------------------------------------------------
+            # Raypath overlays: 4 selected rays projected onto the map
+            # ---------------------------------------------------------
+            _ecef_to_ll = pyproj.Transformer.from_crs(
+                pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
+                pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+                always_xy=True,
+            )
+            
+            idx_high   = int(np.argmax(tangent_alt_clean))
+            idx_low    = int(np.argmin(tangent_alt_clean))
+            idx_tecmax = int(np.argmax(measured_tec_clean))
+            mid_alt    = 0.5 * (tangent_alt_clean[idx_high] + tangent_alt_clean[idx_tecmax])
+            idx_mid    = int(np.argmin(np.abs(tangent_alt_clean - mid_alt)))
+            
+            ray_specs = [
+                (idx_high,   'limegreen', 'Highest Ray'),
+                (idx_tecmax, 'gold',      'TEC-Max Ray'),
+                (idx_mid,    'orangered', 'Mid Ray'),
+                (idx_low,    'white',     'Lowest Ray'),
+            ]
+            
+            t_ray = np.linspace(0, 1, 120)
+            for ray_idx, ray_color, ray_label in ray_specs:
+                leo_r  = podTc_clean['LEO'][:,  ray_idx]   # (3,) km ECEF
+                gnss_r = podTc_clean['GNSS'][:, ray_idx]
+            
+                # Sample the straight-line ECEF ray at 120 points
+                pts = gnss_r[:, None] + (leo_r[:, None] - gnss_r[:, None]) * t_ray  # (3, 120)
+            
+                r_lons, r_lats, r_alts_m = _ecef_to_ll.transform(
+                    pts[0] * 1e3, pts[1] * 1e3, pts[2] * 1e3
+                )
+            
+                # Show only the ionospheric segment (below 1200 km altitude)
+                iono_mask = r_alts_m < 800_000
+                if np.any(iono_mask):
+                    ax2.plot(r_lons[iono_mask], r_lats[iono_mask],
+                             transform=ccrs.Geodetic(),
+                             color=ray_color, lw=1.5, zorder=6)
+            
+                # Tangent point: point of closest approach to Earth's centre
+                v   = leo_r - gnss_r
+                t_s = np.clip(-np.dot(v, gnss_r) / np.dot(v, v), 0.0, 1.0)
+                tp  = gnss_r + v * t_s
+                tp_lon, tp_lat, _ = _ecef_to_ll.transform(
+                    tp[0] * 1e3, tp[1] * 1e3, tp[2] * 1e3
+                )
+                ax2.plot(tp_lon, tp_lat,
+                         transform=ccrs.Geodetic(),
+                         marker='o', color=ray_color, markersize=6,
+                         markeredgecolor='black', zorder=7, label=ray_label)
+            
+            ax2.legend(loc='lower left', fontsize=7)
             # ---------------------------------------------------------
             # Subplot 3: EDP Comparisons (Spaghetti Plot + F2 Peaks)
             # ---------------------------------------------------------
@@ -2510,6 +2782,9 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
             # Center Profiles
             ax3.plot(prior_profile, alt_grid, color='darkred', lw=2, ls='--', label="Prior (Center)")
             ax3.plot(post_profile, alt_grid, color='darkblue', lw=2, label="Posterior (Center)")
+            
+            ax3.plot(reltec_edp_3d, alt_grid, color='tab:purple', alpha=0.1, lw=1)
+            ax3.plot(reltec_profile, alt_grid, color='purple', lw=2, ls='-.', label="RelTEC (Center)")
 
             # --- NEW: Plot the extracted F2 Peaks ---
             if not np.isnan(stats["Prior_NmF2"]):
@@ -2519,6 +2794,11 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
             if not np.isnan(stats["Post_NmF2"]):
                 ax3.plot(stats["Post_NmF2"], stats["Post_hmF2"], marker='o', markersize=8, 
                          color='darkblue', markeredgecolor='black', zorder=5)
+                
+            if not np.isnan(stats["RelTEC_NmF2"]):
+                ax3.plot(stats["RelTEC_NmF2"], stats["RelTEC_hmF2"], marker='o', markersize=8,
+                         color='purple', markeredgecolor='black', zorder=5)
+
             # ----------------------------------------
 
             # Legend Setup
@@ -2527,10 +2807,12 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
                 Line2D([0], [0], color='tab:blue', lw=2, alpha=0.5),
                 Line2D([0], [0], color='darkred', lw=2, ls='--'),
                 Line2D([0], [0], color='darkblue', lw=2),
+                Line2D([0], [0], color='tab:purple', lw=2, alpha=0.5),
+                Line2D([0], [0], color='purple', lw=2, ls='-.'),
                 # Add a legend entry for the peak markers
                 Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markeredgecolor='black', markersize=8)
             ]
-            legend_labels = ['Prior (All Vertices)', 'Posterior (All Vertices)', 'Prior (Center)', 'Posterior (Center)', 'F2 Peak']
+            legend_labels = ['Prior (All Vertices)', 'Posterior (All Vertices)', 'Prior (Center)', 'Posterior (Center)', 'RelTEC (All Vertices)', 'RelTEC (Center)', 'F2 Peak']
 
             # Plot Abel Inversion if available
             if abel is not None and len(abel['Ne']) > 0:
@@ -2548,15 +2830,17 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
             ax3.set_title("State Space: Vertical Profile Dispersion")
             ax3.xaxis.set_major_formatter(formatter)
             
+            idx_alt = alt_grid < 400
             # Set dynamic limits
-            max_edp = max(np.nanmax(prior_edp_3d), np.nanmax(posterior_edp_3d))
+            max_edp = max(np.nanmax(prior_edp_3d[idx_alt]), np.nanmax(posterior_edp_3d[idx_alt]))
             if abel is not None and len(abel['Ne']) > 0:
                 max_edp = max(max_edp, np.nanmax(abel['Ne']))
                 
-            ax3.set_xlim(left=0, right=max_edp * 1.1)
+            ax3.set_xlim(left=-0.1*max_edp, right=max_edp * 1.1)
+            ax3.set_ylim(0, max(np.max(tangent_alt_clean) + 50, alt_grid[-1]))
+            
             ax3.grid(True, alpha=0.4, linestyle=':')
             ax3.legend(custom_lines, legend_labels, loc='upper right')
-            
             # Final Layout & Save
             plt.tight_layout()
             fig.savefig(os.path.join(save_dir, f"{filename}_summary.png"), dpi=100)
@@ -2567,11 +2851,12 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame,
     except Exception as e:
         print(f" [!] Error processing {filename}: {e}")
         stats["Status"] = f"Error: {str(e)}"
-        
+
     finally:
+        stats["Processing_Time_s"] = time.time() - t_start
         plt.close('all')
-        
-        local_vars = ['podTc_data', 'eds_occ', 'inverter', 'H_unscaled', 
+
+        local_vars = ['podTc_data', 'eds_occ', 'inverter', 'H_unscaled',
                       'prior_state_flat', 'posterior_state_flat', 'prior_tec', 'post_tec']
         for var in local_vars:
             if var in locals():
@@ -2621,7 +2906,7 @@ def _process_hourly_mesh(args: tuple) -> tuple:
             altitude=alt_grid,
             sampling_parameters=mc_df, 
             evaluate_iri=1,
-            equal_spaced=False, 
+            equal_spaced=True, 
             dLat=dLat, 
             dLon=dLon
         )
@@ -2853,10 +3138,10 @@ def main() -> None:
     import os
     import pandas as pd
     
-    print("=" * 60)
-    print("IonosphereTomography demo")
-    print("Alaska region:  60–65 °N,  150–140 °W")
-    print("=" * 60)
+    # print("=" * 60)
+    # print("IonosphereTomography demo")
+    # print("Alaska region:  60–65 °N,  150–140 °W")
+    # print("=" * 60)
 
     # section1()
     # section2()
@@ -2935,85 +3220,77 @@ def main() -> None:
     # print("IonosphereTomography Batch Processing")
     # print("=" * 60)
 
+    import datetime
+
     alt_grid = np.arange(60.0, 1000.0, 10.0, dtype=float)
-    sampling_df = pd.DataFrame([{
-        "hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0
-    }])
 
-    # # Updated path to 2025.151
-    # base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.151/"
-    
-    # # Dynamically find all .0001_nc files in the target directory
-    # if not os.path.exists(base_path):
-    #     print(f"Directory not found: {base_path}")
-    #     return
+    # ── Section 20 Batch Processing ───────────────────────────────────────────
+    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.178/"
 
-    # podTc2_files = [f for f in os.listdir(base_path) if f.endswith(".0001_nc")]
-    # podTc2_files.sort() # Ensure consistent ordering
-    
-    # print(f"Found {len(podTc2_files)} files to process in {base_path}\n")
+    if not os.path.exists(base_path):
+        print(f"Directory not found: {base_path}")
+        return
 
-    # # List to hold the statistical dictionaries
-    # batch_statistics = []
-    
-    # # Set to None to run all files, or an integer (e.g., 30) to limit the run
-    # MAX_FILES = 5 
-    
-    # files_to_process = podTc2_files[5:10] if MAX_FILES else podTc2_files
-    # print(f"Processing {len(files_to_process)} out of {len(podTc2_files)} available files...\n")
+    podTc2_files = sorted(f for f in os.listdir(base_path) if f.endswith(".0001_nc"))
+    print(f"Found {len(podTc2_files)} files to process in {base_path}\n")
 
-    # for idx, f_string in enumerate(files_to_process):
-    #     print(f"\n[{idx+1}/{len(podTc2_files)}] ", end="")
-    #     full_path = os.path.join(base_path, f_string)
-        
-    #     # Run Section 20 and collect stats
-    #     file_stats = section20(full_path, alt_grid, sampling_df)
-    #     batch_statistics.append(file_stats)
-        
-    #     # Optional: Save a rolling backup in case it crashes midway
-    #     if (idx + 1) % 10 == 0:
-    #         temp_df = pd.DataFrame(batch_statistics)
-    #         temp_df.to_csv("rolling_stats_backup.csv", index=False)
+    # Derive the calendar date from the year.doy directory name
+    year_doy = base_path.rstrip('/').split('/')[-1]   # e.g. "2025.151"
+    year, doy = map(int, year_doy.split('.'))
+    batch_date = pd.Timestamp(datetime.date(year, 1, 1) + datetime.timedelta(days=doy - 1))
 
-    # print("\n" + "=" * 60)
-    # print("Batch processing complete. Compiling results...")
-    # print("=" * 60)
-    
-    # # Convert list of dictionaries to a pandas DataFrame
-    # stats_df = pd.DataFrame(batch_statistics)
-    
-    # # Save final results
-    # stats_df.to_csv("Tomography_vs_Abel_Stats_2025_151.csv", index=False)
-    
-    # # Print a quick summary of the successful runs
-    # success_df = stats_df[stats_df["Status"] == "Success"]
-    # print(f"\nSuccessfully processed {len(success_df)} out of {len(stats_df)} files.")
-    # if len(success_df) > 0:
-    #     print("\n--- Summary Statistics ---")
-    #     print("Mean hmF2 Comparison:")
-    #     print(f"  Prior:     {success_df['Prior_hmF2'].mean():.1f} km")
-    #     print(f"  Posterior: {success_df['Post_hmF2'].mean():.1f} km")
-    #     print(f"  Abel:      {success_df['Abel_hmF2'].mean():.1f} km")
-        
-    #     print("\nMean TEC Residuals (RMSE):")
-    #     print(f"  Prior:     {success_df['Prior_TEC_RMSE'].mean():.3f} TECU")
-    #     print(f"  Posterior: {success_df['Post_TEC_RMSE'].mean():.3f} TECU")
-        
-    #     # Calculate the average percentage improvement
-    #     improvement = ((success_df['Prior_TEC_RMSE'].mean() - success_df['Post_TEC_RMSE'].mean()) 
-    #                    / success_df['Prior_TEC_RMSE'].mean()) * 100
-    #     print(f"  Avg Filter Assimilation Improvement: {improvement:.1f}%")
-        
-        
-    # Ensure alt_grid and sampling_df have been generated before this point
-    # Run the universal covariance generator (using 6 workers to protect RAM)
-    hourly_edp_arrays = section21(
-        alt_grid=alt_grid, 
-        sampling_df=sampling_df, 
-        dLat=10.0, 
-        dLon=5.0, 
-        num_workers=12
-    )
+    # Call IRI once for the day; cache global 5-deg grids for all 24 hours
+    print(f"Building global EDP cache for {batch_date.date()} ...")
+    global_edp_cache = build_daily_global_edps(batch_date, alt_grid, dLat=5.0, dLon=5.0, num_workers=12)
+
+    MAX_FILES = None  # Set to an integer to limit the run, or None for all files
+    files_to_process = podTc2_files[51:] if MAX_FILES else podTc2_files
+    print(f"\nProcessing {len(files_to_process)} files sequentially...\n")
+
+    batch_statistics = []
+    for idx, f_string in enumerate(files_to_process):
+        print(f"\n[{idx+1}/{len(files_to_process)}] ", end="")
+        full_path = os.path.join(base_path, f_string)
+        file_stats = section20(full_path, alt_grid, global_edp_cache)
+        batch_statistics.append(file_stats)
+
+        # Rolling backup every 10 files
+        if (idx + 1) % 10 == 0:
+            pd.DataFrame(batch_statistics).to_csv("rolling_stats_backup.csv", index=False)
+
+    print("\n" + "=" * 60)
+    print("Batch processing complete. Compiling results...")
+    print("=" * 60)
+
+    stats_df = pd.DataFrame(batch_statistics)
+    csv_name = f"Tomography_vs_Abel_Stats_{year}_{doy:03d}.csv"
+    stats_df.to_csv(csv_name, index=False)
+    print(f"Results saved to {csv_name}")
+
+    success_df = stats_df[stats_df["Status"] == "Success"]
+    print(f"\nSuccessfully processed {len(success_df)} out of {len(stats_df)} files.")
+    if len(success_df) > 0:
+        print("\n--- Summary Statistics ---")
+        print("Mean hmF2 Comparison:")
+        print(f"  Prior:     {success_df['Prior_hmF2'].mean():.1f} km")
+        print(f"  Posterior: {success_df['Post_hmF2'].mean():.1f} km")
+        print(f"  Abel:      {success_df['Abel_hmF2'].mean():.1f} km")
+        print("\nMean TEC Residuals (RMSE):")
+        print(f"  Prior:     {success_df['Prior_TEC_RMSE'].mean():.3f} TECU")
+        print(f"  Posterior: {success_df['Post_TEC_RMSE'].mean():.3f} TECU")
+        improvement = ((success_df['Prior_TEC_RMSE'].mean() - success_df['Post_TEC_RMSE'].mean())
+                       / success_df['Prior_TEC_RMSE'].mean()) * 100
+        print(f"  Avg Assimilation Improvement: {improvement:.1f}%")
+        print(f"\nMean Processing Time: {success_df['Processing_Time_s'].mean():.1f} s/file")
+
+    # # Run the universal covariance generator (using 6 workers to protect RAM)
+    # hourly_edp_arrays = section21(
+    #     alt_grid=alt_grid,
+    #     sampling_df=pd.DataFrame([{"hour": 12.0, "f107": 150.0, "ap": 15.0, "ig12": 100.0, "rz12": 100.0}]),
+    #     dLat=10.0,
+    #     dLon=5.0,
+    #     num_workers=12,
+    # )
 
 if __name__ == "__main__":
     main()

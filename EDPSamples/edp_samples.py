@@ -90,6 +90,77 @@ def _ecef_to_geodetic(xyz: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarr
         h = np.where(pole, h_pole, h)
     return np.degrees(lat), np.degrees(lon), h
 
+
+def _inside_spherical_triangle_with_margin(
+    query_lats: np.ndarray,
+    query_lons: np.ndarray,
+    p1: tuple,
+    p2: tuple,
+    p3: tuple,
+    margin_deg: float = 0.0,
+) -> np.ndarray:
+    """
+    Boolean mask: True where (lat, lon) query points fall inside or within
+    margin_deg angular degrees of the spherical triangle defined by p1, p2, p3.
+
+    Each edge of the triangle is a great circle arc.  For each edge, a unit
+    normal to its plane is computed and oriented toward the opposite vertex.
+    A query point is accepted when its dot product with every edge normal
+    satisfies n · P ≥ −sin(margin_deg), i.e. it may overshoot the edge by
+    up to margin_deg before being rejected.
+
+    Falls back to accepting all points if any edge is degenerate (vertices
+    coincide or are antipodal), so callers never receive an empty result from
+    a bad triangle alone.
+
+    Parameters
+    ----------
+    query_lats, query_lons : ndarray, shape (N,)
+        Geodetic coordinates of the points to test (degrees).
+    p1, p2, p3 : (lat_deg, lon_deg) tuples
+        Vertices of the spherical triangle (degrees).
+    margin_deg : float
+        Angular buffer around the triangle edges (degrees).
+
+    Returns
+    -------
+    mask : ndarray, shape (N,), bool
+    """
+    def _unit(lat_d, lon_d):
+        lat_r, lon_r = np.radians(lat_d), np.radians(lon_d)
+        return np.array([np.cos(lat_r) * np.cos(lon_r),
+                         np.cos(lat_r) * np.sin(lon_r),
+                         np.sin(lat_r)])
+
+    a = _unit(p1[0], p1[1])
+    b = _unit(p2[0], p2[1])
+    c = _unit(p3[0], p3[1])
+
+    def _oriented_normal(u, v, ref):
+        n = np.cross(u, v)
+        norm = np.linalg.norm(n)
+        if norm < 1e-9:
+            return None          # degenerate edge
+        n /= norm
+        return n if np.dot(n, ref) >= 0 else -n
+
+    n_ab = _oriented_normal(a, b, c)
+    n_bc = _oriented_normal(b, c, a)
+    n_ca = _oriented_normal(c, a, b)
+
+    if any(n is None for n in (n_ab, n_bc, n_ca)):
+        return np.ones(len(query_lats), dtype=bool)  # degenerate → accept all
+
+    lat_r = np.radians(np.asarray(query_lats, dtype=float))
+    lon_r = np.radians(np.asarray(query_lons, dtype=float))
+    P = np.column_stack([np.cos(lat_r) * np.cos(lon_r),
+                         np.cos(lat_r) * np.sin(lon_r),
+                         np.sin(lat_r)])              # (N, 3) unit ECEF
+
+    sin_m = np.sin(np.radians(margin_deg))
+    return ((P @ n_ab) >= -sin_m) & ((P @ n_bc) >= -sin_m) & ((P @ n_ca) >= -sin_m)
+
+
 def ECEFtolla(ECEF):
     # ECEF can be shape (3,) for single point or (3, n) for multiple points
     if ECEF.ndim == 1:
@@ -153,7 +224,7 @@ def get_IRI2020_EDP(DateTime: str,
     with tempfile.TemporaryDirectory() as tmpdir:
         nml_path = os.path.join(tmpdir, namelist_filename)
         out_path = os.path.join(tmpdir, IRI_output_filename)
-
+        # print(f"Number of points: {geolocation.shape[0]}")
         flag = write_IRI2020_namelist(DateTime, altitude, geolocation,
                                       sampling_parameters, nml_path)
         assert flag == 0, "Fail to write input namelist for IRI2020"
@@ -1254,7 +1325,7 @@ class EDPSamples(xr.Dataset):
                 edps=np.ndarray((n_height,n_geo,n_sample))
                 feature_edps=np.ndarray((len(cls.FEATURE_LABEL),n_geo,n_sample))
         else:
-            print(f"EDPS: {edps.shape[1]}, N_geo: {n_geo}")
+            print(f"EDPS: {edps.shape}, N_geo: {n_geo}")
             assert edps.ndim == 3, "EDP sample profile must be 3 dimensional"
             assert edps.shape[0] == n_height, "EDP samples'eading dimension must be height"
             assert edps.shape[1] == n_geo, "EDP sample second dimension must be vertices"
@@ -1459,9 +1530,18 @@ class EDPSamples(xr.Dataset):
                 assert "minLat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (13)."]
                 assert "dLat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (14)."]
                 return EDPSamples(ds.attrs["DateTime"],ds.attrs["geo_type"],
-                                altitude, sampling_parameters, 
+                                altitude, sampling_parameters,
                                 minLat=ds.attrs["minLat"],dLat=ds.attrs["dLat"],
                                 edps=edps,feature_edps=feature_edps,attrs=ds.attrs)
+            case "Global":
+                assert "dLat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (15g)."]
+                assert "dLon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (16g)."]
+                return EDPSamples(ds.attrs["DateTime"], ds.attrs["geo_type"],
+                                altitude, sampling_parameters,
+                                equal_spaced=bool(ds.attrs.get("equal_spaced", False)),
+                                dLat=ds.attrs["dLat"],
+                                dLon=ds.attrs["dLon"],
+                                edps=edps, feature_edps=feature_edps, attrs=ds.attrs)
             case "Occultation":
                 assert "pt1" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (15)."]
                 assert "pt2" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (16)."]
@@ -2003,6 +2083,134 @@ class EDPSamples(xr.Dataset):
             ds=self[self.VAR_MESH]
             return ds.to_numpy()
         return None
+
+    def subset_region(
+        self,
+        lat_min: float,
+        lat_max: float,
+        lon_min: float,
+        lon_max: float,
+        clip_pts: tuple | None = None,
+        clip_margin_deg: float = 5.0,
+    ) -> "EDPSamples":
+        """
+        Return a new EDPSamples containing only vertices within the lat/lon bounding box,
+        optionally further clipped to a spherical triangle footprint.
+
+        Mesh triangles with any vertex outside the selection are dropped and the
+        remaining vertex indices are compacted. Handles antimeridian crossing
+        when lon_min > lon_max (e.g. lon_min=170, lon_max=-170).
+
+        Parameters
+        ----------
+        lat_min, lat_max : float
+            Latitude bounds (degrees).
+        lon_min, lon_max : float
+            Longitude bounds (degrees). If lon_min > lon_max the region wraps
+            across ±180°.
+        clip_pts : tuple of 3 (lat, lon) pairs, optional
+            If provided, vertices that pass the bounding-box test are further
+            filtered to those inside or within clip_margin_deg of the spherical
+            triangle defined by these three points.  Intended for use with the
+            (pt1, pt2, pt3) output of EDPSamples.get_occultation_extrema so that
+            only vertices geometrically under the ray-path footprint are kept.
+        clip_margin_deg : float, default 5.0
+            Angular buffer (degrees) around the triangle edges.  Vertices within
+            this angular distance of any edge are kept even if strictly outside.
+            Increase if subset_region raises due to too few remaining vertices.
+        """
+        geo = self.geolocation          # (n_geo, 2): col 0 = lon, col 1 = lat
+        lon_g, lat_g = geo[:, 0], geo[:, 1]
+
+        lat_mask = (lat_g >= lat_min) & (lat_g <= lat_max)
+        if lon_min <= lon_max:
+            lon_mask = (lon_g >= lon_min) & (lon_g <= lon_max)
+        else:                            # wraps antimeridian
+            lon_mask = (lon_g >= lon_min) | (lon_g <= lon_max)
+
+        kept = np.where(lat_mask & lon_mask)[0]
+        if len(kept) < 3:
+            raise ValueError(
+                f"subset_region: only {len(kept)} vertices in "
+                f"lat=[{lat_min},{lat_max}], lon=[{lon_min},{lon_max}]"
+            )
+
+        if clip_pts is not None:
+            # Secondary filter: keep only vertices geometrically under the occultation
+            # triangle, expanded by clip_margin_deg so edge-adjacent nodes aren't lost.
+            # geolocation col 0 = lon, col 1 = lat (consistent with lon_g/lat_g above).
+            tri_mask = _inside_spherical_triangle_with_margin(
+                geo[kept, 1], geo[kept, 0],
+                clip_pts[0], clip_pts[1], clip_pts[2],
+                margin_deg=clip_margin_deg,
+            )
+            kept = kept[tri_mask]
+            if len(kept) < 3:
+                raise ValueError(
+                    f"subset_region (triangle clip): only {len(kept)} vertices "
+                    f"inside the occultation triangle with {clip_margin_deg}° margin. "
+                    f"Increase clip_margin_deg or widen the bounding box."
+                )
+
+        # Compact index map: old global idx → new local idx (-1 = not kept)
+        remap = np.full(geo.shape[0], -1, dtype=np.int64)
+        remap[kept] = np.arange(len(kept), dtype=np.int64)
+
+        # Keep only triangles whose 3 vertices are all inside the bbox
+        parent_mesh = self.mesh
+        if parent_mesh is not None:
+            tri_mask = np.all(remap[parent_mesh] >= 0, axis=1)
+            sub_mesh = remap[parent_mesh[tri_mask]]
+        else:
+            sub_mesh = None
+
+        sub_geo   = geo[kept]
+        sub_edps  = self.edps[:, kept, :]
+        sub_fedps = self.feature_edps[:, kept, :]
+
+        sp = self.sampling_parameters
+        sp_values = sp.to_numpy()
+        sp_names  = sp.columns
+
+        coords = {
+            self.COORD_ALTITUDE: (self.DIM_HEIGHT, self.altitude),
+            self.DIM_GEO_COMPONENT: (
+                self.DIM_GEO_COMPONENT,
+                np.array(["latitude", "longitude"], dtype=object)),
+            self.DIM_PARAM:    (self.DIM_PARAM,    sp_names),
+            self.DIM_FEATURE:  (self.DIM_FEATURE,  np.array(self.FEATURE_LABEL)),
+        }
+
+        data_vars = {
+            self.VAR_GEOLOCATION: (
+                (self.DIM_GEO, self.DIM_GEO_COMPONENT), sub_geo,
+                {"long_name": "geolocation",
+                 "description": "latitude (column 0), longitude (column 1)"}),
+            self.VAR_EDPS: (
+                (self.DIM_HEIGHT, self.DIM_GEO, self.DIM_SAMPLE), sub_edps,
+                {"long_name": "EDPs",
+                 "description": "electron density profiles samples"}),
+            self.VAR_FEDPS: (
+                (self.DIM_FEATURE, self.DIM_GEO, self.DIM_SAMPLE), sub_fedps,
+                {"long_name": "Feature_EDPs",
+                 "description": "features of electron density profiles samples"}),
+            self.VAR_SAMPLING: (
+                (self.DIM_SAMPLE, self.DIM_PARAM), sp_values,
+                {"long_name": "sampling_parameters"}),
+        }
+        if sub_mesh is not None:
+            data_vars[self.VAR_MESH] = (
+                (self.DIM_TRIANGLE, self.DIM_VERTEX), sub_mesh,
+                {"long_name": "surface mesh",
+                 "description": "triangles: three vertex indices into the geo dimension"})
+
+        attrs = dict(self.attrs)
+
+        # Bypass EDPSamples.__init__ (which regenerates geometry from geo_type params)
+        # and directly initialise the xarray Dataset state.
+        instance = object.__new__(type(self))
+        xr.Dataset.__init__(instance, data_vars=data_vars, coords=coords, attrs=attrs)
+        return instance
 
     def plot_edp_statistics(self, TitleName="Non-Gaussian"):
         """
