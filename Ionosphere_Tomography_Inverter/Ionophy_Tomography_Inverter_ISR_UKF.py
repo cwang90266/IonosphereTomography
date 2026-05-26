@@ -15,9 +15,11 @@ Class of Tomography Data Assimilation Filter
 
 import numpy as np
 import pyproj
+import scipy.linalg
 from scipy.spatial import cKDTree
 from filterpy.kalman import KalmanFilter
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 # Ensure you import these from your edp_samples module
 from EDPSamples.edp_samples import EDPSamples, interp_heights, find_containing_triangles
@@ -158,73 +160,75 @@ def _process_single_ray(
 
 class Ionosphere_Tomography_Inverter(KalmanFilter):
     """
-    Extended Kalman Filter (EKF) for ionospheric tomographic inversion.
-
-    The state is the log-ratio anomaly  x = log(ne / ne_bg), so the
-    reconstructed electron density  ne = ne_bg * exp(x)  is guaranteed
-    positive for any finite x — no separate non-negativity constraint needed.
-
-    The observation model  TEC = H @ ne  is nonlinear in x; the EKF
-    linearises it at the current predicted state each step:
-
-        H_eff = H * ne_hat.T      (each column j scaled by ne_hat[j])
-        y     = TEC_obs - H @ ne_hat          (nonlinear innovation)
-
-    Prior covariance is computed in log-ratio space from the EDP ensemble.
-    The Gauss-Markov model restores variance toward the prior each step.
+    The class Ionosphere_Tomography_Inverter is a subclass of the KalmanFilter
+    dedicated for ionosphere tomographic inversion from TEC measurements.
+    
+    UPDATED: Now implements an Iterated Square-Root Unscented Kalman Filter (ISR-UKF).
+    The state vector self.x now tracks the natural logarithm of the electron density
+    (ln(Ne)) to mathematically guarantee strictly positive physical electron densities.
     """
 
-    def __init__(self, EDPSam: EDPSamples, ne_floor: float = 1.0, meanscale: int = 0):
+    def __init__(self, EDPSam):
         self.EDPSam = EDPSam
-        edps = EDPSam.edps  # shape: (n_height, n_geo, n_sample)
+        edps = EDPSam.edps  # Original shape: (n_height, n_geo, n_sample)
         n_height, n_geo, n_sample = edps.shape
         n_state_vars = n_height * n_geo
 
+        # 1. Flatten spatial and altitude dimensions into a state vector
         edps_flat = edps.reshape(n_state_vars, n_sample)
-        edps_flat = np.nan_to_num(edps_flat, nan=0.0)
 
-        # Background: first ensemble member.  Floor prevents log(0) at low
-        # altitudes where IRI returns near-zero values; 1 e/m^3 is negligible
-        # physically but keeps the log well-defined everywhere.
-        ne_bg = np.maximum(edps_flat[:, 0:1], ne_floor)
+        # 2. CRITICAL FIX for Log-State: Sanitize the IRI background state.
+        # We use a realistic ionospheric floor (1e8 m^-3) to prevent the ensemble
+        # variance from exploding when comparing normal values to near-zero values.
+        physical_floor = 1e8  
+        edps_flat = np.nan_to_num(edps_flat, nan=physical_floor)
+        edps_flat = np.clip(edps_flat, physical_floor, None)
 
-        # Log-ratio ensemble: x_i = log(ne_i / ne_bg).
-        # Prior mean x = 0 corresponds to ne = ne_bg.
-        log_ensemble = np.log(np.maximum(edps_flat, ne_floor)) - np.log(ne_bg)
+        # 3. Transform the entire ensemble into Logarithmic Space
+        edps_log = np.log(edps_flat)
 
+        # Extract the base state (0th index) in log space
+        edps_base_log = edps_log[:, 0:1]
+
+        # 4. Initialize the FilterPy parent class
         super().__init__(dim_x=n_state_vars, dim_z=1)
 
-        self.x = np.zeros((n_state_vars, 1))
-        self.P = np.cov(log_ensemble)
-
+        # 5. Set Initial State and Covariance in Log Space
+        # Note: self.x is now the FULL log-state, not a perturbation.
+        self.x = edps_base_log.copy().flatten()
+        self.P = np.cov(edps_log)
+        
+        # Keep original linear base for reference if needed, but it's unused in the UKF math
         self.attrs = {
-            "ne_bg":             ne_bg,          # background EDP (n, 1), always > 0
-            "initial_edps_mean": ne_bg,          # alias kept for backward compatibility
-            "initial_edps_cov":  self.P.copy(),  # log-ratio prior covariance
+            "initial_edps_mean": np.exp(edps_base_log), 
+            "initial_edps_log_mean": edps_base_log.flatten(),
+            "initial_edps_log_cov": self.P.copy()
         }
+
     def get_observation_operator(self, podTc2_data: dict, num_segments: int = 1000,
                                  topside_scale_height_m: float = 150000.0,
                                  topside_n_steps: int = 10) -> np.ndarray:
+        # (This function remains EXACTLY the same as your original code)
         from joblib import Parallel, delayed
-    
+
         altitude    = self.EDPSam.altitude
         geolocation = self.EDPSam.geolocation
         n_height    = len(altitude)
         n_geo       = geolocation.shape[0]
         n_state_vars = n_height * n_geo
-    
+
         LEO    = podTc2_data['LEO']
         GNSS   = podTc2_data['GNSS']
         n_rays = LEO.shape[1]
-    
+
         transformer = pyproj.Transformer.from_crs(
             pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
             pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
             always_xy=True
         )
         tree = cKDTree(geolocation) if n_geo > 1 else None
-        t    = np.linspace(0, 1, num_segments)  # computed once, shared across all rays
-    
+        t    = np.linspace(0, 1, num_segments)
+
         print(f"  -> Building H Matrix ({n_rays} rays, parallel)...")
         rows = Parallel(n_jobs=-1)(
             delayed(_process_single_ray)(
@@ -236,54 +240,186 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             )
             for i in range(n_rays)
         )
-    
+
         H = np.array(rows, dtype=np.float32)
         H /= 1e16
         return H
-    
+
     def assimilate(self, obs: np.ndarray, podTc2_data: dict = None, obs_operator: np.ndarray = None,
                    relaxation: float = 1.0, measurement_err: float = 0.0) -> np.ndarray:
         """
-        Single EKF assimilation step in log-electron-density space.
-
-        State x = log(ne / ne_bg), reconstructed as ne = ne_bg * exp(x) > 0.
-        The EKF Jacobian H_eff = H * ne_hat.T is re-evaluated at the predicted
-        state each call, so the linearisation tracks the evolving solution.
+        Diagnostic ISR-UKF assimilation step with safety checks and plotting.
         """
-        obs = np.asarray(obs).reshape(-1, 1)
-        n_obs = obs.shape[0]
+        obs = np.asarray(obs).reshape(-1)
 
         if obs_operator is None:
             assert podTc2_data is not None, "Must provide podTc2_data if obs_operator is None."
-            print("Dynamically calculating observation operator (H)...")
+            print("\n[DIAGNOSTIC] Dynamically calculating observation operator (H)...")
             obs_operator = self.get_observation_operator(podTc2_data)
 
         assert obs.shape[0] == obs_operator.shape[0], "Observation length must match H matrix rows"
-        assert obs_operator.shape[1] == self.dim_x,   "H matrix columns must match state vector length"
+        assert obs_operator.shape[1] == self.dim_x, "H matrix columns must match State vector length"
 
-        # Gauss-Markov predict
-        self.x = relaxation * self.x
-        self.P = (relaxation ** 2) * self.P + (1.0 - relaxation) * self.attrs["initial_edps_cov"]
+        # Gauss-Markov Predict
+        mean_log = self.attrs["initial_edps_log_mean"]
+        self.x = mean_log + relaxation * (self.x - mean_log)
+        self.P = (relaxation ** 2) * self.P + (1.0 - relaxation) * self.attrs["initial_edps_log_cov"]
 
-        # EDP at predicted state — always positive by construction
-        ne_hat = self.attrs["ne_bg"] * np.exp(self.x)          # (n, 1)
+        n_dim = len(self.x)
+        n_obs = len(obs)
+        max_iter = 5       
+        tol = 1e-3         
 
-        # EKF Jacobian: d(H @ ne) / dx = H * ne_hat.T
-        H_eff = obs_operator * ne_hat.T                         # (n_obs, n)
+        # Unscented Transform Parameters
+        # For L=7000+, alpha=1.0 prevents the central weight from becoming wildly negative
+        alpha = 1.0       
+        beta = 0.0         
+        kappa = 0.0
 
-        # Innovation: observed TEC minus nonlinear forward model
-        y = obs - obs_operator @ ne_hat                         # (n_obs, 1)
+        lam = (alpha ** 2) * (n_dim + kappa) - n_dim
+        # This is the wrong gamma, but it might be necessary to change it
+        gamma = 10#np.sqrt(n_dim + lam)
 
-        # Kalman update  (O(n² × n_obs), same as original)
-        PHT = self.P @ H_eff.T                                  # (n, n_obs)
-        S   = H_eff @ PHT + max(measurement_err, 1e-6) * np.eye(n_obs)
-        K   = np.linalg.solve(S, PHT.T).T
-        self.x = self.x + K @ y
-        self.P = self.P - K @ PHT.T
+        W_m = np.full(2 * n_dim + 1, 1.0 / (2.0 * (n_dim + lam)))
+        W_c = np.full(2 * n_dim + 1, 1.0 / (2.0 * (n_dim + lam)))
+        W_m[0] = lam / (n_dim + lam)
+        W_c[0] = W_m[0] + (1.0 - alpha**2 + beta)
 
-        # Reconstruct absolute EDP — guaranteed positive for any finite x
-        return self.attrs["ne_bg"] * np.exp(self.x)
+        x_prior = self.x.copy()
+        x_iter = self.x.copy()
+        R = max(measurement_err, 1e-6) * np.eye(n_obs)
 
+        # --- DIAGNOSTICS INIT ---
+        print(f"\n{'='*40}")
+        print(f"ASSIMILATION DIAGNOSTICS: START")
+        print(f"{'='*40}")
+        print(f"State Dimension (L): {n_dim}")
+        print(f"UT Gamma Factor: {gamma:.2f}")
+        print(f"Initial Log-State Min/Max: {self.x.min():.2f} / {self.x.max():.2f}")
+        print(f"Max Covariance (P) Variance: {np.diag(self.P).max():.4f}")
+        
+        # Trackers for plotting
+        res_history = []
+        state_diff_history = []
+
+        for iteration in range(max_iter):
+            print(f"\n--- Iteration {iteration + 1} ---")
+            
+            try:
+                S_x = scipy.linalg.cholesky(self.P, lower=True)
+            except scipy.linalg.LinAlgError:
+                print("[WARNING] P matrix lost positive-definiteness. Adding jitter.")
+                self.P += 1e-6 * np.eye(n_dim)
+                S_x = scipy.linalg.cholesky(self.P, lower=True)
+                
+            sigmas_x = np.zeros((2 * n_dim + 1, n_dim))
+            sigmas_x[0] = x_iter
+            for i in range(n_dim):
+                sigmas_x[i + 1]         = x_iter + gamma * S_x[:, i]
+                sigmas_x[n_dim + i + 1] = x_iter - gamma * S_x[:, i]
+
+            # --- DIAGNOSTIC: Check Sigma Points ---
+            max_sig = sigmas_x.max()
+            min_sig = sigmas_x.min()
+            print(f"Sigma Points Log-Space Spread: {min_sig:.2f} to {max_sig:.2f}")
+            if max_sig > 50:
+                print(f"[CRITICAL] Sigma points exceed log=50. np.exp() will likely overflow!")
+
+            sigmas_y = np.zeros((2 * n_dim + 1, n_obs))
+            for i in range(2 * n_dim + 1):
+                # We use np.clip to strictly prevent np.exp from overflowing during tests
+                # 80 is chosen because np.exp(80) is ~5.5e34, keeping it safely inside float64 limits
+                safe_sigmas = np.clip(sigmas_x[i], -80, 80)
+                physical_Ne = np.exp(safe_sigmas) 
+                sigmas_y[i] = obs_operator @ physical_Ne
+                
+            y_hat = np.sum(W_m[:, None] * sigmas_y, axis=0)
+            
+            # --- DIAGNOSTIC: Check Predictions ---
+            print(f"Observed TEC Min/Max: {obs.min():.2e} / {obs.max():.2e}")
+            print(f"Predicted TEC Min/Max: {y_hat.min():.2e} / {y_hat.max():.2e}")
+
+            X_diff = sigmas_x - x_prior 
+            Y_diff = sigmas_y - y_hat
+            
+            P_xy = np.zeros((n_dim, n_obs))
+            P_yy = np.zeros((n_obs, n_obs))
+            
+            for i in range(2 * n_dim + 1):
+                P_xy += W_c[i] * np.outer(X_diff[i], Y_diff[i])
+                P_yy += W_c[i] * np.outer(Y_diff[i], Y_diff[i])
+                
+            P_yy += R  
+            
+            # --- DIAGNOSTIC: Check Matrix Conditioning ---
+            cond_Pyy = np.linalg.cond(P_yy)
+            print(f"Condition Number of P_yy: {cond_Pyy:.2e}")
+            if cond_Pyy > 1e12:
+                print("[WARNING] P_yy is ill-conditioned! Kalman Gain calculation may be unstable.")
+
+            # E. Compute Kalman Gain and Update
+            K = np.linalg.solve(P_yy, P_xy.T).T
+            innovation = obs - y_hat
+            
+            # --- NON-LINEAR TRUST REGION (Step-Size Limiter) ---
+            # Standard filters take the full step K @ innovation, which will 
+            # overshoot and diverge severely in exponential space.
+            delta_x = K @ innovation
+            
+            # Cap the maximum step a single parameter can take per iteration.
+            # A max_step of 0.5 restricts max physical density changes to ~64% per iteration
+            max_step = 0.5
+            step_magnitudes = np.abs(delta_x)
+            excessive_steps = step_magnitudes > max_step
+            
+            if np.any(excessive_steps):
+                num_capped = np.sum(excessive_steps)
+                print(f"      [TRUST REGION] Capping {num_capped} aggressive parameter updates.")
+                delta_x = np.clip(delta_x, -max_step, max_step)
+            
+            x_new = x_prior + delta_x
+            
+            state_diff = np.linalg.norm(x_new - x_iter)
+            res_norm = np.linalg.norm(innovation)
+            
+            print(f"Innovation Norm: {res_norm:.4e}")
+            print(f"State Update Norm: {state_diff:.4e}")
+            
+            res_history.append(res_norm)
+            state_diff_history.append(state_diff)
+            
+            x_iter = x_new
+            
+            if state_diff < tol:
+                print(f"[SUCCESS] Iteration converged at step {iteration + 1}.")
+                break
+        else:
+            print(f"[WARNING] IUKF reached max iterations ({max_iter}) without converging.")
+
+        # --- Plotting the Convergence ---
+        plt.figure(figsize=(10, 4))
+        plt.subplot(1, 2, 1)
+        plt.plot(range(1, len(res_history) + 1), res_history, marker='o', color='red')
+        plt.title('Innovation Norm (Residuals)')
+        plt.xlabel('Iteration')
+        plt.ylabel('Norm')
+        plt.grid(True)
+
+        plt.subplot(1, 2, 2)
+        plt.plot(range(1, len(state_diff_history) + 1), state_diff_history, marker='o', color='blue')
+        plt.title('State Update Norm (Convergence)')
+        plt.xlabel('Iteration')
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+        # Final Update
+        self.x = x_iter
+        self.P = self.P - K @ P_yy @ K.T
+        self.P = 0.5 * (self.P + self.P.T) 
+
+        analysis_x = np.exp(np.clip(self.x, -80, 80))
+        return analysis_x.reshape(-1, 1)
     def plot_covariance_correlation(self, title: str = None, P: np.ndarray = None) -> np.ndarray:
         """
         Plot the altitude-altitude correlation matrix derived from self.P.

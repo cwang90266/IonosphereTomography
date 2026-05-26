@@ -65,6 +65,8 @@ from EDPSamples.generate_polar_mesh import generate_ploar_mesh   # note: typo in
 
 from Ionosphere_Tomography_Inverter.Ionophy_Tomography_Inverter import Ionosphere_Tomography_Inverter
 from Ionosphere_Tomography_Inverter.Ionophy_Tomography_Inverter_RelTEC import Ionosphere_Tomography_Inverter_RelTEC
+from Ionosphere_Tomography_Inverter.Ionophy_Tomography_Inverter_ISR_UKF import Ionosphere_Tomography_Inverter as Ionosphere_Tomography_Inverter_ISR_UKF
+from Ionosphere_Tomography_Inverter.Ionophy_Tomography_Inverter_EnKF import Ionosphere_Tomography_Inverter as Ionosphere_Tomography_Inverter_EnKF
 
 # Standalone spherical point-in-triangle algorithm (no WGS84 altitude bug)
 from locate_in_mesh import find_containing_triangles as find_triangle_sphere
@@ -81,7 +83,7 @@ from datetime import datetime, timedelta
 TIME     = "2025-06-15 19:00"      # simulation UTC time
 LAT_C    = 40                    # center latitude  (°N)
 LON_C    = -105.0                  # center longitude (°E, = 145 °W)
-ALT_KM   = [60, 1000, 1]         # altitude grid: [start, stop, step] km
+ALT_KM   = [60, 600, 1]         # altitude grid: [start, stop, step] km
 
 # Alaska region bounds (used for sweeps and mesh generation)
 LAT_MIN, LAT_MAX, DLAT = 60.0, 65.0, 1.5
@@ -2406,13 +2408,32 @@ def build_daily_global_edps(
 
 
 def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
-              generate_plots: bool = True, save_dir: str = "./Figures/Section20_Batch/") -> dict:
+              generate_plots: bool = True, save_dir: str = "./Figures/Section20_Batch/",
+              filters: dict = None,
+              add_noise: bool = False, noise_sigma: float = 0.1,
+              noise_seed: int | None = None) -> dict:
     """
     §20 Tomography vs Abel Statistical Analysis (With Automated Plotting)
+
     Runs Data Assimilation and Abel inversions, calculates comparative statistics,
     and generates a 3-panel summary plot (TEC Fits, hmF2 Delta Map, EDP Dispersion).
-    Uses a pre-computed global EDP grid (keyed by hour) as the prior instead of
-    calling IRI per file.
+    Uses a pre-computed global EDP grid (keyed by hour) as the prior.
+
+    Parameters
+    ----------
+    filters : dict, optional
+        Per-filter configuration.  Keys are "KF", "RelTEC_KF", "ISR_UKF".
+        Each value is a dict with any subset of:
+            enabled         (bool)   – run this filter (default True)
+            measurement_err (float)  – R diagonal value (default 1.0)
+            relaxation      (float)  – Gauss-Markov relaxation (default 0.95)
+        Unspecified filters/keys fall back to their defaults.  Example::
+
+            filters = {
+                "KF":        {"enabled": True,  "measurement_err": 0.5},
+                "RelTEC_KF": {"enabled": False},
+                "ISR_UKF":   {"enabled": True,  "measurement_err": 2.0, "relaxation": 0.9},
+            }
     """
     from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
     from Abel_Inverter import run_abel_inversion
@@ -2429,9 +2450,30 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
     import cartopy.feature as cfeature
     import pyproj
 
+    # ----------------------------------------------------------------
+    # Resolve filter configuration
+    # ----------------------------------------------------------------
+    _defaults = {
+        "KF":        {"enabled": True,  "measurement_err": 10.0, "relaxation": 0.99},
+        "RelTEC_KF": {"enabled": False,  "measurement_err": 10.0, "relaxation": 0.95},
+        "ISR_UKF":   {"enabled": False, "measurement_err": 1.0, "relaxation": 0.95},
+        "EnKF":      {"enabled": False,  "measurement_err": 10.0, "relaxation": 0.99},
+    }
+    if filters is not None:
+        for _name, _cfg in filters.items():
+            if _name in _defaults:
+                _defaults[_name].update(_cfg)
+    _filt = _defaults
+
+    use_kf      = _filt["KF"]["enabled"]
+    use_reltec  = _filt["RelTEC_KF"]["enabled"]
+    use_isr_ukf = _filt["ISR_UKF"]["enabled"]
+    use_enkf    = _filt["EnKF"]["enabled"]
+
     t_start = time.time()
     filename = podTc2_file.split('/')[-1]
-    print(f"--- Processing: {filename} ---")
+    active = [n for n, c in _filt.items() if c["enabled"]]
+    print(f"--- Processing: {filename}  (filters: {', '.join(active)}) ---")
 
     stats = {
         "File": filename,
@@ -2445,9 +2487,24 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
         "RelTEC_TEC_RMSE": np.nan, "RelTEC_TEC_MAE": np.nan,
         "RelTEC_TEC_bias_TECU": np.nan,
         "RelTEC_NmF2": np.nan,    "RelTEC_hmF2": np.nan,
+        "ISR_UKF_TEC_RMSE": np.nan, "ISR_UKF_TEC_MAE": np.nan,
+        "ISR_UKF_NmF2": np.nan,     "ISR_UKF_hmF2": np.nan,
+        "EnKF_TEC_RMSE": np.nan,    "EnKF_TEC_MAE": np.nan,
+        "EnKF_NmF2": np.nan,        "EnKF_hmF2": np.nan,
         "Processing_Time_s": np.nan,
         "Status": "Failed"
     }
+
+    # Sentinels for variables that may not be created if a filter is disabled
+    inverter = rel_inverter = isr_ukf_inverter = enkf_inverter = None
+    H_tec = H_rel = H_enkf = None
+    prior_state_flat = posterior_state_flat = None
+    reltec_state_flat = isr_ukf_state_flat = enkf_state_flat = None
+    prior_tec = post_tec = reltec_tec = isr_ukf_tec = enkf_tec = None
+    prior_edp_3d = posterior_edp_3d = None
+    reltec_edp_3d = isr_ukf_edp_3d = enkf_edp_3d = None
+    prior_profile = post_profile = reltec_profile = isr_ukf_profile = enkf_profile = None
+    reltec_bias = reltec_tec_plot = None
 
     try:
         # 1. Parse Data
@@ -2461,9 +2518,9 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
 
         valid_mask = ~np.isnan(measured_tec) & (measured_tec > 0)
         measured_tec_clean = np.asarray(measured_tec[valid_mask], dtype=np.float64).flatten()
-        tangent_alt_clean = tangent_alt_km[valid_mask].flatten()
+        tangent_alt_clean  = tangent_alt_km[valid_mask].flatten()
         podTc_clean = {
-            'LEO': podTc_data['LEO'][:, valid_mask],
+            'LEO':  podTc_data['LEO'][:,  valid_mask],
             'GNSS': podTc_data['GNSS'][:, valid_mask]
         }
         stats["Valid_Rays"] = int(np.sum(valid_mask))
@@ -2475,24 +2532,18 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
             return stats
 
         # 2. Prior: subset the global EDP grid to the occultation region
-        profile_dt = podTc_data['date']
-        profile_hour = profile_dt.hour  # floor to integer hour; rounding would wrap 23:30+ to 0
+        profile_dt   = podTc_data['date']
+        profile_hour = profile_dt.hour
 
-        # Derive the 3 bounding points of the occultation geometry (same logic used
-        # internally by EDPSamples when geo_type="Occultation")
         pt1, pt2, pt3 = EDPSamples.get_occultation_extrema(
             podTc_data['LEO'], podTc_data['GNSS'], alt_limit=700.0
         )
-        pts_lat = [pt1[0], pt2[0], pt3[0]]
-        pts_lon = [pt1[1], pt2[1], pt3[1]]
+        pts_lat    = [pt1[0], pt2[0], pt3[0]]
+        pts_lon    = [pt1[1], pt2[1], pt3[1]]
         center_lat = np.mean(pts_lat)
-
-        MARGIN = 10.0
+        MARGIN     = 10.0
 
         if abs(center_lat) > 65:
-            # Polar region: longitude is ill-conditioned near the poles — all ray planes
-            # through the pole look identical in longitude. Select by latitude cap only
-            # and include all longitudes, matching the polar-mesh convention (±60° boundary).
             if center_lat > 0:
                 lat_min = max(center_lat - MARGIN, 60.0)
                 lat_max = 90.0
@@ -2500,26 +2551,19 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
                 lat_min = -90.0
                 lat_max = min(center_lat + MARGIN, -60.0)
             lon_min, lon_max = -180.0, 180.0
-
         else:
-            # Non-polar: compute lat bounds normally.
             lat_min = max(min(pts_lat) - MARGIN, -90.0)
             lat_max = min(max(pts_lat) + MARGIN,  90.0)
-
             lon_spread = max(pts_lon) - min(pts_lon)
             if lon_spread <= 180.0:
-                # Normal case: occultation does not cross the antimeridian.
                 lon_min = max(min(pts_lon) - MARGIN, -180.0)
                 lon_max = min(max(pts_lon) + MARGIN,  180.0)
             else:
-                # Antimeridian crossing: the short arc goes through ±180°.
-                # Convert to [0, 360) so the short arc is contiguous, apply margins,
-                # then fold back. lon_min > lon_max signals the crossing to subset_region.
                 lons_360 = [(l + 360) % 360 for l in pts_lon]
-                raw_min = min(lons_360) - MARGIN
-                raw_max = max(lons_360) + MARGIN
-                lon_min = raw_min - 360 if raw_min > 180 else raw_min
-                lon_max = raw_max - 360 if raw_max > 180 else raw_max
+                raw_min  = min(lons_360) - MARGIN
+                raw_max  = max(lons_360) + MARGIN
+                lon_min  = raw_min - 360 if raw_min > 180 else raw_min
+                lon_max  = raw_max - 360 if raw_max > 180 else raw_max
 
         eds_occ = global_edp_cache[profile_hour].subset_region(
             lat_min, lat_max, lon_min, lon_max,
@@ -2527,157 +2571,216 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
             clip_margin_deg=10.0,
         )
 
-        # 3. Assimilation
-        inverter = Ionosphere_Tomography_Inverter(EDPSam=eds_occ, meanscale=1)
-        H_unscaled = inverter.get_observation_operator(podTc_clean)
-        
-        posterior_state_flat = inverter.assimilate(
-            obs=measured_tec_clean, podTc2_data=None, obs_operator=H_unscaled, relaxation=0.95, measurement_err=1.0
-        )
-        
-        prior_state_flat = inverter.attrs['initial_edps_mean']
-        
-        # Calculate TEC Residuals (Projects states back into TEC observation space)
-        prior_tec = (np.asarray(H_unscaled) @ np.asarray(prior_state_flat)).flatten()
-        post_tec = (np.asarray(H_unscaled) @ np.asarray(posterior_state_flat)).flatten()
-        
-        # Cast to pure float64 arrays to suppress NumPy 2.0 DeprecationWarnings
-        prior_residuals = np.asarray(measured_tec_clean - prior_tec, dtype=np.float64)
-        post_residuals = np.asarray(measured_tec_clean - post_tec, dtype=np.float64)
-        
-        stats["Prior_TEC_RMSE"] = np.sqrt(np.mean(prior_residuals**2))
-        stats["Prior_TEC_MAE"] = np.mean(np.abs(prior_residuals))
-        stats["Post_TEC_RMSE"] = np.sqrt(np.mean(post_residuals**2))
-        stats["Post_TEC_MAE"] = np.mean(np.abs(post_residuals))
-        
-        # --- RelTEC assimilation (same ensemble, no topside approximation) ---
-        rel_inverter = Ionosphere_Tomography_Inverter_RelTEC(EDPSam=eds_occ, meanscale=1)
-        H_rel = rel_inverter.get_observation_operator(podTc_clean)
-        reltec_state_flat = rel_inverter.assimilate(
-            obs=measured_tec_clean, obs_operator=H_rel,
-            tangent_alt_km=tangent_alt_clean,
-            relaxation=0.95, measurement_err=1.0,
-        )
-        reltec_tec = (np.asarray(H_rel) @ np.asarray(reltec_state_flat)).flatten()
+        # ── Optional multiplicative log-normal noise on the prior EDP ensemble ──
+        # Ne_noisy = Ne * exp(ε),  ε ~ N(0, noise_sigma²)
+        # Keeps all densities strictly positive; noise magnitude ∝ Ne (consistent
+        # with log-space filters ISR_UKF / EnKF).  noise_sigma=0.1 ≈ 10 % relative.
+        if add_noise:
+            _rng  = np.random.default_rng(noise_seed)
+            _edps = eds_occ["EDPs"].values                     # (n_height, n_geo, n_sample)
+            _eps  = _rng.standard_normal(_edps.shape).astype(_edps.dtype)
+            eds_occ["EDPs"].values[:] = _edps * np.exp(noise_sigma * _eps)
 
-        # Re-derive the same reference epoch that assimilate() selected internally.
-        # RelTEC uses the ray with the highest tangent altitude above the grid top
-        # as its reference; everything above the grid has H_ref ≈ 0.
-        _alt_top = eds_occ.altitude[-1]
-        _above   = np.where(tangent_alt_clean > _alt_top)[0]
-        ref_idx_rel = int(_above[np.argmax(tangent_alt_clean[_above])]) if _above.size > 0 else 0
+        n_height  = len(alt_grid)
+        n_geo     = eds_occ.geolocation.shape[0]
+        center_idx = n_geo // 2
 
-        # Build the differential mask (all epochs except the reference).
-        _keep = np.ones(len(measured_tec_clean), dtype=bool)
-        _keep[ref_idx_rel] = False
+        # 3. Construct enabled inverters
+        if use_kf:
+            inverter = Ionosphere_Tomography_Inverter(EDPSam=eds_occ, meanscale=1)
+        if use_reltec:
+            rel_inverter = Ionosphere_Tomography_Inverter_RelTEC(EDPSam=eds_occ, meanscale=1)
+        if use_isr_ukf:
+            isr_ukf_inverter = Ionosphere_Tomography_Inverter_ISR_UKF(EDPSam=eds_occ)
+        if use_enkf:
+            enkf_inverter = Ionosphere_Tomography_Inverter_EnKF(EDPSam=eds_occ)
 
-        # ΔTEC for both measured and RelTEC-predicted.  The common-mode topside
-        # offset (and any phase bias) cancels in the subtraction, leaving only
-        # the within-grid fitting error — the only ambiguity-free metric for RelTEC.
-        delta_meas    = (measured_tec_clean[_keep] - measured_tec_clean[ref_idx_rel]).astype(np.float64)
-        delta_reltec  = (reltec_tec[_keep]         - reltec_tec[ref_idx_rel]        ).astype(np.float64)
-        reltec_diff_residuals = delta_meas - delta_reltec
+        # 4. Build H matrices
+        # H_tec (simple-exponential topside) shared by KF and ISR_UKF.
+        # H_enkf uses the Two-Ion topside model and is built separately.
+        if use_kf or use_isr_ukf:
+            _h_builder = inverter if use_kf else isr_ukf_inverter
+            H_tec = _h_builder.get_observation_operator(podTc_clean)
+        if use_reltec:
+            H_rel = rel_inverter.get_observation_operator(podTc_clean)
+        if use_enkf:
+            H_enkf = enkf_inverter.get_observation_operator(podTc_clean)
 
-        stats["RelTEC_TEC_RMSE"] = np.sqrt(np.mean(reltec_diff_residuals**2))
-        stats["RelTEC_TEC_MAE"]  = np.mean(np.abs(reltec_diff_residuals))
+        # 5. Assimilate: KF
+        if use_kf:
+            posterior_state_flat = inverter.assimilate(
+                obs=measured_tec_clean, podTc2_data=None,
+                obs_operator=H_tec,
+                relaxation=_filt["KF"]["relaxation"],
+                measurement_err=_filt["KF"]["measurement_err"],
+            )
+            prior_state_flat = inverter.attrs['initial_edps_mean']
 
-        # Absolute bias ≈ mean topside TEC the RelTEC model cannot see.
-        # Positive means measured > predicted (normal: topside is missing from H_rel).
-        reltec_bias = float(np.mean(np.asarray(measured_tec_clean - reltec_tec, dtype=np.float64)))
-        stats["RelTEC_TEC_bias_TECU"] = reltec_bias
+            prior_tec  = (np.asarray(H_tec) @ np.asarray(prior_state_flat)).flatten()
+            post_tec   = (np.asarray(H_tec) @ np.asarray(posterior_state_flat)).flatten()
+            prior_res  = np.asarray(measured_tec_clean - prior_tec,  dtype=np.float64)
+            post_res   = np.asarray(measured_tec_clean - post_tec,   dtype=np.float64)
+            stats["Prior_TEC_RMSE"] = float(np.sqrt(np.mean(prior_res**2)))
+            stats["Prior_TEC_MAE"]  = float(np.mean(np.abs(prior_res)))
+            stats["Post_TEC_RMSE"]  = float(np.sqrt(np.mean(post_res**2)))
+            stats["Post_TEC_MAE"]   = float(np.mean(np.abs(post_res)))
 
-        # Bias-corrected absolute TEC: shifts the RelTEC prediction onto the same
-        # absolute axis as the measured and posterior curves for plotting only.
-        reltec_tec_plot = reltec_tec + reltec_bias
+            prior_edp_3d = prior_state_flat.reshape(n_height, n_geo).copy()
+            prior_edp_3d[prior_edp_3d == 0] = np.nan
+            posterior_edp_3d = np.asarray(posterior_state_flat).reshape(n_height, n_geo).copy()
+            posterior_edp_3d[posterior_edp_3d == 0] = np.nan
 
-        # Reconstruct 3D Arrays for Mapping & Spaghetti Plots
-        n_height = len(alt_grid)
-        n_geo = eds_occ.geolocation.shape[0]
-        center_idx = n_geo // 2 
-        
-        prior_edp_3d = prior_state_flat.reshape(n_height, n_geo)
-        prior_edp_3d[prior_edp_3d == 0] = np.nan
-        
-        posterior_edp_3d = posterior_state_flat.reshape(n_height, n_geo)
-        posterior_edp_3d[posterior_edp_3d == 0] = np.nan
-        
-        prior_profile = prior_edp_3d[:, center_idx]
-        post_profile = posterior_edp_3d[:, center_idx]
+            prior_profile = prior_edp_3d[:, center_idx]
+            post_profile  = posterior_edp_3d[:, center_idx]
 
-        # 4. Extract Tomography F2 Peak Stats (Robust Method)
-        prior_nm, prior_hm = extract_robust_f2_peak(prior_profile, alt_grid)
-        stats["Prior_NmF2"] = prior_nm
-        stats["Prior_hmF2"] = prior_hm
-        
-        post_nm, post_hm = extract_robust_f2_peak(post_profile, alt_grid)
-        stats["Post_NmF2"] = post_nm
-        stats["Post_hmF2"] = post_hm
-        
-        reltec_edp_3d  = reltec_state_flat.reshape(n_height, n_geo)
-        reltec_edp_3d[reltec_edp_3d == 0] = np.nan
-        reltec_profile = reltec_edp_3d[:, center_idx]
-        reltec_nm, reltec_hm = extract_robust_f2_peak(reltec_profile, alt_grid)
-        stats["RelTEC_NmF2"] = reltec_nm
-        stats["RelTEC_hmF2"] = reltec_hm
+            prior_nm, prior_hm = extract_robust_f2_peak(prior_profile, alt_grid)
+            stats["Prior_NmF2"] = prior_nm;  stats["Prior_hmF2"] = prior_hm
+            post_nm,  post_hm  = extract_robust_f2_peak(post_profile,  alt_grid)
+            stats["Post_NmF2"]  = post_nm;   stats["Post_hmF2"]  = post_hm
 
-        # 5. Abel Inversion & Comparison
+        # 6. Assimilate: RelTEC
+        if use_reltec:
+            reltec_state_flat = rel_inverter.assimilate(
+                obs=measured_tec_clean, obs_operator=H_rel,
+                tangent_alt_km=tangent_alt_clean,
+                relaxation=_filt["RelTEC_KF"]["relaxation"],
+                measurement_err=_filt["RelTEC_KF"]["measurement_err"],
+            )
+            reltec_tec = (np.asarray(H_rel) @ np.asarray(reltec_state_flat)).flatten()
+
+            _alt_top    = eds_occ.altitude[-1]
+            _above      = np.where(tangent_alt_clean > _alt_top)[0]
+            ref_idx_rel = int(_above[np.argmax(tangent_alt_clean[_above])]) if _above.size > 0 else 0
+            _keep       = np.ones(len(measured_tec_clean), dtype=bool)
+            _keep[ref_idx_rel] = False
+            delta_meas   = (measured_tec_clean[_keep] - measured_tec_clean[ref_idx_rel]).astype(np.float64)
+            delta_reltec = (reltec_tec[_keep]         - reltec_tec[ref_idx_rel]        ).astype(np.float64)
+            reltec_diff  = delta_meas - delta_reltec
+            stats["RelTEC_TEC_RMSE"] = float(np.sqrt(np.mean(reltec_diff**2)))
+            stats["RelTEC_TEC_MAE"]  = float(np.mean(np.abs(reltec_diff)))
+
+            reltec_bias = float(np.mean(np.asarray(measured_tec_clean - reltec_tec, dtype=np.float64)))
+            stats["RelTEC_TEC_bias_TECU"] = reltec_bias
+            reltec_tec_plot = reltec_tec + reltec_bias
+
+            reltec_edp_3d = np.asarray(reltec_state_flat).reshape(n_height, n_geo).copy()
+            reltec_edp_3d[reltec_edp_3d == 0] = np.nan
+            reltec_profile = reltec_edp_3d[:, center_idx]
+            reltec_nm, reltec_hm = extract_robust_f2_peak(reltec_profile, alt_grid)
+            stats["RelTEC_NmF2"] = reltec_nm;  stats["RelTEC_hmF2"] = reltec_hm
+
+        # 7. Assimilate: ISR_UKF (reuses H_tec)
+        if use_isr_ukf:
+            isr_ukf_state_flat = isr_ukf_inverter.assimilate(
+                obs=measured_tec_clean, obs_operator=H_tec,
+                relaxation=_filt["ISR_UKF"]["relaxation"],
+                measurement_err=_filt["ISR_UKF"]["measurement_err"],
+            )
+            isr_ukf_tec  = (np.asarray(H_tec) @ np.asarray(isr_ukf_state_flat)).flatten()
+            isr_ukf_res  = np.asarray(measured_tec_clean - isr_ukf_tec, dtype=np.float64)
+            stats["ISR_UKF_TEC_RMSE"] = float(np.sqrt(np.mean(isr_ukf_res**2)))
+            stats["ISR_UKF_TEC_MAE"]  = float(np.mean(np.abs(isr_ukf_res)))
+
+            isr_ukf_edp_3d = np.asarray(isr_ukf_state_flat).reshape(n_height, n_geo).copy()
+            isr_ukf_edp_3d[isr_ukf_edp_3d <= 1e-5] = np.nan
+            isr_ukf_profile = isr_ukf_edp_3d[:, center_idx]
+            isr_ukf_nm, isr_ukf_hm = extract_robust_f2_peak(isr_ukf_profile, alt_grid)
+            stats["ISR_UKF_NmF2"] = isr_ukf_nm;  stats["ISR_UKF_hmF2"] = isr_ukf_hm
+
+        # 8. Assimilate: EnKF (uses its own Two-Ion topside H matrix)
+        if use_enkf:
+            enkf_state_flat = enkf_inverter.assimilate(
+                obs=measured_tec_clean, obs_operator=H_enkf,
+                relaxation=_filt["EnKF"]["relaxation"],
+                measurement_err=_filt["EnKF"]["measurement_err"],
+            )
+            enkf_tec = (np.asarray(H_enkf) @ np.asarray(enkf_state_flat)).flatten()
+            enkf_res = np.asarray(measured_tec_clean - enkf_tec, dtype=np.float64)
+            stats["EnKF_TEC_RMSE"] = float(np.sqrt(np.mean(enkf_res**2)))
+            stats["EnKF_TEC_MAE"]  = float(np.mean(np.abs(enkf_res)))
+
+            enkf_edp_3d = np.asarray(enkf_state_flat).reshape(n_height, n_geo).copy()
+            enkf_edp_3d[enkf_edp_3d <= 1e-5] = np.nan
+            enkf_profile = enkf_edp_3d[:, center_idx]
+            enkf_nm, enkf_hm = extract_robust_f2_peak(enkf_profile, alt_grid)
+            stats["EnKF_NmF2"] = enkf_nm;  stats["EnKF_hmF2"] = enkf_hm
+
+        # 9. Abel Inversion & Comparison
         abel = run_abel_inversion(podTc_data)
         if abel is not None and len(abel['Ne']) > 0:
             abel_nm, abel_hm = extract_robust_f2_peak(abel['Ne'], abel['alt_km'])
-            stats["Abel_NmF2"] = abel_nm
-            stats["Abel_hmF2"] = abel_hm
-            
-            valid_abel = ~np.isnan(abel['Ne']) & ~np.isnan(abel['alt_km'])
-            if np.sum(valid_abel) > 2:
-                interp_func = interp1d(abel['alt_km'][valid_abel], abel['Ne'][valid_abel], 
-                                       bounds_error=False, fill_value=np.nan)
-                abel_on_grid = interp_func(alt_grid)
-                
-                valid_rmse = ~np.isnan(post_profile) & ~np.isnan(abel_on_grid)
-                if np.any(valid_rmse):
-                    mse = np.mean((post_profile[valid_rmse] - abel_on_grid[valid_rmse])**2)
-                    stats["Post_Abel_RMSE"] = np.sqrt(mse)
+            stats["Abel_NmF2"] = abel_nm;  stats["Abel_hmF2"] = abel_hm
+
+            if use_kf and post_profile is not None:
+                valid_abel = ~np.isnan(abel['Ne']) & ~np.isnan(abel['alt_km'])
+                if np.sum(valid_abel) > 2:
+                    interp_func  = interp1d(abel['alt_km'][valid_abel], abel['Ne'][valid_abel],
+                                            bounds_error=False, fill_value=np.nan)
+                    abel_on_grid = interp_func(alt_grid)
+                    valid_rmse   = ~np.isnan(post_profile) & ~np.isnan(abel_on_grid)
+                    if np.any(valid_rmse):
+                        stats["Post_Abel_RMSE"] = float(np.sqrt(
+                            np.mean((post_profile[valid_rmse] - abel_on_grid[valid_rmse])**2)
+                        ))
 
         # =========================================================
-        # 6. OPTIONAL BATCH PLOTTING (3 Subplots)
+        # 9. OPTIONAL BATCH PLOTTING (3 Subplots)
         # =========================================================
         if generate_plots:
             os.makedirs(save_dir, exist_ok=True)
-            
-            # Setup Figure and Projection
+
+            # ---- Dynamic suptitle: only list enabled filters ----
+            rmse_parts = []
+            if use_kf:
+                rmse_parts.append(
+                    f"KF: Prior {stats['Prior_TEC_RMSE']:.2f} → Post {stats['Post_TEC_RMSE']:.2f} TECU"
+                )
+            if use_reltec:
+                rmse_parts.append(
+                    f"RelTEC RMSE (diff): {stats['RelTEC_TEC_RMSE']:.2f} TECU  bias: {stats['RelTEC_TEC_bias_TECU']:+.1f} TECU"
+                )
+            if use_isr_ukf:
+                rmse_parts.append(f"ISR-UKF RMSE: {stats['ISR_UKF_TEC_RMSE']:.2f} TECU")
+            if use_enkf:
+                rmse_parts.append(f"EnKF RMSE: {stats['EnKF_TEC_RMSE']:.2f} TECU")
+
             fig = plt.figure(figsize=(18, 6))
             fig.suptitle(
-                f"Tomography Batch Audit: {filename}\n"
-                f"TEC RMSE (abs): Prior {stats['Prior_TEC_RMSE']:.2f} → Post {stats['Post_TEC_RMSE']:.2f} TECU  |  "
-                f"RelTEC RMSE (diff): {stats['RelTEC_TEC_RMSE']:.2f} TECU  |  RelTEC bias: {stats['RelTEC_TEC_bias_TECU']:+.1f} TECU",
-                fontsize=13
+                f"Tomography Batch Audit: {filename}\n" + "  |  ".join(rmse_parts),
+                fontsize=12
             )
-            
+
             # ---------------------------------------------------------
             # Subplot 1: TEC Fits
             # ---------------------------------------------------------
             ax1 = fig.add_subplot(1, 3, 1)
             ax1.plot(measured_tec_clean, tangent_alt_clean, color='black', lw=3, label="Measured TEC")
-            ax1.plot(prior_tec, tangent_alt_clean, color='tab:red', lw=2, ls='--', label="Prior TEC")
-            ax1.plot(post_tec, tangent_alt_clean, color='tab:blue', lw=2, label="Posterior TEC")
-            ax1.plot(reltec_tec_plot, tangent_alt_clean, color='tab:purple', lw=2, ls='-.',
-                     label=f"RelTEC Posterior (bias-corrected, +{stats['RelTEC_TEC_bias_TECU']:.1f} TECU)")
-            # Plot Abel Inversion
+            if use_kf:
+                ax1.plot(prior_tec, tangent_alt_clean, color='tab:red',  lw=2, ls='--', label="Prior TEC")
+                ax1.plot(post_tec,  tangent_alt_clean, color='tab:blue', lw=2,          label="Posterior TEC (KF)")
+            if use_reltec:
+                ax1.plot(reltec_tec_plot, tangent_alt_clean, color='tab:purple', lw=2, ls='-.',
+                         label=f"RelTEC Posterior (bias-corr, {stats['RelTEC_TEC_bias_TECU']:+.1f} TECU)")
+            if use_isr_ukf:
+                ax1.plot(isr_ukf_tec, tangent_alt_clean, color='tab:orange', lw=2, ls=':',
+                         label=f"ISR-UKF Posterior (RMSE={stats['ISR_UKF_TEC_RMSE']:.2f} TECU)")
+            if use_enkf:
+                ax1.plot(enkf_tec, tangent_alt_clean, color='tab:cyan', lw=2, ls=(0, (3, 1, 1, 1)),
+                         label=f"EnKF Posterior (RMSE={stats['EnKF_TEC_RMSE']:.2f} TECU)")
             if abel is not None:
-                ax1.plot(abel['TEC_cal'],     abel['alt_km'],   color='black', lw=2, ls='--',  label='Calibrated TEC')
-                ax1.plot(abel['TEC_forward'], abel['alt_km'],   color='tab:green', lw=1.5, ls='--', label='Forward TEC (discrete)')
+                ax1.plot(abel['TEC_cal'],     abel['alt_km'], color='black',     lw=2,   ls='--', label='Calibrated TEC')
+                ax1.plot(abel['TEC_forward'], abel['alt_km'], color='tab:green', lw=1.5, ls='--', label='Forward TEC (discrete)')
             ax1.set_ylabel("Tangent Altitude (km)")
             ax1.set_xlabel("Total Electron Content (TECU)")
             ax1.set_title("Observation Space: TEC Adjustment")
             ax1.grid(True, alpha=0.4, linestyle=':')
-            ax1.legend(loc='upper right')
+            ax1.legend(loc='upper right', fontsize=8)
             if len(tangent_alt_clean) > 0:
                 ax1.set_ylim(0, max(np.max(tangent_alt_clean) + 50, alt_grid[-1]))
 
             # ---------------------------------------------------------
-            # Subplot 2: Global Map of Deltas at Posterior hmF2
+            # Subplot 2: Global Map of Deltas at Posterior hmF2 (KF only)
             # ---------------------------------------------------------
-            # Calculate Map Center
             try:
                 lon_center = podTc_data['lon_tecmax_tangent']
                 lat_center = podTc_data['lat_tecmax_tangent']
@@ -2686,165 +2789,199 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
                 lat_center = np.nanmean(eds_occ.geolocation[:, 1])
 
             proj = ccrs.Orthographic(central_longitude=lon_center, central_latitude=lat_center)
-            ax2 = fig.add_subplot(1, 3, 2, projection=proj)
+            ax2  = fig.add_subplot(1, 3, 2, projection=proj)
             ax2.set_global()
             ax2.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, edgecolor='gray')
-            
-            if not np.isnan(stats["Post_hmF2"]):
-                # Find closest altitude slice to the Posterior hmF2
-                alt_idx = int(np.argmin(np.abs(alt_grid - stats["Post_hmF2"])))
-                actual_alt = alt_grid[alt_idx]
+
+            if use_kf and not np.isnan(stats["Post_hmF2"]):
+                alt_idx     = int(np.argmin(np.abs(alt_grid - stats["Post_hmF2"])))
+                actual_alt  = alt_grid[alt_idx]
                 delta_slice = posterior_edp_3d[alt_idx, :] - prior_edp_3d[alt_idx, :]
-                
-                verts = eds_occ.geolocation
-                tris = eds_occ.mesh
-                
-                # Plot the Delta Map
-                max_delta = np.nanmax(np.abs(delta_slice))
+                verts       = eds_occ.geolocation
+                tris        = eds_occ.mesh
+                max_delta   = np.nanmax(np.abs(delta_slice))
                 tc = ax2.tripcolor(verts[:, 0], verts[:, 1], tris, delta_slice,
                                    transform=ccrs.Geodetic(), cmap='coolwarm', shading='flat',
                                    edgecolors='face', vmin=-max_delta, vmax=max_delta)
-                
-                ax2.plot(lon_center, lat_center, marker='*', color='yellow', markersize=15, 
-                         markeredgecolor='black', transform=ccrs.Geodetic(), zorder=5, label='Map Center')
-                
+                ax2.plot(lon_center, lat_center, marker='*', color='yellow', markersize=15,
+                         markeredgecolor='black', transform=ccrs.Geodetic(), zorder=5)
                 cbar = fig.colorbar(tc, ax=ax2, orientation='horizontal', shrink=0.8, pad=0.05)
                 cbar.set_label("Δ Density (m⁻³)")
                 cbar.formatter.set_powerlimits((-2, 2))
-                ax2.set_title(f"Δ Assimilation Map at hmF2 (~{actual_alt:.0f} km)")
+                ax2.set_title(f"Δ KF Assimilation Map at hmF2 (~{actual_alt:.0f} km)")
             else:
-                ax2.set_title("hmF2 Assimilation Map Unavailable")
-            # ---------------------------------------------------------
-            # Raypath overlays: 4 selected rays projected onto the map
-            # ---------------------------------------------------------
+                ax2.set_title("KF hmF2 Map Unavailable" if not use_kf else "hmF2 Map Unavailable")
+
+            # Raypath overlays
             _ecef_to_ll = pyproj.Transformer.from_crs(
                 pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
                 pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
                 always_xy=True,
             )
-            
             idx_high   = int(np.argmax(tangent_alt_clean))
             idx_low    = int(np.argmin(tangent_alt_clean))
             idx_tecmax = int(np.argmax(measured_tec_clean))
             mid_alt    = 0.5 * (tangent_alt_clean[idx_high] + tangent_alt_clean[idx_tecmax])
             idx_mid    = int(np.argmin(np.abs(tangent_alt_clean - mid_alt)))
-            
-            ray_specs = [
+            t_ray      = np.linspace(0, 1, 120)
+            for ray_idx, ray_color, ray_label in [
                 (idx_high,   'limegreen', 'Highest Ray'),
                 (idx_tecmax, 'gold',      'TEC-Max Ray'),
                 (idx_mid,    'orangered', 'Mid Ray'),
                 (idx_low,    'white',     'Lowest Ray'),
-            ]
-            
-            t_ray = np.linspace(0, 1, 120)
-            for ray_idx, ray_color, ray_label in ray_specs:
-                leo_r  = podTc_clean['LEO'][:,  ray_idx]   # (3,) km ECEF
+            ]:
+                leo_r  = podTc_clean['LEO'][:,  ray_idx]
                 gnss_r = podTc_clean['GNSS'][:, ray_idx]
-            
-                # Sample the straight-line ECEF ray at 120 points
-                pts = gnss_r[:, None] + (leo_r[:, None] - gnss_r[:, None]) * t_ray  # (3, 120)
-            
+                pts    = gnss_r[:, None] + (leo_r[:, None] - gnss_r[:, None]) * t_ray
                 r_lons, r_lats, r_alts_m = _ecef_to_ll.transform(
-                    pts[0] * 1e3, pts[1] * 1e3, pts[2] * 1e3
-                )
-            
-                # Show only the ionospheric segment (below 1200 km altitude)
+                    pts[0] * 1e3, pts[1] * 1e3, pts[2] * 1e3)
                 iono_mask = r_alts_m < 800_000
                 if np.any(iono_mask):
                     ax2.plot(r_lons[iono_mask], r_lats[iono_mask],
-                             transform=ccrs.Geodetic(),
-                             color=ray_color, lw=1.5, zorder=6)
-            
-                # Tangent point: point of closest approach to Earth's centre
+                             transform=ccrs.Geodetic(), color=ray_color, lw=1.5, zorder=6)
                 v   = leo_r - gnss_r
                 t_s = np.clip(-np.dot(v, gnss_r) / np.dot(v, v), 0.0, 1.0)
                 tp  = gnss_r + v * t_s
-                tp_lon, tp_lat, _ = _ecef_to_ll.transform(
-                    tp[0] * 1e3, tp[1] * 1e3, tp[2] * 1e3
-                )
-                ax2.plot(tp_lon, tp_lat,
-                         transform=ccrs.Geodetic(),
+                tp_lon, tp_lat, _ = _ecef_to_ll.transform(tp[0]*1e3, tp[1]*1e3, tp[2]*1e3)
+                ax2.plot(tp_lon, tp_lat, transform=ccrs.Geodetic(),
                          marker='o', color=ray_color, markersize=6,
                          markeredgecolor='black', zorder=7, label=ray_label)
-            
             ax2.legend(loc='lower left', fontsize=7)
+
             # ---------------------------------------------------------
-            # Subplot 3: EDP Comparisons (Spaghetti Plot + F2 Peaks)
+            # Subplot 3: EDP Comparisons (Spaghetti + F2 Peaks)
             # ---------------------------------------------------------
             ax3 = fig.add_subplot(1, 3, 3, sharey=ax1)
             formatter = ScalarFormatter(useMathText=True)
             formatter.set_powerlimits((-2, 2))
-            
-            # Spaghetti Lines
-            ax3.plot(prior_edp_3d, alt_grid, color='tab:red', alpha=0.1, lw=1)
-            ax3.plot(posterior_edp_3d, alt_grid, color='tab:blue', alpha=0.1, lw=1)
-            
-            # Center Profiles
-            ax3.plot(prior_profile, alt_grid, color='darkred', lw=2, ls='--', label="Prior (Center)")
-            ax3.plot(post_profile, alt_grid, color='darkblue', lw=2, label="Posterior (Center)")
-            
-            ax3.plot(reltec_edp_3d, alt_grid, color='tab:purple', alpha=0.1, lw=1)
-            ax3.plot(reltec_profile, alt_grid, color='purple', lw=2, ls='-.', label="RelTEC (Center)")
 
-            # --- NEW: Plot the extracted F2 Peaks ---
-            if not np.isnan(stats["Prior_NmF2"]):
-                ax3.plot(stats["Prior_NmF2"], stats["Prior_hmF2"], marker='o', markersize=8, 
-                         color='darkred', markeredgecolor='black', zorder=5)
-                         
-            if not np.isnan(stats["Post_NmF2"]):
-                ax3.plot(stats["Post_NmF2"], stats["Post_hmF2"], marker='o', markersize=8, 
-                         color='darkblue', markeredgecolor='black', zorder=5)
-                
-            if not np.isnan(stats["RelTEC_NmF2"]):
-                ax3.plot(stats["RelTEC_NmF2"], stats["RelTEC_hmF2"], marker='o', markersize=8,
-                         color='purple', markeredgecolor='black', zorder=5)
+            custom_lines  = []
+            legend_labels = []
+            max_edp_candidates = []
 
-            # ----------------------------------------
+            if use_kf:
+                ax3.plot(prior_edp_3d,     alt_grid, color='tab:red',  alpha=0.1, lw=1)
+                ax3.plot(posterior_edp_3d, alt_grid, color='tab:blue', alpha=0.1, lw=1)
+                ax3.plot(prior_profile,    alt_grid, color='darkred',  lw=2, ls='--')
+                ax3.plot(post_profile,     alt_grid, color='darkblue', lw=2)
+                if not np.isnan(stats["Prior_NmF2"]):
+                    ax3.plot(stats["Prior_NmF2"], stats["Prior_hmF2"],
+                             marker='o', markersize=8, color='darkred', markeredgecolor='black', zorder=5)
+                if not np.isnan(stats["Post_NmF2"]):
+                    ax3.plot(stats["Post_NmF2"], stats["Post_hmF2"],
+                             marker='o', markersize=8, color='darkblue', markeredgecolor='black', zorder=5)
+                custom_lines  += [Line2D([0],[0], color='tab:red',  lw=2, alpha=0.5),
+                                   Line2D([0],[0], color='tab:blue', lw=2, alpha=0.5),
+                                   Line2D([0],[0], color='darkred',  lw=2, ls='--'),
+                                   Line2D([0],[0], color='darkblue', lw=2)]
+                legend_labels += ['Prior (All)', 'KF Post (All)', 'Prior (Center)', 'KF Post (Center)']
+                idx_alt = alt_grid < 400
+                max_edp_candidates += [np.nanmax(prior_edp_3d[idx_alt]),
+                                        np.nanmax(posterior_edp_3d[idx_alt])]
 
-            # Legend Setup
-            custom_lines = [
-                Line2D([0], [0], color='tab:red', lw=2, alpha=0.5),
-                Line2D([0], [0], color='tab:blue', lw=2, alpha=0.5),
-                Line2D([0], [0], color='darkred', lw=2, ls='--'),
-                Line2D([0], [0], color='darkblue', lw=2),
-                Line2D([0], [0], color='tab:purple', lw=2, alpha=0.5),
-                Line2D([0], [0], color='purple', lw=2, ls='-.'),
-                # Add a legend entry for the peak markers
-                Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markeredgecolor='black', markersize=8)
-            ]
-            legend_labels = ['Prior (All Vertices)', 'Posterior (All Vertices)', 'Prior (Center)', 'Posterior (Center)', 'RelTEC (All Vertices)', 'RelTEC (Center)', 'F2 Peak']
+            if use_reltec:
+                ax3.plot(reltec_edp_3d, alt_grid, color='tab:purple', alpha=0.1, lw=1)
+                ax3.plot(reltec_profile, alt_grid, color='purple', lw=2, ls='-.')
+                if not np.isnan(stats["RelTEC_NmF2"]):
+                    ax3.plot(stats["RelTEC_NmF2"], stats["RelTEC_hmF2"],
+                             marker='o', markersize=8, color='purple', markeredgecolor='black', zorder=5)
+                custom_lines  += [Line2D([0],[0], color='tab:purple', lw=2, alpha=0.5),
+                                   Line2D([0],[0], color='purple',     lw=2, ls='-.')]
+                legend_labels += ['RelTEC (All)', 'RelTEC (Center)']
+                idx_alt = alt_grid < 400
+                max_edp_candidates.append(np.nanmax(reltec_edp_3d[idx_alt]))
 
-            # Plot Abel Inversion if available
+            if use_isr_ukf:
+                ax3.plot(isr_ukf_edp_3d, alt_grid, color='tab:orange', alpha=0.1, lw=1)
+                ax3.plot(isr_ukf_profile, alt_grid, color='darkorange', lw=2, ls=':')
+                if not np.isnan(stats["ISR_UKF_NmF2"]):
+                    ax3.plot(stats["ISR_UKF_NmF2"], stats["ISR_UKF_hmF2"],
+                             marker='o', markersize=8, color='darkorange', markeredgecolor='black', zorder=5)
+                custom_lines  += [Line2D([0],[0], color='tab:orange',  lw=2, alpha=0.5),
+                                   Line2D([0],[0], color='darkorange',  lw=2, ls=':')]
+                legend_labels += ['ISR-UKF (All)', 'ISR-UKF (Center)']
+                idx_alt = alt_grid < 400
+                max_edp_candidates.append(np.nanmax(isr_ukf_edp_3d[idx_alt]))
+
+            if use_enkf:
+                ax3.plot(enkf_edp_3d, alt_grid, color='tab:cyan', alpha=0.1, lw=1)
+                ax3.plot(enkf_profile, alt_grid, color='darkcyan', lw=2, ls=(0, (3, 1, 1, 1)))
+                if not np.isnan(stats["EnKF_NmF2"]):
+                    ax3.plot(stats["EnKF_NmF2"], stats["EnKF_hmF2"],
+                             marker='o', markersize=8, color='darkcyan', markeredgecolor='black', zorder=5)
+                custom_lines  += [Line2D([0],[0], color='tab:cyan', lw=2, alpha=0.5),
+                                   Line2D([0],[0], color='darkcyan', lw=2, ls=(0, (3, 1, 1, 1)))]
+                legend_labels += ['EnKF (All)', 'EnKF (Center)']
+                idx_alt = alt_grid < 400
+                max_edp_candidates.append(np.nanmax(enkf_edp_3d[idx_alt]))
+
             if abel is not None and len(abel['Ne']) > 0:
-                ax3.plot(abel['Ne'], abel['alt_km'], color='tab:green', lw=2.5, ls=':', label="Abel Inversion (Lei)")
-                
-                # Plot Abel Peak
+                ax3.plot(abel['Ne'], abel['alt_km'], color='tab:green', lw=2.5, ls=':')
                 if not np.isnan(stats["Abel_NmF2"]):
-                    ax3.plot(stats["Abel_NmF2"], stats["Abel_hmF2"], marker='o', markersize=8, 
-                             color='tab:green', markeredgecolor='black', zorder=5)
-                             
-                custom_lines.insert(4, Line2D([0], [0], color='tab:green', lw=2.5, ls=':'))
-                legend_labels.insert(4, 'Abel Inversion (Lei)')
-                
+                    ax3.plot(stats["Abel_NmF2"], stats["Abel_hmF2"],
+                             marker='o', markersize=8, color='tab:green', markeredgecolor='black', zorder=5)
+                custom_lines.insert(0, Line2D([0],[0], color='tab:green', lw=2.5, ls=':'))
+                legend_labels.insert(0, 'Abel Inversion')
+                max_edp_candidates.append(np.nanmax(abel['Ne']))
+
+            # F2 Peak marker legend entry
+            custom_lines.append(
+                Line2D([0],[0], marker='o', color='w', markerfacecolor='gray',
+                       markeredgecolor='black', markersize=8)
+            )
+            legend_labels.append('F2 Peak')
+
             ax3.set_xlabel("Electron Density (m⁻³)")
             ax3.set_title("State Space: Vertical Profile Dispersion")
             ax3.xaxis.set_major_formatter(formatter)
-            
-            idx_alt = alt_grid < 400
-            # Set dynamic limits
-            max_edp = max(np.nanmax(prior_edp_3d[idx_alt]), np.nanmax(posterior_edp_3d[idx_alt]))
-            if abel is not None and len(abel['Ne']) > 0:
-                max_edp = max(max_edp, np.nanmax(abel['Ne']))
-                
-            ax3.set_xlim(left=-0.1*max_edp, right=max_edp * 1.1)
+            if max_edp_candidates:
+                max_edp = max(max_edp_candidates)
+                ax3.set_xlim(left=-0.1 * max_edp, right=max_edp * 1.1)
             ax3.set_ylim(0, max(np.max(tangent_alt_clean) + 50, alt_grid[-1]))
-            
             ax3.grid(True, alpha=0.4, linestyle=':')
-            ax3.legend(custom_lines, legend_labels, loc='upper right')
-            # Final Layout & Save
+            ax3.legend(custom_lines, legend_labels, loc='upper right', fontsize=8)
+
             plt.tight_layout()
             fig.savefig(os.path.join(save_dir, f"{filename}_summary.png"), dpi=100)
             plt.close(fig)
+
+            # ---------------------------------------------------------
+            # Covariance Correlation Plots (prior + posterior per enabled filter)
+            # ---------------------------------------------------------
+            corr_save_dir = os.path.join(save_dir, "Correlation")
+            os.makedirs(corr_save_dir, exist_ok=True)
+            base_name = os.path.splitext(filename)[0]
+
+            corr_targets = []
+            if use_kf:
+                corr_targets.append((inverter,         "KF",        {"P": inverter.attrs["initial_edps_cov"]},         {}))
+            if use_reltec:
+                corr_targets.append((rel_inverter,     "RelTEC_KF", {"P": rel_inverter.attrs["initial_edps_cov"]},     {}))
+            if use_isr_ukf:
+                corr_targets.append((isr_ukf_inverter, "ISR_UKF",   {"P": isr_ukf_inverter.attrs["initial_edps_log_cov"]}, {}))
+            if use_enkf:
+                corr_targets.append((enkf_inverter,    "EnKF",      {"use_prior": True},                               {}))
+
+            for _inv, _label, _prior_kw, _post_kw in corr_targets:
+                _inv.plot_covariance_correlation(
+                    title=f"Prior Altitude-Altitude Correlation ({_label})\n{filename}",
+                    **_prior_kw,
+                )
+                plt.savefig(
+                    os.path.join(corr_save_dir, f"{base_name}_{_label}_prior_correlation.png"),
+                    dpi=100, bbox_inches='tight'
+                )
+                plt.close('all')
+
+                _inv.plot_covariance_correlation(
+                    title=f"Posterior Altitude-Altitude Correlation ({_label})\n{filename}",
+                    **_post_kw,
+                )
+                plt.savefig(
+                    os.path.join(corr_save_dir, f"{base_name}_{_label}_posterior_correlation.png"),
+                    dpi=100, bbox_inches='tight'
+                )
+                plt.close('all')
 
         stats["Status"] = "Success"
 
@@ -2855,12 +2992,6 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
     finally:
         stats["Processing_Time_s"] = time.time() - t_start
         plt.close('all')
-
-        local_vars = ['podTc_data', 'eds_occ', 'inverter', 'H_unscaled',
-                      'prior_state_flat', 'posterior_state_flat', 'prior_tec', 'post_tec']
-        for var in local_vars:
-            if var in locals():
-                del locals()[var]
         gc.collect()
 
     return stats
@@ -3222,10 +3353,10 @@ def main() -> None:
 
     import datetime
 
-    alt_grid = np.arange(60.0, 1000.0, 10.0, dtype=float)
+    alt_grid = np.arange(60.0, 600.0, 10.0, dtype=float)
 
     # ── Section 20 Batch Processing ───────────────────────────────────────────
-    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.178/"
+    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.177/"
 
     if not os.path.exists(base_path):
         print(f"Directory not found: {base_path}")
@@ -3243,15 +3374,15 @@ def main() -> None:
     print(f"Building global EDP cache for {batch_date.date()} ...")
     global_edp_cache = build_daily_global_edps(batch_date, alt_grid, dLat=5.0, dLon=5.0, num_workers=12)
 
-    MAX_FILES = None  # Set to an integer to limit the run, or None for all files
-    files_to_process = podTc2_files[51:] if MAX_FILES else podTc2_files
+    MAX_FILES = 1  # Set to an integer to limit the run, or None for all files
+    files_to_process = podTc2_files[1170:] if MAX_FILES else podTc2_files
     print(f"\nProcessing {len(files_to_process)} files sequentially...\n")
 
     batch_statistics = []
     for idx, f_string in enumerate(files_to_process):
         print(f"\n[{idx+1}/{len(files_to_process)}] ", end="")
         full_path = os.path.join(base_path, f_string)
-        file_stats = section20(full_path, alt_grid, global_edp_cache)
+        file_stats = section20(full_path, alt_grid, global_edp_cache, add_noise=False, noise_sigma=0.01)
         batch_statistics.append(file_stats)
 
         # Rolling backup every 10 files

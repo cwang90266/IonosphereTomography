@@ -36,6 +36,8 @@ def _process_single_ray(
     transformer,
     topside_scale_height_m: float,
     topside_n_steps: int = 10,
+    topside_H_H_m: float = 1000000.0,
+    topside_alpha: float = 0.05,
 ) -> np.ndarray:
     H_row = np.zeros(n_state_vars, dtype=np.float32)
 
@@ -98,61 +100,94 @@ def _process_single_ray(
                 flat_val_out = np.concatenate([dl_out * aw0_out, dl_out * aw1_out])
                 H_row += np.bincount(flat_idx_out, weights=flat_val_out, minlength=n_state_vars)
 
-    # --- 2. PROCESS THE TOPSIDE: stepped exponential integration ---
-    # Integrates ne(h) = ne(h_top) * exp(-(h - h_top) / H_s) above the grid.
-    # Uses n_steps half-scale-height slabs; recomputes local cos_zenith each step.
+    # --- 2. PROCESS THE TOPSIDE: Two-Ion Plasmasphere Extension ---
     topside_mask = alts_km > altitude[-1]
     if np.any(topside_mask):
         top_indices  = np.where(topside_mask)[0]
-        boundary_idx = top_indices[0]   # first midpoint above the grid top
+        boundary_idx = top_indices[-1]  # last topside midpoint = ray entry into topside from below
 
-        pierce_pt_m  = midpoints[:, boundary_idx] * 1000.0   # ECEF metres
-        lat_p, lon_p = lats[boundary_idx], lons[boundary_idx]
+        pierce_pt_m = midpoints[:, boundary_idx] * 1000.0  # ECEF metres
 
-        ray_dir       = (leo_i - gnss_i) / np.linalg.norm(leo_i - gnss_i)
-        normal_0      = pierce_pt_m / np.linalg.norm(pierce_pt_m)
-        cos_zenith_0  = max(np.abs(np.dot(ray_dir, normal_0)), 0.15)
+        # Integration direction: from pierce point (grid top) upward toward GNSS
+        ray_dir    = (gnss_i - leo_i) / np.linalg.norm(gnss_i - leo_i)
+        normal_0   = pierce_pt_m / np.linalg.norm(pierce_pt_m)
+        cos_zenith_0 = max(np.abs(np.dot(ray_dir, normal_0)), 0.05)
 
-        H_s_m      = topside_scale_height_m          # e-folding scale height [m]
-        dh_m       = H_s_m / 2.0                     # vertical slab thickness [m]
+        H_O_m = topside_scale_height_m
+        H_H_m = topside_H_H_m
+        alpha  = topside_alpha
+
+        dh_m       = H_O_m / max(topside_n_steps, 1)
+        max_dist_m = np.linalg.norm(gnss_i * 1000.0 - pierce_pt_m)
+        r_pierce   = np.linalg.norm(pierce_pt_m)
         top_a_idx  = n_height - 1
-        topside_contribution = 0.0
 
-        for k in range(topside_n_steps):
-            # Slant distance to the midpoint of slab k from the pierce point.
-            # Uses the initial cos_zenith to convert vertical distance to path length.
-            slant_m  = (k + 0.5) * dh_m / cos_zenith_0
-            pos_k_m  = pierce_pt_m + slant_m * ray_dir
+        # --- Vectorised topside integration (replaces per-step Python loop) ---
+        # Upper bound on steps: H+ term < threshold when h > -H_H * ln(threshold / alpha)
+        h_stop_m = -H_H_m * np.log(max(1e-8 / alpha, 1e-30))
+        k_max    = int(h_stop_m / dh_m) + 2
 
-            # Recompute local vertical at this position (Earth's curvature rotates it).
-            normal_k    = pos_k_m / np.linalg.norm(pos_k_m)
-            cos_zen_k   = max(np.abs(np.dot(ray_dir, normal_k)), 0.15)
+        k_arr     = np.arange(k_max, dtype=np.float64) + 0.5
+        slant_arr = k_arr * dh_m / cos_zenith_0          # (k_max,) slant distances
+        slant_arr = slant_arr[slant_arr < max_dist_m]    # truncate at GNSS satellite
 
-            # Path length through the vertical slab dh_m at this obliquity.
-            dl_k_m = dh_m / cos_zen_k
+        if slant_arr.size > 0:
+            # All positions along the topside path in one shot: shape (3, n_steps)
+            positions = pierce_pt_m[:, None] + slant_arr[None, :] * ray_dir[:, None]
 
-            # Midpoint-rule exponential weight (more accurate than left-edge rule).
-            weight_k = np.exp(-(k + 0.5) * dh_m / H_s_m)
+            r_arr    = np.linalg.norm(positions, axis=0)              # (n_steps,)
+            normals  = positions / r_arr[None, :]                     # (3, n_steps)
+            cos_zens = np.maximum(np.abs(ray_dir @ normals), 0.05)   # (n_steps,)
 
-            topside_contribution += dl_k_m * weight_k
+            h_diff   = r_arr - r_pierce                               # (n_steps,)
+            weights  = ((1.0 - alpha) * np.exp(-h_diff / H_O_m)
+                        + alpha       * np.exp(-h_diff / H_H_m))
 
-        if n_geo == 1:
-            H_row[top_a_idx] += topside_contribution
-        else:
-            tri_idx_top, bary_top = find_containing_triangles(
-                np.array([[lat_p, lon_p]]), geolocation, mesh, return_bary=True
-            )
-            if tri_idx_top[0] != -1:
-                v0, v1, v2    = mesh[tri_idx_top[0]]
-                bw0, bw1, bw2 = bary_top[0]
-                H_row[top_a_idx * n_geo + v0] += topside_contribution * bw0
-                H_row[top_a_idx * n_geo + v1] += topside_contribution * bw1
-                H_row[top_a_idx * n_geo + v2] += topside_contribution * bw2
-            else:
-                _, near_v = tree.query(np.array([[lat_p, lon_p]]))
-                H_row[top_a_idx * n_geo + near_v[0]] += topside_contribution
+            valid        = weights >= 1e-8
+            dl_arr       = dh_m / cos_zens                            # (n_steps,)
+            contributions = (dl_arr * weights * valid).astype(np.float32)
 
-    return H_row
+            if np.any(valid):
+                if n_geo == 1:
+                    H_row[top_a_idx] += contributions.sum()
+                else:
+                    # Single bulk coordinate transform for all valid steps
+                    pos_v = positions[:, valid]
+                    lons_t, lats_t, _ = transformer.transform(
+                        pos_v[0], pos_v[1], pos_v[2]
+                    )
+                    contribs_v = contributions[valid]
+
+                    tri_arr, bary_arr = find_containing_triangles(
+                        np.column_stack([lats_t, lons_t]),
+                        geolocation, mesh, return_bary=True,
+                    )
+
+                    inside  = tri_arr != -1
+                    outside = tri_arr == -1
+
+                    if np.any(inside):
+                        t_idx        = tri_arr[inside]
+                        v0, v1, v2   = mesh[t_idx, 0], mesh[t_idx, 1], mesh[t_idx, 2]
+                        bw0, bw1, bw2 = bary_arr[inside, 0], bary_arr[inside, 1], bary_arr[inside, 2]
+                        c_in         = contribs_v[inside]
+                        flat_idx = np.concatenate([
+                            top_a_idx * n_geo + v0,
+                            top_a_idx * n_geo + v1,
+                            top_a_idx * n_geo + v2,
+                        ])
+                        flat_val = np.concatenate([c_in * bw0, c_in * bw1, c_in * bw2])
+                        H_row += np.bincount(flat_idx, weights=flat_val,
+                                             minlength=n_state_vars)
+
+                    if np.any(outside):
+                        _, near_vs = tree.query(
+                            np.column_stack([lats_t[outside], lons_t[outside]])
+                        )
+                        c_out        = contribs_v[outside]
+                        flat_idx_out = top_a_idx * n_geo + near_vs
+                        H_row += np.bincount(flat_idx_out, weights=c_out,
+                                             minlength=n_state_vars)
 
     return H_row
 
@@ -177,10 +212,12 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         # 1. Flatten spatial and altitude dimensions into a state vector
         edps_flat = edps.reshape(n_state_vars, n_sample)
 
-        # CRITICAL FIX: Sanitize the IRI background state.
-        # IRI returns NaNs for regions outside its defined altitude bounds.
-        # We must replace these with 0.0 or the Kalman matrix math will explode.
-        edps_flat = np.nan_to_num(edps_flat, nan=0.0)
+        # 2. CRITICAL FIX for Log-State: Sanitize the IRI background state.
+        # We use a realistic ionospheric floor (1e8 m^-3) to prevent the ensemble
+        # variance from exploding when comparing normal values to near-zero values.
+        physical_floor = 1e8  
+        edps_flat = np.nan_to_num(edps_flat, nan=physical_floor)
+        edps_flat = np.clip(edps_flat, physical_floor, None)
 
         # Extract the base state (0th index) instead of the ensemble mean
         edps_base = edps_flat[:, 0:1]
@@ -207,7 +244,9 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         }
     def get_observation_operator(self, podTc2_data: dict, num_segments: int = 1000,
                                  topside_scale_height_m: float = 150000.0,
-                                 topside_n_steps: int = 10) -> np.ndarray:
+                                 topside_n_steps: int = 10,
+                                 topside_H_H_m: float = 1000000.0,
+                                 topside_alpha: float = 0.05) -> np.ndarray:
         from joblib import Parallel, delayed
 
         altitude    = self.EDPSam.altitude
@@ -235,7 +274,7 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
                 altitude, n_height, n_geo, n_state_vars,
                 geolocation, self.EDPSam.mesh, tree,
                 transformer, topside_scale_height_m,
-                topside_n_steps,
+                topside_n_steps, topside_H_H_m, topside_alpha,
             )
             for i in range(n_rays)
         )
@@ -300,3 +339,54 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             analysis_x = self.attrs["initial_edps_mean"] + self.x
 
         return analysis_x
+
+    def plot_covariance_correlation(self, title: str = None, P: np.ndarray = None) -> np.ndarray:
+        """
+        Plot the altitude-altitude correlation matrix derived from self.P.
+
+        Averages P over geo-point pairs to produce an (n_height, n_height)
+        covariance, then normalises to a Pearson correlation matrix and plots
+        it with altitude axes, matching the style of the universal covariance
+        plots in demo.py.
+
+        Parameters
+        ----------
+        title : str, optional
+            Figure title.  Defaults to "Altitude-Altitude Correlation (P)".
+
+        Returns
+        -------
+        corr_alt : np.ndarray, shape (n_height, n_height)
+            Altitude-altitude correlation matrix.
+        """
+        import matplotlib.pyplot as plt
+        import warnings
+
+        altitude = self.EDPSam.altitude                  # (n_height,)
+        n_height = len(altitude)
+        n_geo    = self.EDPSam.geolocation.shape[0]
+
+        # Reshape (n_h*n_g, n_h*n_g) → (n_h, n_g, n_h, n_g), average over geo
+        _P      = P if P is not None else self.P
+        P_4d    = _P.reshape(n_height, n_geo, n_height, n_geo)
+        cov_alt = P_4d.mean(axis=(1, 3))                 # (n_height, n_height)
+
+        std_devs  = np.sqrt(np.diag(cov_alt))
+        outer_std = np.outer(std_devs, std_devs)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            corr_alt = cov_alt / np.where(outer_std == 0, 1e-10, outer_std)
+
+        alt_extent = [float(altitude[0]), float(altitude[-1]),
+                      float(altitude[0]), float(altitude[-1])]
+
+        fig, ax = plt.subplots(figsize=(7, 6))
+        pcm = ax.imshow(corr_alt, cmap='coolwarm', vmin=-1, vmax=1,
+                        extent=alt_extent, origin='lower', aspect='auto')
+        ax.set_title(title or "Altitude-Altitude Correlation (P)")
+        ax.set_xlabel("Altitude (km)")
+        ax.set_ylabel("Altitude (km)")
+        fig.colorbar(pcm, ax=ax, label="Correlation Coefficient")
+        plt.tight_layout()
+
+        return corr_alt

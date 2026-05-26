@@ -386,3 +386,54 @@ class Ionosphere_Tomography_Inverter_RelTEC(KalmanFilter):
 
         # ---- Reconstruct absolute EDP — guaranteed positive for any finite x ----
         return self.attrs["ne_bg"] * np.exp(self.x)
+
+    def plot_covariance_correlation(self, title: str = None, P: np.ndarray = None) -> np.ndarray:
+        """
+        Plot the altitude-altitude correlation matrix derived from self.P.
+
+        Averages P over geo-point pairs to produce an (n_height, n_height)
+        covariance, then normalises to a Pearson correlation matrix and plots
+        it with altitude axes, matching the style of the universal covariance
+        plots in demo.py.
+
+        Parameters
+        ----------
+        title : str, optional
+            Figure title.  Defaults to "Altitude-Altitude Correlation (P)".
+
+        Returns
+        -------
+        corr_alt : np.ndarray, shape (n_height, n_height)
+            Altitude-altitude correlation matrix.
+        """
+        import matplotlib.pyplot as plt
+        import warnings
+
+        altitude = self.EDPSam.altitude                  # (n_height,)
+        n_height = len(altitude)
+        n_geo    = self.EDPSam.geolocation.shape[0]
+
+        # Reshape (n_h*n_g, n_h*n_g) → (n_h, n_g, n_h, n_g), average over geo
+        _P      = P if P is not None else self.P
+        P_4d    = _P.reshape(n_height, n_geo, n_height, n_geo)
+        cov_alt = P_4d.mean(axis=(1, 3))                 # (n_height, n_height)
+
+        std_devs  = np.sqrt(np.diag(cov_alt))
+        outer_std = np.outer(std_devs, std_devs)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            corr_alt = cov_alt / np.where(outer_std == 0, 1e-10, outer_std)
+
+        alt_extent = [float(altitude[0]), float(altitude[-1]),
+                      float(altitude[0]), float(altitude[-1])]
+
+        fig, ax = plt.subplots(figsize=(7, 6))
+        pcm = ax.imshow(corr_alt, cmap='coolwarm', vmin=-1, vmax=1,
+                        extent=alt_extent, origin='lower', aspect='auto')
+        ax.set_title(title or "Altitude-Altitude Correlation (P)")
+        ax.set_xlabel("Altitude (km)")
+        ax.set_ylabel("Altitude (km)")
+        fig.colorbar(pcm, ax=ax, label="Correlation Coefficient")
+        plt.tight_layout()
+
+        return corr_alt
