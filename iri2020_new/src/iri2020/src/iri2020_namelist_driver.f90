@@ -142,6 +142,7 @@ do iSample =1, nSample
 !    write(*,*) 'Inside loop ', iSample, iPts
 !    write(*,*) JF, JMAG, latitude(iPts), longitude(iPts)
 !    write(*,*) year, mmdd, dhour+25.,nheight, height_grid
+
     call IRISUB_Height_Grid(JF, JMAG, latitude(iPts), longitude(iPts), &
         year, mmdd, dhour+25., nheight, height_grid, outf,OARR)
 ! Write electron density for a given sample at a given point

@@ -8,11 +8,15 @@ Created on Tue May  5 08:23:06 2026
 import sys
 import os
 import numpy as np
+ 
+Source_ROOT = os.getenv("Tomography_Source_Folder")
+Run_Folder = os.getenv("Tomography_Run_Folder")
 
-target_dir = os.path.abspath("/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/IRI_Sample_Inputs")
+target_dir = os.path.abspath(Source_ROOT+"/IRI_Sample_Inputs")
 sys.path.insert(0, target_dir)
-target_dir = os.path.abspath("/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography/EDPSamples")
+target_dir = os.path.abspath(Source_ROOT+"/EDPSamples")
 sys.path.insert(0, target_dir)
+
 from IRI_Sample_inputs import IRI_Sample_Inputs as IRIs
 from edp_samples import EDPSamples as EDPS
 from edp_samples import read_iri_namelist_log as readlog
@@ -46,8 +50,8 @@ Sample_Param = Sample_Param_Database.randomSamples(
 altitude = np.arange(100,1000,10)
 
 EDPSam_Point = EDPS(DateTime_str,"Point", altitude,Sample_Param,evaluate_iri=1,Lon = 20, Lat= 30)
-EDPSam_Point.saveNetCDF("EDPSam_Point.nc")
-idx_nan = readlog("iri2020_namelist_driver.log")
+EDPSam_Point.saveNetCDF(Run_Folder+"/EDPSam_Point.nc")
+idx_nan = readlog(Run_Folder+"/iri2020_namelist_driver.log")
 idx_nan_sample = idx_nan[:,0]
 idx_nan_sample = idx_nan_sample.tolist()
 Sample_Param_nan = Sample_Param.iloc[idx_nan_sample]

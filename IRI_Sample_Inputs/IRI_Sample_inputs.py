@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from dateutil.parser import parse
 import pickle
+import os
 
 def get_apf107():
     """
@@ -42,6 +43,10 @@ def get_apf107():
     input_lines = response.text.splitlines()
     
     local_file = "apf107.dat"
+    if "Tomography_Run_Folder" in os.environ:
+        Run_Folder = os.getenv("Tomography_Run_Folder")
+        local_file = Run_Folder+"/"+local_file
+        
     urllib.request.urlretrieve(url, local_file)
 
     apf107={
@@ -101,6 +106,10 @@ def get_ig_rz():
     input_lines = response.text.splitlines()
     
     local_file = "ig_rz.dat"    
+    if "Tomography_Run_Folder" in os.environ:
+        Run_Folder = os.getenv("Tomography_Run_Folder")
+        local_file = Run_Folder+"/"+local_file
+
     urllib.request.urlretrieve(url, local_file)
 
     # 0: revision date, 1: start/end month/year, 2: ig, 3: rz
@@ -305,11 +314,19 @@ class IRI_Sample_Inputs:
         self.current_idx_igrz=datenum_igrz.index(datenum_sim)
         
     def save_to_file(self,filename:str):
+        if "Tomography_Run_Folder" in os.environ:
+            Run_Folder = os.getenv("Tomography_Run_Folder")
+            filename = Run_Folder+"/"+filename
+            
         with open(filename+".pkl","wb") as file:
             pickle.dump(self,file)
             
     @classmethod
     def fromPickle(cls,filename:str):
+        if "Tomography_Run_Folder" in os.environ:
+            Run_Folder = os.getenv("Tomography_Run_Folder")
+            filename = Run_Folder+"/"+filename
+            
         with open(filename+".pkl","rb") as file:
             ds = pickle.load(file)
             return ds

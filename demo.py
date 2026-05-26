@@ -30,17 +30,17 @@ Sections
 
 import sys
 import importlib.resources as impr
-from pathlib import Path
-
-ROOT = Path(__file__).parent
-# Make EDPSamples and IRI_Sample_Inputs importable (they are not installed packages)
-sys.path.insert(0, str(ROOT))
-# locate_in_mesh.py lives inside a directory with a space in its name
-sys.path.insert(0, str(ROOT / "EDPSamples" / "Locate in mesh" / "outputs"))
-sys.path.insert(0, str(ROOT / "iri2020_new" / "src" ))
-
-print(ROOT)
 import os
+
+# Make EDPSamples and IRI_Sample_Inputs importable (they are not installed packages)
+Source_ROOT = os.getenv("Tomography_Source_Folder")
+Run_ROOT = os.getenv("Tomography_Run_Folder")
+RO_ROOT = os.getenv("RO_Folder")
+sys.path.insert(0, str(Source_ROOT))
+# locate_in_mesh.py lives inside a directory with a space in its name
+sys.path.insert(0, str(Source_ROOT + "/EDPSamples" + "/Locate in mesh" + "/outputs"))
+sys.path.insert(0, str(Source_ROOT + "/iri2020_new" + "/src" ))
+
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -447,7 +447,7 @@ def section8(rect_vertices: np.ndarray, rect_triangles: np.ndarray) -> EDPSample
     axes[0].set_ylabel("Altitude (km)")
 
     # ── Save / load roundtrip ─────────────────────────────────────────────────
-    ncpath = ROOT / "alaska_edp_demo.nc"
+    ncpath = Run_ROOT / "alaska_edp_demo.nc"
     try:
         eds.saveNetCDF(ncpath)
         print(f"\n  Saved  → {ncpath.name}  ({ncpath.stat().st_size // 1024} KB)")
@@ -628,7 +628,7 @@ def section11() -> None:
         print(f"  EDPSamples (manual fallback) dims: {dict(eds.sizes)}")
 
     # ── NetCDF roundtrip ──────────────────────────────────────────────────────
-    ncpath = ROOT / "point_ensemble_demo.nc"
+    ncpath = Run_ROOT / "point_ensemble_demo.nc"
     eds.saveNetCDF(ncpath)
     print(f"\n  Saved  → {ncpath.name}  ({ncpath.stat().st_size // 1024} KB)")
 
@@ -680,12 +680,12 @@ def section12(podTc2_file: str) -> tuple[np.ndarray, np.ndarray, tuple, tuple, t
     
     # podTc2_string = "podTc2_GN05.2025.152.06.07.0026.C33.00_0000.0001_nc"
     podTc2_string = "podTc2_GN05.2025.315.00.04.0032.G23.01_0000.0001_nc"
-    podTc2_file = f"/Users/cwang/Documents/Consulting/PlanetIQ/Data/SampleData/2025.315/{podTc2_string}"
+    podTc2_file = RO_ROOT +f"/2025.315/{podTc2_string}"
     
     
     # Extract the filename from the path to use in the save string
     podTc2_string = podTc2_file.split('/')[-1]
-    save_path = f"./Figures/Examples/{podTc2_string}_mesh_geometry.png"
+    save_path = Run_ROOT + f"/Figures/Examples/{podTc2_string}_mesh_geometry.png"
     
     podTc_data = parse_podTc2_nc_file(podTc2_file)
     
@@ -793,7 +793,7 @@ def section13(rect_vertices: np.ndarray, rect_triangles: np.ndarray, pt1: tuple,
     axes[0].set_ylabel("Altitude (km)")
 
     # ── Save / load roundtrip ─────────────────────────────────────────────────
-    ncpath = ROOT / "alaska_edp_demo.nc"
+    ncpath = Run_ROOT / "alaska_edp_demo.nc"
     try:
         eds.saveNetCDF(ncpath)
         print(f"\n  Saved  → {ncpath.name}  ({ncpath.stat().st_size // 1024} KB)")
@@ -1224,7 +1224,7 @@ def section16(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     ax.legend(loc='upper right', fontsize=10)
     plt.tight_layout()
 
-    save_dir = "./Figures/Section16_Comparisons/"
+    save_dir = Run_ROOT + "/Figures/Section16_Comparisons/"
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"{filename}_mesh_comparison.png")
     fig.savefig(save_path, dpi=150)
@@ -1433,7 +1433,7 @@ def section17(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     plt.tight_layout()
     
     # Save output
-    save_dir = "./Figures/Section17_Assimilation/"
+    save_dir = Run_ROOT + "/Figures/Section17_Assimilation/"
     import os
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"{filename}_assimilation.png")
@@ -1501,7 +1501,7 @@ def main() -> None:
         # "podTc2_GN05.2025.152.02.51.0025.G10.01_0000.0001_nc"  # North America vertical occultation
     ]
 
-    base_path = "/Users/cwang/Documents/Consulting/PlanetIQ/Data/SampleData/2025.315/"
+    base_path = RO_ROOT + "/2025.315/"
 
     for f_string in podTc2_files:
             full_path = os.path.join(base_path, f_string)
