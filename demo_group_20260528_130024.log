@@ -1,0 +1,223 @@
+/home/austinhunter/IonosphereTomography
+=================================================================
+  demo_group.py — Grouped Occultation KF Processing
+=================================================================
+  Scanning 3547 files for metadata …
+  Found 3547 valid files across 494 geographic groups (48 30-min windows).
+
+Batch date     : 2024-10-10
+Time bins      : 30-minute windows
+Lat bin size   : 30.0°  |  Lon bin size: 60.0°
+Polar cap lat  : ±60.0°
+
+Building global EDP cache for 2024-10-10 …
+ -> IRI center inputs for 2024-10-10: F10.7=215.6, Ap=97, IG12=129.0, Rz12=160.9
+ -> Building 24 hourly global grids with 12 workers ...
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 10] done (1/24)
+    [Hour 09] done (2/24)
+    [Hour 03] done (3/24)
+    [Hour 02] done (4/24)
+    [Hour 01] done (5/24)
+    [Hour 04] done (6/24)
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 05] done (7/24)
+    [Hour 00] done (8/24)
+    [Hour 06] done (9/24)
+    [Hour 07] done (10/24)
+    [Hour 08] done (11/24)
+    [Hour 11] done (12/24)
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 12] done (13/24)
+    [Hour 13] done (14/24)
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 14] done (15/24)
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 15] done (16/24)
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 16] done (17/24)
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 17] done (18/24)EDPS: (54, 1650, 50), N_geo: 1650
+
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 18] done (19/24)
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 19] done (20/24)
+    [Hour 20] done (21/24)
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 21] done (22/24)
+EDPS: (54, 1650, 50), N_geo: 1650
+    [Hour 22] done (23/24)
+    [Hour 23] done (24/24)
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+EDPS: (54, 1650, 50), N_geo: 1650
+ -> All 24 hourly global EDP grids loaded.
+Global EDP cache ready.
+
+Processing 494 groups …
+
+[1/494]
+────────────────────────────────────────────────────────────
+  Group : 2024-10-10_0030__POLAR_S
+  Window: 2024-10-10_0030  |  Region: POLAR_S  |  26 occultation(s)
+────────────────────────────────────────────────────────────
+Data Flipped: E4 is setting
+C26 is rising
+R9 is rising
+Data Flipped: C30 is setting
+Data Flipped: E6 is setting
+Data Flipped: E10 is setting
+Data Flipped: G31 is setting
+Data Flipped: C20 is setting
+Data Flipped: R3 is setting
+Data Flipped: E9 is setting
+Data Flipped: C23 is setting
+Data Flipped: G4 is setting
+Data Flipped: E12 is setting
+Data Flipped: R12 is setting
+Data Flipped: R24 is setting
+C34 is rising
+E15 is rising
+R16 is rising
+G11 is rising
+C39 is rising
+R20 is rising
+E2 is rising
+C44 is rising
+G29 is rising
+G24 is rising
+R9 is rising
+  Parsed 26/26 files successfully.
+  Bounding box: lat [-90.0, -65.0]  lon [-180.0, 180.0]  |  vertices: 77
+  Final group: 26 occultation(s), 77 mesh vertices
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:872: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  col   = cm.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
+/home/austinhunter/IonosphereTomography/demo_group.py:882: MatplotlibDeprecationWarning: The get_cmap function was deprecated in Matplotlib 3.7 and will be removed in 3.11. Use ``matplotlib.colormaps[name]`` or ``matplotlib.colormaps.get_cmap()`` or ``pyplot.get_cmap()`` instead.
+  rem_cmap = cm.get_cmap("Reds", max(n_removed + 2, 4))
+  Saved trim diagnostic → ./Figures/GroupKF/group_2024-10-10_0030__POLAR_S_trim.png
+  [1/26] Building H for GN04 00:31 (379 rays) …
+  -> Building H Matrix (379 rays, parallel)...
+  [2/26] Building H for GN04 00:32 (373 rays) …
+  -> Building H Matrix (373 rays, parallel)...
+  [3/26] Building H for GN04 00:33 (379 rays) …
+  -> Building H Matrix (379 rays, parallel)...
+  [4/26] Building H for GN04 00:34 (629 rays) …
+  -> Building H Matrix (629 rays, parallel)...
+  [5/26] Building H for GN04 00:34 (418 rays) …
+  -> Building H Matrix (418 rays, parallel)...
+  [6/26] Building H for GN04 00:36 (437 rays) …
+  -> Building H Matrix (437 rays, parallel)...
+  [7/26] Building H for GN04 00:37 (366 rays) …
+  -> Building H Matrix (366 rays, parallel)...
+  [8/26] Building H for GN04 00:38 (369 rays) …
+  -> Building H Matrix (369 rays, parallel)...
+  [9/26] Building H for GN04 00:38 (560 rays) …
+  -> Building H Matrix (560 rays, parallel)...
+  [10/26] Building H for GN04 00:39 (479 rays) …
+  -> Building H Matrix (479 rays, parallel)...
+  [11/26] Building H for GN04 00:39 (435 rays) …
+  -> Building H Matrix (435 rays, parallel)...
+  [12/26] Building H for GN04 00:40 (493 rays) …
+  -> Building H Matrix (493 rays, parallel)...
+  [13/26] Building H for GN04 00:41 (439 rays) …
+  -> Building H Matrix (439 rays, parallel)...
+  [14/26] Building H for GN04 00:43 (464 rays) …
+  -> Building H Matrix (464 rays, parallel)...
+  [15/26] Building H for GN04 00:43 (461 rays) …
+  -> Building H Matrix (461 rays, parallel)...
+  [16/26] Building H for GN05 00:43 (731 rays) …
+  -> Building H Matrix (731 rays, parallel)...
+  [17/26] Building H for GN05 00:49 (456 rays) …
+  -> Building H Matrix (456 rays, parallel)...
+  [18/26] Building H for GN05 00:50 (434 rays) …
+  -> Building H Matrix (434 rays, parallel)...
+  [19/26] Building H for GN05 00:51 (481 rays) …
+  -> Building H Matrix (481 rays, parallel)...
+  [20/26] Building H for GN05 00:53 (398 rays) …
+  -> Building H Matrix (398 rays, parallel)...
+  [21/26] Building H for GN05 00:53 (471 rays) …
+  -> Building H Matrix (471 rays, parallel)...

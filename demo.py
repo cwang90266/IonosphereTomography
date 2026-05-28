@@ -1636,16 +1636,19 @@ def section17(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     print("  -> Calculating TEC and Reshaping States...")
     # Get Prior Mean State and Posterior State
     prior_state_flat = inverter.attrs['initial_edps_mean']
-    
+    _n_sv = inverter.attrs['n_state_vars']
+
     # Strip masked array metadata to prevent NumPy mask broadcasting bugs
     H_clean = np.asarray(H_unscaled)
     prior_state_clean = np.asarray(prior_state_flat)
     posterior_state_clean = np.asarray(posterior_state_flat)
 
-    # Calculate TEC: Z = H * x
-    # NOTE: .flatten() is added here to convert (N, 1) column vectors to (N,) 1D arrays for matplotlib
-    prior_tec = (H_clean @ prior_state_clean).flatten()
-    posterior_tec = (H_clean @ posterior_state_clean).flatten()
+    # Calculate TEC: Z = H_grid * x_grid + H_top * x_top_tecu
+    # H is augmented (grid + topside TECU columns); split the matmul accordingly.
+    prior_tec = (H_clean[:, :_n_sv] @ prior_state_clean
+                 + H_clean[:, _n_sv:] @ inverter.attrs['x_top_prior'][:, None]).flatten()
+    posterior_tec = (H_clean[:, :_n_sv] @ posterior_state_clean
+                     + H_clean[:, _n_sv:] @ inverter.x_top_tecu).flatten()
     
     print("\n  --- DEBUG: TEC Arrays ---")
     print(f"  Y-Axis (tangent_alt_clean) shape: {tangent_alt_clean.shape}")
@@ -1836,13 +1839,16 @@ def section18(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     # 5. Evaluate Results & Reshape
     print("  -> Calculating TEC and Reshaping States...")
     prior_state_flat = inverter.attrs['initial_edps_mean']
-    
+    _n_sv = inverter.attrs['n_state_vars']
+
     H_clean = np.asarray(H_unscaled)
     prior_state_clean = np.asarray(prior_state_flat)
     posterior_state_clean = np.asarray(posterior_state_flat)
 
-    prior_tec = (H_clean @ prior_state_clean).flatten()
-    posterior_tec = (H_clean @ posterior_state_clean).flatten()
+    prior_tec = (H_clean[:, :_n_sv] @ prior_state_clean
+                 + H_clean[:, _n_sv:] @ inverter.attrs['x_top_prior'][:, None]).flatten()
+    posterior_tec = (H_clean[:, :_n_sv] @ posterior_state_clean
+                     + H_clean[:, _n_sv:] @ inverter.x_top_tecu).flatten()
     reltec_tec = (np.asarray(H_rel) @ np.asarray(reltec_state_flat)).flatten()
 
     n_height = len(alt_grid)
@@ -2491,6 +2497,13 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
         "ISR_UKF_NmF2": np.nan,     "ISR_UKF_hmF2": np.nan,
         "EnKF_TEC_RMSE": np.nan,    "EnKF_TEC_MAE": np.nan,
         "EnKF_NmF2": np.nan,        "EnKF_hmF2": np.nan,
+        "Ionosonde_Station":    "None",
+        "Ionosonde_Dist_km":    np.nan,
+        "Ionosonde_NmF2":       np.nan,
+        "Ionosonde_hmF2":       np.nan,
+        "Ionosonde_Post_RMSE":  np.nan,
+        "Ionosonde_Prior_RMSE": np.nan,
+        "Ionosonde_Source":     "None",
         "Processing_Time_s": np.nan,
         "Status": "Failed"
     }
@@ -2615,9 +2628,13 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
                 measurement_err=_filt["KF"]["measurement_err"],
             )
             prior_state_flat = inverter.attrs['initial_edps_mean']
+            _n_sv = inverter.attrs['n_state_vars']
+            _H = np.asarray(H_tec)
 
-            prior_tec  = (np.asarray(H_tec) @ np.asarray(prior_state_flat)).flatten()
-            post_tec   = (np.asarray(H_tec) @ np.asarray(posterior_state_flat)).flatten()
+            prior_tec = (_H[:, :_n_sv] @ np.asarray(prior_state_flat)
+                         + _H[:, _n_sv:] @ inverter.attrs['x_top_prior'][:, None]).flatten()
+            post_tec  = (_H[:, :_n_sv] @ np.asarray(posterior_state_flat)
+                         + _H[:, _n_sv:] @ inverter.x_top_tecu).flatten()
             prior_res  = np.asarray(measured_tec_clean - prior_tec,  dtype=np.float64)
             post_res   = np.asarray(measured_tec_clean - post_tec,   dtype=np.float64)
             stats["Prior_TEC_RMSE"] = float(np.sqrt(np.mean(prior_res**2)))
@@ -2626,7 +2643,7 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
             stats["Post_TEC_MAE"]   = float(np.mean(np.abs(post_res)))
 
             prior_edp_3d = prior_state_flat.reshape(n_height, n_geo).copy()
-            prior_edp_3d[prior_edp_3d == 0] = np.nan
+            prior_edp_3d[prior_edp_3d <= 1e7] = np.nan
             posterior_edp_3d = np.asarray(posterior_state_flat).reshape(n_height, n_geo).copy()
             posterior_edp_3d[posterior_edp_3d == 0] = np.nan
 
@@ -2664,7 +2681,7 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
             reltec_tec_plot = reltec_tec + reltec_bias
 
             reltec_edp_3d = np.asarray(reltec_state_flat).reshape(n_height, n_geo).copy()
-            reltec_edp_3d[reltec_edp_3d == 0] = np.nan
+            reltec_edp_3d[reltec_edp_3d <= 1e7] = np.nan
             reltec_profile = reltec_edp_3d[:, center_idx]
             reltec_nm, reltec_hm = extract_robust_f2_peak(reltec_profile, alt_grid)
             stats["RelTEC_NmF2"] = reltec_nm;  stats["RelTEC_hmF2"] = reltec_hm
@@ -2676,13 +2693,16 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
                 relaxation=_filt["ISR_UKF"]["relaxation"],
                 measurement_err=_filt["ISR_UKF"]["measurement_err"],
             )
-            isr_ukf_tec  = (np.asarray(H_tec) @ np.asarray(isr_ukf_state_flat)).flatten()
+            _n_sv_ukf = isr_ukf_inverter.attrs['n_state_vars']
+            _H_ukf    = np.asarray(H_tec)
+            isr_ukf_tec = (_H_ukf[:, :_n_sv_ukf] @ np.asarray(isr_ukf_state_flat)
+                           + _H_ukf[:, _n_sv_ukf:] @ isr_ukf_inverter.x_top_tecu).flatten()
             isr_ukf_res  = np.asarray(measured_tec_clean - isr_ukf_tec, dtype=np.float64)
             stats["ISR_UKF_TEC_RMSE"] = float(np.sqrt(np.mean(isr_ukf_res**2)))
             stats["ISR_UKF_TEC_MAE"]  = float(np.mean(np.abs(isr_ukf_res)))
 
             isr_ukf_edp_3d = np.asarray(isr_ukf_state_flat).reshape(n_height, n_geo).copy()
-            isr_ukf_edp_3d[isr_ukf_edp_3d <= 1e-5] = np.nan
+            isr_ukf_edp_3d[isr_ukf_edp_3d <= 1e7] = np.nan
             isr_ukf_profile = isr_ukf_edp_3d[:, center_idx]
             isr_ukf_nm, isr_ukf_hm = extract_robust_f2_peak(isr_ukf_profile, alt_grid)
             stats["ISR_UKF_NmF2"] = isr_ukf_nm;  stats["ISR_UKF_hmF2"] = isr_ukf_hm
@@ -2700,7 +2720,7 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
             stats["EnKF_TEC_MAE"]  = float(np.mean(np.abs(enkf_res)))
 
             enkf_edp_3d = np.asarray(enkf_state_flat).reshape(n_height, n_geo).copy()
-            enkf_edp_3d[enkf_edp_3d <= 1e-5] = np.nan
+            enkf_edp_3d[enkf_edp_3d <= 1e7] = np.nan
             enkf_profile = enkf_edp_3d[:, center_idx]
             enkf_nm, enkf_hm = extract_robust_f2_peak(enkf_profile, alt_grid)
             stats["EnKF_NmF2"] = enkf_nm;  stats["EnKF_hmF2"] = enkf_hm
@@ -2722,6 +2742,39 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
                         stats["Post_Abel_RMSE"] = float(np.sqrt(
                             np.mean((post_profile[valid_rmse] - abel_on_grid[valid_rmse])**2)
                         ))
+
+        # =========================================================
+        # 10. Ionosonde Collocation Verification
+        # =========================================================
+        try:
+            from Ionosonde_verification.ionosonde_verification import run_ionosonde_verification
+
+            _iono_edp    = posterior_edp_3d if posterior_edp_3d is not None else prior_edp_3d
+            _iono_prior  = prior_edp_3d
+            _abel_ne     = abel['Ne']     if (abel is not None and len(abel.get('Ne', [])) > 0) else None
+            _abel_alt    = abel['alt_km'] if (abel is not None and len(abel.get('alt_km', [])) > 0) else None
+            _prior_ens   = eds_occ["EDPs"].values if hasattr(eds_occ, '__getitem__') else None
+
+            _iono_result = run_ionosonde_verification(
+                profile_dt    = profile_dt,
+                lat_min       = lat_min,     lat_max    = lat_max,
+                lon_min       = lon_min,     lon_max    = lon_max,
+                alt_grid      = alt_grid,
+                posterior_edp = _iono_edp,
+                prior_edp     = _iono_prior,
+                geolocation   = eds_occ.geolocation,
+                prior_ensemble= _prior_ens,
+                abel_ne       = _abel_ne,
+                abel_alt_km   = _abel_alt,
+                save_dir      = os.path.join(save_dir, "Ionosonde"),
+                filename_prefix = os.path.splitext(filename)[0],
+                window_minutes  = 30,
+                download_dir    = "./Ionosonde_verification/downloads/",
+                generate_plot   = generate_plots,
+            )
+            stats.update(_iono_result)
+        except Exception as _iono_exc:
+            print(f"  [Ionosonde] Skipped: {_iono_exc}")
 
         # =========================================================
         # 9. OPTIONAL BATCH PLOTTING (3 Subplots)
@@ -2942,7 +2995,7 @@ def section20(podTc2_file: str, alt_grid: np.ndarray, global_edp_cache: dict,
             ax3.legend(custom_lines, legend_labels, loc='upper right', fontsize=8)
 
             plt.tight_layout()
-            fig.savefig(os.path.join(save_dir, f"{filename}_summary.png"), dpi=100)
+            fig.savefig(os.path.join(save_dir, f"{filename}_topside_summary.png"), dpi=100)
             plt.close(fig)
 
             # ---------------------------------------------------------
@@ -3356,7 +3409,8 @@ def main() -> None:
     alt_grid = np.arange(60.0, 600.0, 10.0, dtype=float)
 
     # ── Section 20 Batch Processing ───────────────────────────────────────────
-    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.177/"
+    base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2024.284/"
+    # base_path = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.177/"
 
     if not os.path.exists(base_path):
         print(f"Directory not found: {base_path}")
@@ -3374,8 +3428,42 @@ def main() -> None:
     print(f"Building global EDP cache for {batch_date.date()} ...")
     global_edp_cache = build_daily_global_edps(batch_date, alt_grid, dLat=5.0, dLon=5.0, num_workers=12)
 
+    # ── Ionosonde day-level availability pre-screen ───────────────────────────
+    # Checks every GIRO station concurrently (one request per station) so the
+    # per-file loop can skip stations known to have no data today without
+    # making any further network calls.
+    print(f"\nPre-screening ionosonde station availability for {batch_date.date()} ...")
+    from Ionosonde_verification.ionosonde_verification import (
+        STATIONS as _IONO_STATIONS,
+        check_daily_station_availability,
+        _DAY_SCHEDULE,
+    )
+    _iono_avail = check_daily_station_availability(
+        stations    = list(_IONO_STATIONS.keys()),
+        date        = batch_date.to_pydatetime(),
+        timeout_s   = 10,
+        max_workers = 4,
+    )
+    # Re-read the health flag that was set during check_daily_station_availability
+    from Ionosonde_verification.ionosonde_verification import _LGDC_HEALTHY as _iono_healthy
+    if not _iono_healthy:
+        print("  Ionosonde verification disabled for this batch (LGDC service unavailable).")
+    else:
+        _avail_codes = sorted(c for c, v in _iono_avail.items() if v)
+        _unavail_n   = sum(1 for v in _iono_avail.values() if not v)
+        print(f"  Active: {len(_avail_codes)} stations  |  No data today: {_unavail_n} stations")
+        if _avail_codes:
+            _preview = _avail_codes[:12]
+            _suffix  = f" ... (+{len(_avail_codes)-12} more)" if len(_avail_codes) > 12 else ""
+            print(f"  Stations with data: {_preview}{_suffix}")
+        _day_str = batch_date.strftime('%Y-%m-%d')
+        _sched_n = sum(1 for c in _avail_codes if _DAY_SCHEDULE.get(f"{c}_{_day_str}"))
+        print(f"  Sounding schedules cached: {_sched_n}/{len(_avail_codes)} active stations")
+    print()
+    # ─────────────────────────────────────────────────────────────────────────
+
     MAX_FILES = 1  # Set to an integer to limit the run, or None for all files
-    files_to_process = podTc2_files[1170:] if MAX_FILES else podTc2_files
+    files_to_process = podTc2_files[0:] if MAX_FILES else podTc2_files
     print(f"\nProcessing {len(files_to_process)} files sequentially...\n")
 
     batch_statistics = []
