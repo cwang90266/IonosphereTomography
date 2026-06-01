@@ -181,7 +181,8 @@ def visualize_scalar_field(vertices, triangles, altitudes, values,
     for i in range(len(vertices)):
         ax2.plot(values[i], altitudes,
                  color=vertex_colors[i], linewidth=0.8, alpha=0.75)
-
+    xmin, xmax = ax2.get_xlim()
+    ax2.plot([xmin-0.2*(xmax-xmin), xmax+0.2*(xmax-xmin)], [peak_alt,peak_alt],color=(0,0,0), linewidth=1, linestyle='--')
     sm = cm.ScalarMappable(cmap=colormap, norm=norm)
     sm.set_array([])
     plt.colorbar(sm, ax=ax2, label='Function value at peak altitude')

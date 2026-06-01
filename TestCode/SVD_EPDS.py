@@ -11,7 +11,8 @@ import numpy as np
 #import matplotlib.pyplot as plt
 from matplotlib.pyplot import figure
 import matplotlib.pyplot as plt
-
+from gaussian_smoother import build_gaussian_smoother as gauss
+from scipy import sparse
 
 Source_ROOT = os.getenv("Tomography_Source_Folder")
 Run_Folder = os.getenv("Tomography_Run_Folder")
@@ -98,6 +99,9 @@ edps_0 = edps_reshape - edps_mean
 edps_0s = edps_0/edps_mean
 CoV_inner = edps_0s.T @ edps_0s
 EVa, EVec = np.linalg.eig(CoV_inner)
+idx = np.argsort(EVa)[::-1]
+EVa = EVa[idx]
+EVec = EVec[:, idx]
 EVa = EVa.reshape((edps_reshape.shape[1], 1))
 EVa = np.abs(EVa)
 EVa = np.sqrt(EVa)
@@ -143,7 +147,7 @@ for idx in range(50,150,20):
 Sigma = np.std(edps_0s,axis=1)
 Sigma = Sigma.reshape((edps.shape[0], edps.shape[1]))
 fig = viz(EDPSam_Polar.geolocation, EDPSam_Polar.mesh,EDPSam_Polar.altitude,Sigma.T,polar=True,
-              title_txt=f"PCA #{idx}: ")
+              title_txt="Standard Deviation")
 plt.show()
 
 Sigma_height = np.mean(Sigma,axis=1)
@@ -152,7 +156,66 @@ RandChange = rng.normal(loc=0.0, scale=1.0, size=(edps.shape[0],edps.shape[1]*ed
 RandChange = Sigma_height[:,np.newaxis]*RandChange
 RandChange = RandChange.reshape((edps.shape[0]*edps.shape[1],edps.shape[2]))
 
+sigma_h = 60
+sigma_latlon = 500
+smother = gauss(EDPSam_Polar.altitude, 
+        EDPSam_Polar.geolocation[:,1], EDPSam_Polar.geolocation[:,0], sigma_h, sigma_latlon)
+RandChange_cor = smother @ RandChange
+
 edps_pertb = edps_0s + RandChange
+edps_0s = edps_pertb
+CoV_inner = edps_0s.T @ edps_0s
+EVa, EVec = np.linalg.eig(CoV_inner)
+idx = np.argsort(EVa)[::-1]
+EVa = EVa[idx]
+EVec = EVec[:, idx]
+
+EVa = EVa.reshape((edps_reshape.shape[1], 1))
+EVa = np.abs(EVa)
+EVa = np.sqrt(EVa)
+idx = np.where(EVa>1)
+idx = idx[0]
+idx_max = max(idx)
+#
+fig = figure(figsize=(10, 10))
+axs = fig.subplots(1, 1)
+axs.plot(range(EVa.shape[0]), EVa, marker='o', linestyle='none')
+axs.plot(np.array([idx_max, idx_max]), np.array([np.min(EVa),np.max(EVa)]), linestyle='--',color=(0,0,0))
+axs.plot(np.array([0, len(EVa)]), np.array([1,1]), linestyle='--',color=(0,0,0))
+axs.set_yscale('log')
+axs.set_xlim(0,len(EVa))
+axs.set_ylim(np.min(EVa),np.max(EVa))
+axs.set_xlabel('Index of Sigular Values',fontsize=20)
+axs.set_ylabel('Sigular Values',fontsize=20)
+axs.tick_params(axis='both', labelsize=20)
+axs.grid(True)
+props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+axs.text(0.05, 0.95, f"Number of Singular Value Larger than 1 is {idx_max}",
+         transform=axs.transAxes, fontsize=20,
+         verticalalignment='top')
+axs.text(0.05, 0.9, f"Largest Singular Value is {np.max(EVa)}",
+         transform=axs.transAxes, fontsize=20,
+         verticalalignment='top')
+fig.show()
+
+PCA = edps_0s @ EVec
+PCA = PCA.reshape((edps.shape[0], edps.shape[1], edps.shape[2]))
+for idx in range(6):
+    PCA_p = PCA[:,:,idx]
+    fig = viz(EDPSam_Polar.geolocation, EDPSam_Polar.mesh,EDPSam_Polar.altitude,PCA_p.T,polar=True,
+              title_txt=f"PCA #{idx}: ")
+    plt.show()
+
+for idx in range(50,150,20):
+    PCA_p = PCA[:,:,idx]
+    fig = viz(EDPSam_Polar.geolocation, EDPSam_Polar.mesh,EDPSam_Polar.altitude,PCA_p.T,polar=True,
+              title_txt=f"PCA #{idx}: ")
+    plt.show()
+    
+#
+# Correlated noise
+#
+edps_pertb = edps_0s + RandChange_cor
 edps_0s = edps_pertb
 CoV_inner = edps_0s.T @ edps_0s
 EVa, EVec = np.linalg.eig(CoV_inner)
