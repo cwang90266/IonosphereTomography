@@ -1,0 +1,108 @@
+/home/austinhunter/IonosphereTomography
+=================================================================
+  demo_group.py — Grouped Occultation KF Processing
+=================================================================
+  Scanning 5819 files for metadata …
+  Found 5819 valid files across 702 geographic groups (48 30-min windows).
+
+Batch date     : 2025-06-02
+Time bins      : 30-minute windows
+Lat bin size   : 30.0°  |  Lon bin size: 60.0°
+Polar cap lat  : ±60.0°
+
+Building global EDP cache for 2025-06-02 …
+ -> IRI center inputs for 2025-06-02: F10.7=143.9, Ap=69, IG12=102.7, Rz12=124.7
+ -> Building 24 hourly global grids with 12 workers ...
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650EDPS: (50, 1650, 50), N_geo: 1650
+
+EDPS: (50, 1650, 50), N_geo: 1650
+    [Hour 05] done (1/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650EDPS: (50, 1650, 50), N_geo: 1650
+
+EDPS: (50, 1650, 50), N_geo: 1650EDPS: (50, 1650, 50), N_geo: 1650
+
+    [Hour 07] done (2/24)
+    [Hour 09] done (3/24)
+    [Hour 03] done (4/24)
+    [Hour 00] done (5/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+    [Hour 10] done (6/24)
+    [Hour 06] done (7/24)
+    [Hour 02] done (8/24)
+    [Hour 04] done (9/24)
+    [Hour 01] done (10/24)
+    [Hour 11] done (11/24)
+    [Hour 08] done (12/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+    [Hour 12] done (13/24)
+    [Hour 13] done (14/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+    [Hour 14] done (15/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+    [Hour 15] done (16/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+    [Hour 16] done (17/24)
+    [Hour 17] done (18/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+    [Hour 18] done (19/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+    [Hour 19] done (20/24)
+    [Hour 20] done (21/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+    [Hour 21] done (22/24)
+    [Hour 22] done (23/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+    [Hour 23] done (24/24)
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+EDPS: (50, 1650, 50), N_geo: 1650
+ -> All 24 hourly global EDP grids loaded.
+Global EDP cache ready.
+
+Processing 702 groups …
+
+[1/702]
+────────────────────────────────────────────────────────────
+  Group : 2025-06-02_1130__LAT-030_LON+000
+  Window: 2025-06-02_1130  |  Region: LAT-030_LON+000  |  1 occultation(s)
+────────────────────────────────────────────────────────────
+Data Flipped: G28 is setting
+  Parsed 1/1 files successfully.
+  Bounding box: lat [-44.0, 28.9]  lon [-14.0, 159.6]  |  vertices: 469
+  Final group: 1 occultation(s), 469 mesh vertices
+  Saved trim diagnostic → ./Figures/GroupKF/group_2025-06-02_1130__LAT-030_LON+000_trim.png
+  [1/1] Building H for GN05 11:38 (2977 rays) …
+  -> Building H Matrix (2977 rays, parallel)...
+  Combined H shape : (2977, 23919)  (total rays = 2977)
+  Running sequential KF assimilation …
+  [step 1/1] Assimilating GN05 11:38 (2977 rays) …
+  Running joint (batch) KF assimilation …

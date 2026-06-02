@@ -20,6 +20,40 @@ from filterpy.kalman import KalmanFilter
 # Ensure you import these from your edp_samples module
 from EDPSamples.edp_samples import EDPSamples, interp_heights, find_containing_triangles
 
+
+def _gaspari_cohn(r: np.ndarray) -> np.ndarray:
+    """
+    Gaspari-Cohn (1999) compact-support localization function.
+
+    Smoothly decreases from 1 at r=0 to 0 at r=2; identically zero beyond r=2.
+    Provides 5th-order piecewise polynomial smoothness with compact support,
+    making it the standard choice for covariance localization in data assimilation.
+
+    Parameters
+    ----------
+    r : ndarray
+        Normalized distance  d / localization_radius.  The function is identically
+        zero for r >= 2, so localization_radius acts as the half-support radius.
+
+    Returns
+    -------
+    ndarray, same shape as r, values in [0, 1].
+    """
+    out = np.zeros_like(r, dtype=float)
+    m1  = r <= 1.0
+    m2  = (r > 1.0) & (r <= 2.0)
+    r1, r2 = r[m1], r[m2]
+    out[m1] = (
+        1.0 - (5.0 / 3.0) * r1**2 + (5.0 / 8.0) * r1**3
+        + (1.0 / 2.0) * r1**4 - (1.0 / 4.0) * r1**5
+    )
+    out[m2] = (
+        4.0 - 5.0 * r2 + (5.0 / 3.0) * r2**2 + (5.0 / 8.0) * r2**3
+        - (1.0 / 2.0) * r2**4 + (1.0 / 12.0) * r2**5 - 2.0 / (3.0 * r2)
+    )
+    return out
+
+
 def _process_single_ray(
     gnss_i: np.ndarray,
     leo_i: np.ndarray,
@@ -62,8 +96,14 @@ def _process_single_ray(
             np.add.at(H_row, a_idx0, dl_m_v * aw0)
             np.add.at(H_row, a_idx1, dl_m_v * aw1)
         else:
+            # geolocation is stored as [lon, lat] (col 0 = lon, col 1 = lat) by all
+            # EDPSamples constructors, but find_containing_triangles expects [lat, lon].
+            # Swap columns here; the mesh vertex indices are unaffected.
+            # The cKDTree was built on the original [lon, lat] ordering, so the
+            # nearest-neighbour fallback queries must also use [lon, lat].
+            geo_latlon = geolocation[:, [1, 0]]
             tri_idx, bary = find_containing_triangles(
-                np.column_stack([lats_v, lons_v]), geolocation, mesh, return_bary=True
+                np.column_stack([lats_v, lons_v]), geo_latlon, mesh, return_bary=True
             )
             inside  = tri_idx != -1
             outside = tri_idx == -1
@@ -87,7 +127,8 @@ def _process_single_ray(
                 H_row += np.bincount(flat_idx, weights=flat_val, minlength=n_state_vars_aug)
 
             if np.any(outside):
-                _, near_v = tree.query(np.column_stack([lats_v[outside], lons_v[outside]]))
+                # tree built on geolocation [lon, lat] — query must match that order
+                _, near_v = tree.query(np.column_stack([lons_v[outside], lats_v[outside]]))
                 a0_out, a1_out = a_idx0[outside], a_idx1[outside]
                 aw0_out, aw1_out = aw0[outside], aw1[outside]
                 dl_out = dl_m_v[outside]
@@ -117,9 +158,11 @@ def _process_single_ray(
         if n_geo == 1:
             H_row[n_state_vars] += np.sum(topside_weights)
         else:
-            # Map topside segments to spatial geo-nodes using barycentric coordinates
+            # Map topside segments to spatial geo-nodes using barycentric coordinates.
+            # Same [lon, lat] → [lat, lon] swap needed for find_containing_triangles.
+            geo_latlon = geolocation[:, [1, 0]]
             tri_t, bary_t = find_containing_triangles(
-                np.column_stack([lats_t, lons_t]), geolocation, mesh, return_bary=True
+                np.column_stack([lats_t, lons_t]), geo_latlon, mesh, return_bary=True
             )
             inside_t = tri_t != -1
             outside_t = tri_t == -1
@@ -129,7 +172,7 @@ def _process_single_ray(
                 v0, v1, v2 = mesh[t_idx, 0], mesh[t_idx, 1], mesh[t_idx, 2]
                 bw0, bw1, bw2 = bary_t[inside_t, 0], bary_t[inside_t, 1], bary_t[inside_t, 2]
                 w_in = topside_weights[inside_t]
-                
+
                 flat_idx_t = np.concatenate([
                     n_state_vars + v0, n_state_vars + v1, n_state_vars + v2
                 ])
@@ -139,7 +182,8 @@ def _process_single_ray(
                 H_row += np.bincount(flat_idx_t, weights=flat_val_t, minlength=n_state_vars_aug)
 
             if np.any(outside_t):
-                _, near_v = tree.query(np.column_stack([lats_t[outside_t], lons_t[outside_t]]))
+                # tree built on [lon, lat] — query must match
+                _, near_v = tree.query(np.column_stack([lons_t[outside_t], lats_t[outside_t]]))
                 w_out = topside_weights[outside_t]
                 flat_idx_out = n_state_vars + near_v
                 H_row += np.bincount(flat_idx_out, weights=w_out, minlength=n_state_vars_aug)
@@ -162,7 +206,23 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
                  topside_scale_height_m: float = 150000.0,
                  topside_H_H_m: float = 1000000.0,
                  topside_alpha: float = 0.05,
-                 topside_prior_sigma: float = 5.0):
+                 topside_prior_sigma: float = 5.0,
+                 topside_prior_floor_tecu: float = 1.0):
+        """
+        Parameters
+        ----------
+        topside_prior_floor_tecu : float
+            Minimum vertical TECU for the topside prior at every geo node.
+            IRI-2020 has no plasmasphere model and clips electron density to a
+            physical floor (1e8 m^-3) above ~450 km in nighttime/low-latitude
+            conditions.  When this happens, the naive x_top_prior collapses to
+            ~0.002 TECU, making the forward-modeled TEC essentially zero for
+            high-tangent-altitude rays and preventing the Kalman filter from
+            assimilating those observations.  A floor of 1.0 TECU (default)
+            represents a conservative estimate of the plasmaspheric vertical TEC
+            content above the grid top (~800 km) under quiet conditions.
+            Set to 0.0 to disable the floor (original behavior).
+        """
         self.EDPSam = EDPSam
         edps = EDPSam.edps  # Original shape: (n_height, n_geo, n_sample)
         n_height, n_geo, n_sample = edps.shape
@@ -193,6 +253,13 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         x_top_prior = (ne_top * ((1.0 - topside_alpha) * topside_scale_height_m
                                   + topside_alpha * topside_H_H_m) / 1e16)  # (n_geo,) TECU
 
+        # Apply a minimum floor to guard against IRI's lack of a plasmasphere model.
+        # Without this, any geo node where IRI clips ne to the physical_floor gives
+        # x_top_prior ≈ 0.002 TECU, collapsing the forward-modeled TEC to zero for
+        # high-tangent-altitude rays and making those observations unassimilatable.
+        if topside_prior_floor_tecu > 0.0:
+            x_top_prior = np.maximum(x_top_prior, topside_prior_floor_tecu)
+
         # 3. Initialize the FilterPy parent class with the augmented state size
         super().__init__(dim_x=n_state_vars_aug, dim_z=1)
 
@@ -214,10 +281,11 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             "meanscale":         meanscale,
             "initial_edps":      edps_flat,
             "initial_edps_mean": edps_base,        # (n_state_vars, 1) m^-3 (or fractional)
-            "initial_edps_cov":  self.P.copy(),    # augmented prior covariance
-            "x_top_prior":       x_top_prior,      # (n_geo,) vertical TECU background
-            "n_state_vars":      n_state_vars,
-            "n_geo":             n_geo,
+            "initial_edps_cov":        self.P.copy(),    # augmented prior covariance
+            "x_top_prior":             x_top_prior,      # (n_geo,) vertical TECU background
+            "topside_prior_floor_tecu": topside_prior_floor_tecu,  # floor for re-anchoring
+            "n_state_vars":            n_state_vars,
+            "n_geo":                   n_geo,
         }
     def get_observation_operator(self, podTc2_data: dict,
                                  num_segments: int = 1000) -> np.ndarray:
@@ -332,15 +400,159 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
 
         return H
 
+    def _build_localization_matrix(
+        self,
+        podTc2_data: dict,
+        localization_radius_km: float,
+        localization_mode: str,
+    ) -> np.ndarray:
+        """
+        Build the (n_state_vars_aug, n_obs) distance-based localization matrix L.
+
+        L[j, i] ∈ [0, 1] scales the influence of observation i on state variable j.
+        The weight decreases monotonically with the 3-D Euclidean distance between
+        the centre of voxel j and the midpoint of the GNSS–LEO ray for observation i.
+
+        The ray midpoint is used as the representative observation location (it
+        approximates the Ionospheric Pierce Point and keeps cost O(n_sv × n_obs)).
+        Topside TECU nodes are placed at altitude[-1] + 0.5 * H_eff_km for the
+        purpose of distance computation.
+
+        Parameters
+        ----------
+        podTc2_data : dict
+            Must contain 'GNSS' (3, n_obs) and 'LEO' (3, n_obs), ECEF positions in km.
+        localization_radius_km : float
+            Characteristic length scale (km).  Interpretation depends on mode:
+            - 'gaussian':          1-σ e-folding radius
+            - 'inverse_distance':  half-weight distance  (L = 1 / (1 + d/r₀))
+            - 'gaspari_cohn':      half-support radius; L = 0 for d > 2 * r₀
+        localization_mode : str
+            One of 'gaussian', 'inverse_distance', 'gaspari_cohn'.
+
+        Returns
+        -------
+        L : ndarray, float32, shape (n_state_vars_aug, n_obs)
+        """
+        GNSS  = podTc2_data['GNSS']   # (3, n_obs) ECEF km
+        LEO   = podTc2_data['LEO']    # (3, n_obs) ECEF km
+        n_obs = GNSS.shape[1]
+
+        # Ray midpoints in ECEF km — representative location for each observation
+        mid_ecef = (GNSS + LEO) / 2.0   # (3, n_obs)
+
+        # Convert ECEF km → geodetic (lon °, lat °, alt m)
+        xfm = pyproj.Transformer.from_crs(
+            pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
+            pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+            always_xy=True,
+        )
+        lons_o, lats_o, alts_o_m = xfm.transform(
+            mid_ecef[0, :] * 1e3, mid_ecef[1, :] * 1e3, mid_ecef[2, :] * 1e3
+        )
+        alts_o = alts_o_m / 1000.0   # km
+
+        # Build voxel centre coordinates
+        altitude = self.EDPSam.altitude       # (n_height,) km
+        geo      = self.EDPSam.geolocation    # (n_geo, 2): col 0 = lon, col 1 = lat
+        n_height = len(altitude)
+        n_geo    = geo.shape[0]
+        H_eff_km = self.attrs["topside_H_eff_m"] / 1000.0
+
+        # In-grid voxels — state-vector ordering is (alt_index * n_geo + geo_index).
+        # geolocation col 0 = lon, col 1 = lat (all EDPSamples constructors store [lon, lat]).
+        v_lon = np.tile(geo[:, 0], n_height)    # (n_sv,)
+        v_lat = np.tile(geo[:, 1], n_height)
+        v_alt = np.repeat(altitude, n_geo)      # (n_sv,) km
+
+        # Topside nodes: representative altitude = top of grid + half scale height
+        t_alt = np.full(n_geo, altitude[-1] + 0.5 * H_eff_km)
+
+        all_lat = np.concatenate([v_lat, geo[:, 1]])   # (n_sv_aug,)
+        all_lon = np.concatenate([v_lon, geo[:, 0]])
+        all_alt = np.concatenate([v_alt, t_alt])
+
+        # Spherical-Earth Cartesian conversion for consistent 3-D distance (km)
+        R_e = 6371.0
+        def _to_xyz(lat_d, lon_d, alt_km):
+            lr = np.deg2rad(lat_d)
+            lo = np.deg2rad(lon_d)
+            r  = R_e + alt_km
+            return np.stack(
+                [r * np.cos(lr) * np.cos(lo),
+                 r * np.cos(lr) * np.sin(lo),
+                 r * np.sin(lr)], axis=-1
+            )
+
+        v_xyz = _to_xyz(all_lat, all_lon, all_alt)   # (n_sv_aug, 3) km
+        o_xyz = _to_xyz(lats_o,  lons_o,  alts_o)   # (n_obs, 3) km
+
+        # Pairwise 3-D Euclidean distances D[j, i] in km
+        diff = v_xyz[:, np.newaxis, :] - o_xyz[np.newaxis, :, :]   # (n_sv_aug, n_obs, 3)
+        D    = np.sqrt((diff ** 2).sum(axis=2))                      # (n_sv_aug, n_obs)
+
+        # Apply the chosen inverse-distance localization kernel
+        r_norm = D / localization_radius_km
+        if localization_mode == 'gaussian':
+            # L = exp(-d² / 2r₀²)  — smooth, unbounded support
+            L = np.exp(-0.5 * r_norm ** 2)
+        elif localization_mode == 'inverse_distance':
+            # L = 1 / (1 + d/r₀)  — heavy-tailed, never exactly zero
+            L = 1.0 / (1.0 + r_norm)
+        elif localization_mode == 'gaspari_cohn':
+            # Compact-support polynomial; zero for d > 2*r₀ (see _gaspari_cohn)
+            L = _gaspari_cohn(r_norm)
+        else:
+            raise ValueError(
+                f"Unknown localization_mode '{localization_mode}'. "
+                "Choose from: 'gaussian', 'inverse_distance', 'gaspari_cohn'."
+            )
+
+        return L.astype(np.float32)
+
     def assimilate(self, obs: np.ndarray, podTc2_data: dict = None, obs_operator: np.ndarray = None,
                    relaxation: float = 1.0, relaxation_top: float = 0.99,
-                   measurement_err: float = 0.0) -> np.ndarray:
+                   measurement_err: float = 0.0,
+                   # -----------------------------------------------------------------------
+                   # Distance-based localization (Schur-product covariance tapering)
+                   # -----------------------------------------------------------------------
+                   # Each element of P @ H.T is multiplied by a weight L[j, i] ∈ [0, 1]
+                   # that decreases with the distance between voxel j and the ray midpoint
+                   # of observation i.  This suppresses spurious long-range Kalman updates
+                   # that arise from background-covariance structure unrelated to the true
+                   # spatial correlation of the ionosphere.
+                   #
+                   # TOGGLE:  set distance_localization=True  to enable (default: False).
+                   #          Requires podTc2_data to be supplied.
+                   #
+                   # localization_radius_km — characteristic length scale (km):
+                   #   'gaussian'        : 1-σ e-folding radius
+                   #   'inverse_distance': half-weight distance  (L = 1/(1+d/r₀))
+                   #   'gaspari_cohn'    : half-support radius; exactly zero for d > 2·r₀
+                   # -----------------------------------------------------------------------
+                   distance_localization:  bool  = False,
+                   localization_radius_km: float = 1000.0,
+                   localization_mode:      str   = 'gaussian') -> np.ndarray:
         """
         Runs a single Kalman Filter assimilation step.
 
-        relaxation     : Gauss-Markov decay for the in-grid electron density state.
-        relaxation_top : Gauss-Markov decay for the topside TECU state (should be
-                         close to 1.0 — plasmasphere varies slowly).
+        Parameters
+        ----------
+        relaxation : float
+            Gauss-Markov decay for the in-grid electron density state.
+        relaxation_top : float
+            Gauss-Markov decay for the topside TECU state (should be close to 1.0 —
+            plasmasphere varies slowly).
+        distance_localization : bool
+            Enable Schur-product distance-based covariance localization.  Each entry
+            of P @ H.T is multiplied by L[j, i] ∈ [0, 1] where L decreases with the
+            3-D Euclidean distance from voxel j to the ray midpoint of observation i.
+            Reduces spurious long-range updates. Requires podTc2_data.  Default: False.
+        localization_radius_km : float
+            Characteristic length scale (km) for the localization kernel.  Default: 1000.
+        localization_mode : str
+            Localization kernel: 'gaussian', 'inverse_distance', or 'gaspari_cohn'.
+            Default: 'gaussian'.
         """
         obs = np.asarray(obs).reshape(-1, 1)
 
@@ -378,8 +590,25 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         background_tec = obs_operator @ x_prior_aug
         y = (obs - background_tec) - H @ self.x
 
-        # 5. Efficient Update: O(d² × n_obs)
-        PHT    = self.P @ H.T
+        # 5. Compute cross-covariance P @ H.T and optionally apply localization.
+        #    When distance_localization=True, each element PHT[j, i] is multiplied
+        #    by L[j, i] ∈ [0, 1] — a weight inversely related to the distance from
+        #    voxel j to the ray midpoint of observation i.  Both the Kalman gain K
+        #    and the covariance update use the same localized PHT for consistency.
+        #    Toggle: pass distance_localization=True to assimilate() to enable.
+        PHT = self.P @ H.T   # (n_state_vars_aug, n_obs)
+
+        if distance_localization:
+            if podTc2_data is None:
+                raise ValueError(
+                    "podTc2_data must be provided when distance_localization=True "
+                    "(needed to compute ray midpoints for the localization matrix)."
+                )
+            L   = self._build_localization_matrix(
+                podTc2_data, localization_radius_km, localization_mode
+            )
+            PHT = PHT * L   # Schur product: taper cross-covariances by distance
+
         S      = H @ PHT
         S     += max(measurement_err, 1e-6) * np.eye(n_obs)
         K      = np.linalg.solve(S, PHT.T).T

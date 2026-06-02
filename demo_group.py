@@ -69,7 +69,7 @@ POLAR_LAT_THRESHOLD = 60.0   # |lat| above this → polar cap
 DLAT_MID            = 30.0   # mid-latitude bin height (degrees)
 DLON_MID            = 60.0   # mid-latitude bin width  (degrees)
 WINDOW_MINUTES      = 30     # time-bin width in minutes
-MAX_MESH_VERTICES   = 200    # trim group until EDP mesh has ≤ this many vertices
+MAX_MESH_VERTICES   = 300    # trim group until EDP mesh has ≤ this many vertices
 
 # Constellation → colour-family and 2×2 TEC-panel position.
 # Panel positions: (row, col) with row ∈ {0,1}, col ∈ {0,1}.
@@ -296,6 +296,7 @@ def process_group(
     relaxation:       float = 0.99,
     generate_plots:   bool  = True,
     save_dir:         str   = "./Figures/GroupKF/",
+    run_sequential:   bool  = True,
 ) -> dict:
     """
     Process a geographic group of occultations with a single joint KF update.
@@ -310,6 +311,10 @@ def process_group(
     relaxation       : Gauss-Markov relaxation applied before the KF update.
     generate_plots   : Whether to write per-group diagnostic plots to disk.
     save_dir         : Directory for figure output.
+    run_sequential   : When False, skip the sequential KF loop and its associated
+                       plots (_seq, _sequential, _comparison).  Only the joint
+                       (batch) update is performed.  Saves significant compute
+                       time when sequential estimates are not needed.
 
     Returns
     -------
@@ -406,13 +411,21 @@ def process_group(
 
         # ── 4 & 5. Bounding box + mesh with vertex-count guard ──────────────
         # Uses the same get_occultation_extrema method as demo.py section20().
-        # Pre-compute each occultation's extrema centroid once before the loop
-        # for outlier detection; _group_bounding_box re-runs get_occultation_extrema
-        # each iteration (cheap — small N) to derive the exact bounding box from
-        # the shrinking set of remaining occultations.
-        _BBOX_MARGIN = 10.0   # degrees of padding around ray-path footprints
+        # Two strategies depending on group type:
+        #
+        #   Polar   (POLAR_N / POLAR_S): shrink the equatorward latitude boundary
+        #           in _SHRINK_STEP degree increments until the mesh is small
+        #           enough.  No occultations are ever dropped.
+        #
+        #   Mid-lat (rectangular bins): keep the bounding box fixed to the ray
+        #           extrema; remove the occultation whose centroid is farthest
+        #           from the group centroid until the mesh fits.
+        _BBOX_MARGIN = 1.0    # degrees of padding around ray-path footprints
+        _SHRINK_STEP = 1.0     # equatorward shrink per polar iteration (degrees)
+        _is_polar    = region in ("POLAR_N", "POLAR_S")
 
         # Pre-compute extrema centre (mean of 3 corner points) per occultation.
+        # Used by the mid-lat outlier loop; also stored for the trim diagnostic.
         occ_centers: list[tuple[float, float]] = []
         for _data in clean_parsed:
             try:
@@ -426,14 +439,11 @@ def process_group(
                 _clon = float(_data.get("lon_tecmax_tangent", 0.0))
             occ_centers.append((_clat, _clon))
 
-        # Trim-tracking list — mirrors clean_list throughout the loop so we can
-        # record which occultations were dropped (and in what order) for the
-        # diagnostic plot produced after the loop.
+        # Trim-tracking mirrors clean_list for the diagnostic plot.
         _trim_info: list[dict] = [
             {
                 "label":      clean_labels[i],
                 "sat_id":     clean_sat_ids[i],
-                # Prefer the NC-attribute tangent point; fall back to extrema centre
                 "tec_lat":    float(clean_parsed[i].get(
                                   "lat_tecmax_tangent", occ_centers[i][0])),
                 "tec_lon":    float(clean_parsed[i].get(
@@ -445,42 +455,74 @@ def process_group(
             }
             for i in range(len(clean_list))
         ]
-        _trim_removed: list[dict] = []   # entries appended in removal order
+        _trim_removed: list[dict] = []   # remains empty for polar groups
 
-        while True:
-            # Bounding box via demo.py approach (extrema → merge → polar/antimeridian)
+        if _is_polar:
+            # ── Polar: shrink equatorward boundary, keep all occultations ────
+            # Compute the initial bbox from the full occultation set.
             lat_min, lat_max, lon_min, lon_max = _group_bounding_box(
                 clean_parsed, alt_grid, region, margin_deg=_BBOX_MARGIN
             )
-            eds_occ = global_edp_cache[profile_hour].subset_region(
-                lat_min, lat_max, lon_min, lon_max
-            )
-            n_geo = eds_occ.geolocation.shape[0]
-            print(f"  Bounding box: lat [{lat_min:.1f}, {lat_max:.1f}]  "
-                  f"lon [{lon_min:.1f}, {lon_max:.1f}]  |  vertices: {n_geo}")
+            while True:
+                eds_occ = global_edp_cache[profile_hour].subset_region(
+                    lat_min, lat_max, lon_min, lon_max
+                )
+                n_geo = eds_occ.geolocation.shape[0]
+                if n_geo <= MAX_MESH_VERTICES:
+                    print(f"  [polar] Bounding box: lat [{lat_min:.1f}, {lat_max:.1f}]  "
+                          f"lon [{lon_min:.1f}, {lon_max:.1f}]  |  vertices: {n_geo}")
+                    break
+                # Tighten the equatorward edge by _SHRINK_STEP
+                if region == "POLAR_N":
+                    new_eq = lat_min + _SHRINK_STEP
+                    if new_eq >= 89.0:
+                        print(f"  [polar-shrink] Hit poleward limit at lat_min=89°, "
+                              f"accepting {n_geo} vertices.")
+                        break
+                    lat_min = new_eq
+                else:  # POLAR_S
+                    new_eq = lat_max - _SHRINK_STEP
+                    if new_eq <= -89.0:
+                        print(f"  [polar-shrink] Hit poleward limit at lat_max=-89°, "
+                              f"accepting {n_geo} vertices.")
+                        break
+                    lat_max = new_eq
+                # print(f"  [polar-shrink] n_geo={n_geo} > {MAX_MESH_VERTICES} — "
+                #       f"tightening equatorward edge → "
+                #       f"lat_min={lat_min:.1f}, lat_max={lat_max:.1f}")
 
-            if n_geo <= MAX_MESH_VERTICES or len(clean_list) <= 1:
-                break   # within limit, or nothing left to trim
+        else:
+            # ── Mid-lat: remove farthest-outlier occultation each iteration ──
+            while True:
+                lat_min, lat_max, lon_min, lon_max = _group_bounding_box(
+                    clean_parsed, alt_grid, region, margin_deg=_BBOX_MARGIN
+                )
+                eds_occ = global_edp_cache[profile_hour].subset_region(
+                    lat_min, lat_max, lon_min, lon_max
+                )
+                n_geo = eds_occ.geolocation.shape[0]
+                print(f"  Bounding box: lat [{lat_min:.1f}, {lat_max:.1f}]  "
+                      f"lon [{lon_min:.1f}, {lon_max:.1f}]  |  vertices: {n_geo}")
 
-            # Outlier: the occultation whose extrema centroid is farthest from
-            # the current group centroid; removing it shrinks the box the most.
-            _clats  = np.array([c[0] for c in occ_centers])
-            _clons  = np.array([c[1] for c in occ_centers])
-            _gc_lat = float(np.mean(_clats))
-            _gc_lon = float(np.mean(_clons))
-            _dist   = (_clats - _gc_lat) ** 2 + (_clons - _gc_lon) ** 2
-            worst   = int(np.argmax(_dist))
-            print(f"  [trim] n_geo={n_geo} > MAX_MESH_VERTICES={MAX_MESH_VERTICES} — "
-                  f"dropping {clean_labels[worst]} "
-                  f"({np.sqrt(_dist[worst]):.1f}° from centroid)")
-            # Record removal before popping
-            _trim_removed.append(_trim_info[worst])
-            _trim_info.pop(worst)
-            clean_list.pop(worst)
-            clean_labels.pop(worst)
-            clean_parsed.pop(worst)
-            clean_sat_ids.pop(worst)
-            occ_centers.pop(worst)
+                if n_geo <= MAX_MESH_VERTICES or len(clean_list) <= 1:
+                    break
+
+                _clats  = np.array([c[0] for c in occ_centers])
+                _clons  = np.array([c[1] for c in occ_centers])
+                _gc_lat = float(np.mean(_clats))
+                _gc_lon = float(np.mean(_clons))
+                _dist   = (_clats - _gc_lat) ** 2 + (_clons - _gc_lon) ** 2
+                worst   = int(np.argmax(_dist))
+                print(f"  [trim] n_geo={n_geo} > MAX_MESH_VERTICES={MAX_MESH_VERTICES} — "
+                      f"dropping {clean_labels[worst]} "
+                      f"({np.sqrt(_dist[worst]):.1f}° from centroid)")
+                _trim_removed.append(_trim_info[worst])
+                _trim_info.pop(worst)
+                clean_list.pop(worst)
+                clean_labels.pop(worst)
+                clean_parsed.pop(worst)
+                clean_sat_ids.pop(worst)
+                occ_centers.pop(worst)
 
         n_height = len(alt_grid)
         print(f"  Final group: {len(clean_list)} occultation(s), "
@@ -505,7 +547,12 @@ def process_group(
 
         # ── 6. Build ONE inverter from the combined mesh ─────────────────────
         # All individual H matrices share the same state vector.
-        inverter = Ionosphere_Tomography_Inverter(EDPSam=eds_occ, meanscale=1)
+        # topside_prior_floor_tecu guards against IRI's lack of a plasmasphere:
+        # when IRI clips ne to the physical floor at 800 km, x_top_prior collapses
+        # to ~0.002 TECU, making the forward TEC zero for high-tangent-altitude rays.
+        inverter = Ionosphere_Tomography_Inverter(
+            EDPSam=eds_occ, meanscale=1, topside_prior_floor_tecu=1.0
+        )
         _n_sv    = inverter.attrs["n_state_vars"]
 
         # ── 7. Build H matrix and observation vector for each occultation ───
@@ -539,41 +586,63 @@ def process_group(
             + H_joint[:, _n_sv:] @ x_top_prior[:, None]
         ).flatten()
 
-        # ── 9. Sequential Kalman Filter updates ──────────────────────────────
-        # Each occultation is assimilated one at a time.  The inverter carries
-        # self.x and self.P forward between calls, so the posterior from step k
-        # automatically becomes the prior for step k+1.
-        #
-        # step_edp_snapshots : list of (label, edp_3d (n_height, n_geo)) tuples.
-        #   Index 0 = prior (before any update).
-        #   Index k  = posterior after assimilating the k-th occultation.
-        print("  Running sequential KF assimilation …")
-        step_edp_snapshots: list[tuple[str, np.ndarray]] = [
-            ("Prior", prior_state_flat.reshape(n_height, n_geo).copy())
-        ]
+        # ── 9. Sequential Kalman Filter updates (optional) ───────────────────
+        if run_sequential:
+            # Each occultation is assimilated one at a time.  The inverter
+            # carries self.x and self.P forward between calls, so the posterior
+            # from step k automatically becomes the prior for step k+1.
+            #
+            # step_edp_snapshots : list of (label, edp_3d) tuples.
+            #   Index 0 = prior; index k = posterior after step k.
+            print("  Running sequential KF assimilation …")
+            step_edp_snapshots: list[tuple[str, np.ndarray]] = [
+                ("Prior", prior_state_flat.reshape(n_height, n_geo).copy())
+            ]
 
-        posterior_state_flat = prior_state_flat   # fallback if no occs survive
-        for k, (H_k, obs_k, lbl_k) in enumerate(
-            zip(H_blocks, tec_obs, clean_labels)
-        ):
-            print(f"  [step {k+1}/{len(clean_list)}] Assimilating {lbl_k} "
-                  f"({len(obs_k)} rays) …")
-            posterior_state_flat = inverter.assimilate(
-                obs             = obs_k,
-                obs_operator    = H_k.astype(np.float32),
-                relaxation      = relaxation,
-                measurement_err = measurement_err,
-            )
-            step_edp_snapshots.append((
-                f"Step {k+1}: {lbl_k}",
-                np.asarray(posterior_state_flat).reshape(n_height, n_geo).copy(),
-            ))
+            posterior_state_flat = prior_state_flat   # fallback if no occs survive
+            _H_eff_m = inverter.attrs["topside_H_eff_m"]
+            for k, (H_k, obs_k, lbl_k) in enumerate(
+                zip(H_blocks, tec_obs, clean_labels)
+            ):
+                print(f"  [step {k+1}/{len(clean_list)}] Assimilating {lbl_k} "
+                      f"({len(obs_k)} rays) …")
+                posterior_state_flat = inverter.assimilate(
+                    obs             = obs_k,
+                    obs_operator    = H_k.astype(np.float32),
+                    relaxation      = relaxation,
+                    measurement_err = measurement_err,
+                    podTc2_data     = clean_list[k],
+                    distance_localization=True,
+                    localization_radius_km=800.0,
+                    localization_mode='inverse_distance'
+                )
+                x_top_tecu_cur = inverter.x_top_tecu.flatten()
+                ne_top_post = np.asarray(posterior_state_flat).reshape(n_height, n_geo)[-1, :]
+                x_top_prior_new = ne_top_post * inverter.attrs["topside_H_eff_m"] / 1e16
+                # Re-apply the plasmasphere floor so the re-anchored prior does not
+                # collapse to near-zero when IRI still gives floor-level density at
+                # the grid top after the KF update.
+                x_top_prior_new = np.maximum(
+                    x_top_prior_new, inverter.attrs["topside_prior_floor_tecu"]
+                )
+                inverter.attrs["x_top_prior"] = x_top_prior_new
+                inverter.x[_n_sv:] = (x_top_tecu_cur - x_top_prior_new)[:, None]
+                step_edp_snapshots.append((
+                    f"Step {k+1}: {lbl_k}",
+                    np.asarray(posterior_state_flat).reshape(n_height, n_geo).copy(),
+                ))
+        else:
+            print("  Skipping sequential KF assimilation (run_sequential=False).")
+            posterior_state_flat = prior_state_flat   # unused but keeps namespace clean
+            step_edp_snapshots   = []
 
         # ── 10. Joint (batch) KF update — fresh inverter, same prior ────────
         # A single call ingests all occultations simultaneously so each one
         # sees the original prior P, not a narrowed posterior.
         print("  Running joint (batch) KF assimilation …")
-        inverter_jnt = Ionosphere_Tomography_Inverter(EDPSam=eds_occ, meanscale=1)
+        inverter_jnt = Ionosphere_Tomography_Inverter(
+            EDPSam=eds_occ, meanscale=1, topside_prior_floor_tecu=1.0
+        )
         posterior_state_flat_jnt = inverter_jnt.assimilate(
             obs             = obs_joint,
             obs_operator    = H_joint.astype(np.float32),
@@ -581,26 +650,35 @@ def process_group(
             measurement_err = measurement_err,
         )
 
-        # ── 11. Posterior TEC for both modes ─────────────────────────────────
-        post_tec_seq = (
-            H_joint[:, :_n_sv] @ np.asarray(posterior_state_flat)
-            + H_joint[:, _n_sv:] @ inverter.x_top_tecu
-        ).flatten()
+        # ── 11. Posterior TEC ─────────────────────────────────────────────────
         post_tec_jnt = (
             H_joint[:, :_n_sv] @ np.asarray(posterior_state_flat_jnt)
             + H_joint[:, _n_sv:] @ inverter_jnt.x_top_tecu
         ).flatten()
 
+        if run_sequential:
+            post_tec_seq = (
+                H_joint[:, :_n_sv] @ np.asarray(posterior_state_flat)
+                + H_joint[:, _n_sv:] @ inverter.x_top_tecu
+            ).flatten()
+        else:
+            post_tec_seq = post_tec_jnt   # alias — seq stats not reported
+
         # ── 12. Per-group residual statistics ────────────────────────────────
         prior_res    = obs_joint - prior_tec_joint
-        post_res_seq = obs_joint - post_tec_seq
         post_res_jnt = obs_joint - post_tec_jnt
         result["prior_tec_rmse"]      = float(np.sqrt(np.mean(prior_res**2)))
-        result["post_tec_rmse"]       = float(np.sqrt(np.mean(post_res_seq**2)))
         result["joint_post_tec_rmse"] = float(np.sqrt(np.mean(post_res_jnt**2)))
-        print(f"  Prior RMSE        : {result['prior_tec_rmse']:.3f} TECU")
-        print(f"  Post  RMSE (seq)  : {result['post_tec_rmse']:.3f} TECU")
-        print(f"  Post  RMSE (joint): {result['joint_post_tec_rmse']:.3f} TECU")
+        if run_sequential:
+            post_res_seq = obs_joint - post_tec_seq
+            result["post_tec_rmse"] = float(np.sqrt(np.mean(post_res_seq**2)))
+            print(f"  Prior RMSE        : {result['prior_tec_rmse']:.3f} TECU")
+            print(f"  Post  RMSE (seq)  : {result['post_tec_rmse']:.3f} TECU")
+            print(f"  Post  RMSE (joint): {result['joint_post_tec_rmse']:.3f} TECU")
+        else:
+            result["post_tec_rmse"] = result["joint_post_tec_rmse"]
+            print(f"  Prior RMSE  : {result['prior_tec_rmse']:.3f} TECU")
+            print(f"  Post  RMSE  : {result['joint_post_tec_rmse']:.3f} TECU")
 
         # ── 13. Slice joint arrays back into per-occultation pieces ─────────
         tec_slices     = _make_tec_slices(obs_joint, prior_tec_joint,
@@ -645,15 +723,14 @@ def process_group(
         if generate_plots:
             centre_idx_plt = _roi_centre_idx(eds_occ.geolocation, region)
 
-            # ── Sequential summary figure ────────────────────────────────────
-            result["plot_path"] = _plot_group(
-                result, save_dir=save_dir, group_key=group_key,
-                suffix="_seq", mode_label="Sequential KF",
-            )
+            # ── Sequential summary figure (only when sequential was run) ─────
+            if run_sequential:
+                result["plot_path"] = _plot_group(
+                    result, save_dir=save_dir, group_key=group_key,
+                    suffix="_seq", mode_label="Sequential KF",
+                )
 
             # ── Joint summary figure ─────────────────────────────────────────
-            # Shallow-copy result and override the posterior-dependent fields
-            # so _plot_group renders the joint posterior without mutating result.
             result_jnt = dict(result)
             result_jnt["post_edp_3d"]   = result["joint_post_edp_3d"]
             result_jnt["tec_slices"]    = tec_slices_jnt
@@ -663,23 +740,25 @@ def process_group(
                 suffix="_joint", mode_label="Joint KF",
             )
 
-            # ── Sequential-update centre-vertex figure ───────────────────────
-            result["seq_plot_path"] = _plot_sequential_centre(
-                step_edp_snapshots = step_edp_snapshots,
-                alt_grid           = alt_grid,
-                sat_ids            = clean_sat_ids,
-                centre_idx         = centre_idx_plt,
-                save_dir           = save_dir,
-                group_key          = group_key,
-            )
-
-            # ── Sequential vs Joint comparison figure ────────────────────────
-            try:
-                result["comparison_plot_path"] = _plot_comparison(
-                    result, save_dir=save_dir, group_key=group_key
+            # ── Sequential-update centre-vertex figure (sequential only) ─────
+            if run_sequential:
+                result["seq_plot_path"] = _plot_sequential_centre(
+                    step_edp_snapshots = step_edp_snapshots,
+                    alt_grid           = alt_grid,
+                    sat_ids            = clean_sat_ids,
+                    centre_idx         = centre_idx_plt,
+                    save_dir           = save_dir,
+                    group_key          = group_key,
                 )
-            except Exception as _exc_cmp:
-                print(f"  [warn] Comparison plot failed: {_exc_cmp}")
+
+            # ── Sequential vs Joint comparison figure (sequential only) ──────
+            if run_sequential:
+                try:
+                    result["comparison_plot_path"] = _plot_comparison(
+                        result, save_dir=save_dir, group_key=group_key
+                    )
+                except Exception as _exc_cmp:
+                    print(f"  [warn] Comparison plot failed: {_exc_cmp}")
 
     except Exception as exc:
         print(f"  [!] Error in group {group_key}: {exc}")
@@ -836,7 +915,6 @@ def _plot_trim_diagnostic(
 
     n_kept    = len(kept)
     n_removed = len(removed)
-    col = mpl.colormaps.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))(0.70)
     clon = (lon_min + lon_max) / 2.0
     clat = (lat_min + lat_max) / 2.0
     proj = ccrs.Orthographic(central_longitude=clon, central_latitude=clat)
@@ -899,7 +977,7 @@ def _plot_trim_diagnostic(
                     xytext=(5, 4), textcoords="offset points", zorder=7)
 
     # ── Removed occultations (shades of red, darker = later removal) ──────────
-    rem_cmap = mpl.colormaps.get_cmap("Reds", max(n_removed + 2, 4))
+    rem_cmap = mpl.colormaps.get_cmap("Reds").resampled(max(n_removed + 2, 4))
     for k, entry in enumerate(removed):
         prn = entry["sat_id"][1] if entry.get("sat_id") else "?"
         col = rem_cmap(0.40 + 0.50 * k / max(n_removed - 1, 1))
@@ -926,7 +1004,6 @@ def _plot_trim_diagnostic(
         loc="lower left", fontsize=8, framealpha=0.85,
     )
 
-    plt.tight_layout()
     safe_key  = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
     plot_path = os.path.join(save_dir, f"group_{safe_key}_trim.png")
     fig.savefig(plot_path, dpi=100, bbox_inches="tight")
@@ -969,7 +1046,7 @@ def _plot_sequential_centre(
     # ── Colour assignment ─────────────────────────────────────────────────────
     # Prior (index 0) = black; steps 1..N use viridis so early assimilations
     # are dark purple and later ones are bright yellow.
-    step_cmap    = mpl.colormaps.get_cmap("viridis", max(n_occs, 2))
+    step_cmap    = mpl.colormaps.get_cmap("viridis").resampled(max(n_occs, 2))
     step_colours = (
         ["black"]
         + [step_cmap(i / max(n_occs - 1, 1)) for i in range(n_occs)]
@@ -1108,6 +1185,8 @@ def _plot_group(
     *,
     suffix: str = "",
     mode_label: str = "Sequential KF",
+    isr_profiles: list | None = None,
+    isr_site: tuple[float, float] | None = None,
 ) -> str:
     """
     Write a summary figure for one geographic group.
@@ -1367,7 +1446,7 @@ def _plot_group(
         for (rtype, ls, lw), ridx in zip(
             ray_defs, [idx_top, idx_tecmax, idx_bottom]
         ):
-            lbl = f"{prn_code} {rtype}" if i == 0 else None
+            lbl = f"{rtype}" if i == 0 else None
             _draw_raypath(ax2, LEO, GNSS, ridx,
                           color=col, ls=ls, lw=lw, label=lbl, zorder=6)
 
@@ -1407,8 +1486,45 @@ def _plot_group(
         Line2D([0], [0], marker="o", color="w", mfc="gray", mec="black", ms=8,
                label="F2 Peak (KF)"),
     ]
+
+    # ── ISR truth overlay on EDP panel ───────────────────────────────────────
+    if isr_profiles:
+        _isr_cmap = mpl.colormaps.get_cmap("viridis")
+        _isr_norm = mpl.colors.Normalize(vmin=0, vmax=24)
+        for _prof in isr_profiles:
+            _col = _isr_cmap(_isr_norm(_prof["hour_utc"]))
+            ax3_kf.plot(_prof["ne"], _prof["alt_km"],
+                        color=_col, lw=1.2, alpha=0.65, zorder=3)
+        # Mean ISR F2 peak marker
+        _isr_nms = [p["nm_f2"] for p in isr_profiles if not np.isnan(p.get("nm_f2", np.nan))]
+        _isr_hms = [p["hm_f2"] for p in isr_profiles if not np.isnan(p.get("hm_f2", np.nan))]
+        if _isr_nms:
+            _isr_nm_mean = float(np.nanmean(_isr_nms))
+            _isr_hm_mean = float(np.nanmean(_isr_hms))
+            ax3_kf.plot(_isr_nm_mean, _isr_hm_mean,
+                        marker="^", ms=11, color="limegreen",
+                        mec="black", mew=1.0, zorder=8,
+                        label="ISR NmF2 (mean)")
+        kf_legend_lines += [
+            Line2D([0], [0], color="limegreen", lw=1.5, alpha=0.7,
+                   label=f"ISR truth ({len(isr_profiles)} sweeps)"),
+            Line2D([0], [0], marker="^", color="w", mfc="limegreen",
+                   mec="black", ms=9, label="ISR NmF2 (mean)"),
+        ]
+
+        # ISR site marker on the globe
+        if isr_site is not None:
+            _isr_lon, _isr_lat = isr_site
+            ax2.plot(_isr_lon, _isr_lat,
+                     transform=ccrs.Geodetic(),
+                     marker="^", ms=12, color="limegreen",
+                     mec="black", mew=1.0, zorder=9,
+                     label="Millstone Hill ISR")
+
     ax3_kf.legend(handles=kf_legend_lines, fontsize=7, loc="upper right")
-    ax3_kf.set_title("EDP — Prior / Posterior\n(★ = centre vertex)")
+    ax3_kf.set_title("EDP — Prior / Posterior\n(★ = centre vertex, ▲ = ISR truth)"
+                     if isr_profiles else
+                     "EDP — Prior / Posterior\n(★ = centre vertex)")
     ax3_kf.xaxis.set_major_formatter(formatter)
     ax3_kf.tick_params(labelbottom=False)
     ax3_kf.grid(True, alpha=0.3, ls=":")
@@ -1441,9 +1557,30 @@ def _plot_group(
         Line2D([0], [0], marker="^", color="w", mfc="gray", mec="black", ms=7,
                label="F2 Peak (Abel)")
     )
+
+    # ISR truth overlay on Abel panel (same colour coding as EDP panel)
+    if isr_profiles:
+        _isr_cmap2 = mpl.colormaps.get_cmap("viridis")
+        _isr_norm2 = mpl.colors.Normalize(vmin=0, vmax=24)
+        for _prof in isr_profiles:
+            _col2 = _isr_cmap2(_isr_norm2(_prof["hour_utc"]))
+            ax3_abel.plot(_prof["ne"], _prof["alt_km"],
+                          color=_col2, lw=1.2, alpha=0.65, zorder=3)
+            _isr_nm2, _isr_hm2 = extract_robust_f2_peak(_prof["ne"], _prof["alt_km"])
+            if not np.isnan(_isr_nm2):
+                ax3_abel.plot(_isr_nm2, _isr_hm2,
+                              marker="^", ms=6, color=_col2,
+                              mec="black", mew=0.6, zorder=6)
+                max_edp_candidates.append(_isr_nm2)
+        abel_legend_lines += [
+            Line2D([0], [0], color="limegreen", lw=1.5, alpha=0.7,
+                   label=f"ISR truth ({len(isr_profiles)} sweeps)"),
+        ]
+
     ax3_abel.legend(handles=abel_legend_lines, fontsize=7, loc="upper right")
     ax3_abel.set_xlabel("Electron Density (m⁻³)")
-    ax3_abel.set_title("Abel Ne Profiles")
+    ax3_abel.set_title("Abel Ne Profiles  (▲ = ISR truth)" if isr_profiles
+                       else "Abel Ne Profiles")
     ax3_abel.xaxis.set_major_formatter(formatter)
     ax3_abel.grid(True, alpha=0.3, ls=":")
 
@@ -1451,7 +1588,6 @@ def _plot_group(
     if max_edp_candidates:
         ax3_abel.set_xlim(left=0, right=max(max_edp_candidates) * 1.2)
 
-    plt.tight_layout()
     safe_key  = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
     plot_path = os.path.join(save_dir, f"group_{safe_key}{suffix}.png")
     fig.savefig(plot_path, dpi=100, bbox_inches="tight")
@@ -1475,6 +1611,7 @@ def _plot_comparison(result: dict, save_dir: str, group_key: str) -> str:
     Panels (1,0) and (1,1) share the tangent-altitude y-axis.
     """
     os.makedirs(save_dir, exist_ok=True)
+    print(f"Plotting comparison {group_key}")
 
     # ── Unpack ────────────────────────────────────────────────────────────────
     alt_grid       = result["alt_grid"]
@@ -1595,7 +1732,7 @@ def _plot_comparison(result: dict, save_dir: str, group_key: str) -> str:
     # ── (1,0) & (1,1): TEC fit — sequential and joint ────────────────────────
     style_legend = [
         Line2D([0], [0], color="gray", lw=2.0,          label="Measured"),
-        Line2D([0], [0], color="gray", lw=1.3, ls="--", label="Prior"),
+        # Line2D([0], [0], color="gray", lw=1.3, ls="--", label="Prior"),
         Line2D([0], [0], color="gray", lw=1.8, ls=":",  label="KF Posterior"),
     ]
     occ_legend = []
@@ -1613,8 +1750,8 @@ def _plot_comparison(result: dict, save_dir: str, group_key: str) -> str:
         # Measured and prior are identical between methods — draw on both panels
         for ax_t in (ax_tec_s, ax_tec_j):
             ax_t.plot(sl_s["measured"],  tang, color=col, lw=2.0)
-            ax_t.plot(sl_s["prior_tec"], tang, color=col, lw=1.3,
-                      ls="--", alpha=0.6)
+            # ax_t.plot(sl_s["prior_tec"], tang, color=col, lw=1.3,
+            #           ls="--", alpha=0.6)
 
         ax_tec_s.plot(sl_s["post_tec"], tang, color=col, lw=1.8,
                       ls=":", alpha=0.95)
@@ -1641,7 +1778,6 @@ def _plot_comparison(result: dict, save_dir: str, group_key: str) -> str:
     ax_tec_s.set_ylabel("Tangent Altitude (km)")
     ax_tec_j.tick_params(labelleft=False)
 
-    plt.tight_layout()
     safe_key  = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
     plot_path = os.path.join(save_dir, f"group_{safe_key}_comparison.png")
     fig.savefig(plot_path, dpi=100, bbox_inches="tight")
@@ -1799,7 +1935,7 @@ def plot_tec_all_groups(
             tec_slices  = res["tec_slices"]
             file_labels = res.get("file_labels", [])
             n_occ       = len(tec_slices)
-            cmap_occ    = mpl.colormaps.get_cmap("plasma", max(n_occ, 2))
+            cmap_occ    = mpl.colormaps.get_cmap("plasma").resampled(max(n_occ, 2))
             occ_colours = [cmap_occ(i / max(n_occ - 1, 1)) for i in range(n_occ)]
 
             for i, (sl, col) in enumerate(zip(tec_slices, occ_colours)):
@@ -1856,12 +1992,18 @@ def demo_group_main() -> None:
     import datetime
 
     # ── User-configurable settings ─────────────────────────────────────────────
-    DOY = 284
-    YYYY = 2024
+    DOY = 153
+    YYYY = 2025
     base_path    = f"/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/{YYYY}.{DOY}/"
     # alt_grid     = np.arange(60.0, 600.0, 10.0, dtype=float)
     # TYPE = "linear"
-    alt_grid = np.logspace(np.log10(60.0), np.log10(600.0), num=50, dtype=float)
+    # Extended to 800 km so that high-tangent-altitude rays (LEO ~580-590 km,
+    # tangent up to ~595 km) have many in-grid midpoints rather than relying
+    # almost entirely on the single exponential topside surrogate.  With the
+    # old 600 km ceiling only ~12/999 midpoints were in-grid for the top rays;
+    # at 800 km that rises to ~100+ and the IRI density at 600-800 km is
+    # captured directly in the state vector.
+    alt_grid = np.logspace(np.log10(60.0), np.log10(800.0), num=55, dtype=float)
     TYPE = "log"
     save_dir     = "./Figures/GroupKF/"
     num_workers  = 12       # parallel workers for global EDP build
@@ -1918,7 +2060,7 @@ def demo_group_main() -> None:
         print(f"  (limited to first {max_groups} groups)")
 
     all_results = []
-    for g_idx, gk in enumerate(group_keys):
+    for g_idx, gk in enumerate(group_keys[329:]):
         print(f"\n[{g_idx + 1}/{len(group_keys)}]", end="")
         gm  = groups.get_group(gk)
         res = process_group(
