@@ -18,7 +18,7 @@ import pickle
 def get_apf107():
     """
     Get updated data file apf107.dat
-    
+
     File format:
         year(I3), month(I3), day(I3),
         3-hour Ap indices for the UT intervals (0-3), )3-6), )6-9), .., )18-21), )21-24( (8I3),
@@ -31,18 +31,23 @@ def get_apf107():
     Parameters
     ----------
     None
-    
+
     Returns apf107
     -------
- 
+
     """
-    url = "https://chain-new.chain-project.net/echaim_downloads/apf107.dat"
-    response = requests.get(url)
-    response.raise_for_status()
-    input_lines = response.text.splitlines()
-    
+    import os
     local_file = "apf107.dat"
-    urllib.request.urlretrieve(url, local_file)
+    url = "https://chain-new.chain-project.net/echaim_downloads/apf107.dat"
+
+    if os.path.isfile(local_file):
+        with open(local_file, "r") as fh:
+            input_lines = fh.read().splitlines()
+    else:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        input_lines = response.text.splitlines()
+        urllib.request.urlretrieve(url, local_file)
 
     apf107={
         "yr":[],
@@ -91,17 +96,22 @@ def get_ig_rz():
         Dictionary containing parsed IG/Rz data.
     """
 
+    import os
     revision_date = []
     start_end_date = []
     ig = []
     rz = []
+    local_file = "ig_rz.dat"
     url = "https://chain-new.chain-project.net/echaim_downloads/ig_rz.dat"
-    response = requests.get(url)
-    response.raise_for_status()
-    input_lines = response.text.splitlines()
-    
-    local_file = "ig_rz.dat"    
-    urllib.request.urlretrieve(url, local_file)
+
+    if os.path.isfile(local_file):
+        with open(local_file, "r") as fh:
+            input_lines = fh.read().splitlines()
+    else:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        input_lines = response.text.splitlines()
+        urllib.request.urlretrieve(url, local_file)
 
     # 0: revision date, 1: start/end month/year, 2: ig, 3: rz
     lines = [line.strip() for line in input_lines if line.strip() != ""]

@@ -373,12 +373,32 @@ def parse_conPhs_nc_file(file_path: str) -> dict | None:
     data['GNSS']           = GNSS
     data['occ_type']       = occ_type
 
+    # -- TEC-max tangent point lat/lon (matches podTc2 attribute names) ----
+    # Compute the point on the LEO→GNSS ray closest to Earth's centre at the
+    # sample with peak TEC.  Orbit positions are in km; convert to m for WGS84.
+    i_tm   = int(np.argmax(tec_f))
+    leo_pt = LEO[:, i_tm]     # (3,) km
+    gns_pt = GNSS[:, i_tm]    # (3,) km
+    d      = gns_pt - leo_pt
+    denom  = np.dot(d, d)
+    if denom > 0:
+        t_tp   = -np.dot(leo_pt, d) / denom
+        tp_km  = leo_pt + t_tp * d                   # tangent point ECEF (km)
+        tp_r   = np.linalg.norm(tp_km)
+        tp_lat = float(np.degrees(np.arcsin(tp_km[2] / tp_r)))
+        tp_lon = float(np.degrees(np.arctan2(tp_km[1], tp_km[0])))
+    else:
+        tp_lat, tp_lon = 0.0, 0.0
+
+    data['lat_tecmax_tangent'] = tp_lat
+    data['lon_tecmax_tangent'] = tp_lon
+
     return data
 
 
 def load_conPhs(input_file_path: str,
                 conPhs_base_dir: str = None,
-                time_window_min: float = 15.0) -> dict | None:
+                time_window_min: float = 55.0) -> dict | None:
     """
     Accept either a podTc2 or conPhs file path, locate the corresponding
     conPhs file, parse it, and return the data dictionary.

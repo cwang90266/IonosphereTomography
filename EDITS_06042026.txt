@@ -1,0 +1,5 @@
+Based on the demo_verification python script, create a new function.
+
+
+
+You are an expert ionosphere scientist. I would like to find search the podTc2 files for the nearest occultations in position and time to each of the EDP measurements that we have from the MH ISR on June 2 & 3 2025. (DOY 153,154). Please be sure to use the exact time of the occultation (measured with the 'time' variable )

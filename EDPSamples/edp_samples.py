@@ -2212,6 +2212,97 @@ class EDPSamples(xr.Dataset):
         xr.Dataset.__init__(instance, data_vars=data_vars, coords=coords, attrs=attrs)
         return instance
 
+    def subset_union_triangles(
+        self,
+        triangles: list[tuple],
+        margin_deg: float = 2.0,
+    ) -> "EDPSamples":
+        """
+        Return a new EDPSamples containing only vertices that fall inside the
+        **union** of a list of spherical triangles, each defined by three
+        (lat, lon) corner points (as returned by get_occultation_extrema).
+
+        A vertex is kept if it is inside or within margin_deg of *any* triangle.
+        Mesh triangles with any vertex outside the union are dropped.
+
+        Parameters
+        ----------
+        triangles : list of (pt1, pt2, pt3) where each pt is (lat_deg, lon_deg)
+        margin_deg : float
+            Angular buffer around each triangle's edges (degrees).
+        """
+        geo     = self.geolocation          # (n_geo, 2): col 0 = lon, col 1 = lat
+        lat_g   = geo[:, 1]
+        lon_g   = geo[:, 0]
+        union_mask = np.zeros(geo.shape[0], dtype=bool)
+        for (p1, p2, p3) in triangles:
+            union_mask |= _inside_spherical_triangle_with_margin(
+                lat_g, lon_g, p1, p2, p3, margin_deg=margin_deg
+            )
+
+        kept = np.where(union_mask)[0]
+        if len(kept) < 3:
+            raise ValueError(
+                f"subset_union_triangles: only {len(kept)} vertices in the union "
+                f"of {len(triangles)} triangle(s) with {margin_deg}° margin. "
+                f"Increase margin_deg or add more occultations."
+            )
+
+        remap = np.full(geo.shape[0], -1, dtype=np.int64)
+        remap[kept] = np.arange(len(kept), dtype=np.int64)
+
+        parent_mesh = self.mesh
+        if parent_mesh is not None:
+            tri_mask = np.all(remap[parent_mesh] >= 0, axis=1)
+            sub_mesh = remap[parent_mesh[tri_mask]]
+        else:
+            sub_mesh = None
+
+        sub_geo   = geo[kept]
+        sub_edps  = self.edps[:, kept, :]
+        sub_fedps = self.feature_edps[:, kept, :]
+
+        sp = self.sampling_parameters
+        sp_values = sp.to_numpy()
+        sp_names  = sp.columns
+
+        coords = {
+            self.COORD_ALTITUDE: (self.DIM_HEIGHT, self.altitude),
+            self.DIM_GEO_COMPONENT: (
+                self.DIM_GEO_COMPONENT,
+                np.array(["latitude", "longitude"], dtype=object)),
+            self.DIM_PARAM:    (self.DIM_PARAM,    sp_names),
+            self.DIM_FEATURE:  (self.DIM_FEATURE,  np.array(self.FEATURE_LABEL)),
+        }
+
+        data_vars = {
+            self.VAR_GEOLOCATION: (
+                (self.DIM_GEO, self.DIM_GEO_COMPONENT), sub_geo,
+                {"long_name": "geolocation",
+                 "description": "latitude (column 0), longitude (column 1)"}),
+            self.VAR_EDPS: (
+                (self.DIM_HEIGHT, self.DIM_GEO, self.DIM_SAMPLE), sub_edps,
+                {"long_name": "EDPs",
+                 "description": "electron density profiles samples"}),
+            self.VAR_FEDPS: (
+                (self.DIM_FEATURE, self.DIM_GEO, self.DIM_SAMPLE), sub_fedps,
+                {"long_name": "Feature_EDPs",
+                 "description": "feature electron density profiles samples"}),
+            self.VAR_SAMPLING: (
+                (self.DIM_SAMPLE, self.DIM_PARAM), sp_values,
+                {"long_name": "sampling_parameters"}),
+        }
+        if sub_mesh is not None:
+            data_vars[self.VAR_MESH] = (
+                (self.DIM_TRIANGLE, self.DIM_VERTEX), sub_mesh,
+                {"long_name": "surface mesh",
+                 "description": "triangles: three vertex indices into the geo dimension"})
+
+        attrs = dict(self.attrs)
+        instance = object.__new__(type(self))
+        xr.Dataset.__init__(instance, data_vars=data_vars, coords=coords, attrs=attrs)
+        return instance
+
     def plot_edp_statistics(self, TitleName="Non-Gaussian"):
         """
         Plots a 3-panel statistical overview of this EDPSamples dataset using robust

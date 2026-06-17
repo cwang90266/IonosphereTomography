@@ -19,6 +19,7 @@ from scipy.spatial import cKDTree
 from filterpy.kalman import KalmanFilter
 # Ensure you import these from your edp_samples module
 from EDPSamples.edp_samples import EDPSamples, interp_heights, find_containing_triangles
+from Ionosphere_Tomography_Inverter.gaussian_smoother import build_gaussian_smoother
 
 
 def _gaspari_cohn(r: np.ndarray) -> np.ndarray:
@@ -207,7 +208,13 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
                  topside_H_H_m: float = 1000000.0,
                  topside_alpha: float = 0.05,
                  topside_prior_sigma: float = 5.0,
-                 topside_prior_floor_tecu: float = 1.0):
+                 topside_prior_floor_tecu: float = 1.0,
+                 n_rel_arcs: int = 0,
+                 bias_prior_sigma: float = 50.0,
+                 gaussian_cov_sigma: tuple | None = None,
+                 altitude_taper_km: float = 0.0,
+                 altitude_taper_min_scale: float = 0.05,
+                 topside_follow_f2: bool = True):
         """
         Parameters
         ----------
@@ -222,6 +229,46 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             represents a conservative estimate of the plasmaspheric vertical TEC
             content above the grid top (~800 km) under quiet conditions.
             Set to 0.0 to disable the floor (original behavior).
+        n_rel_arcs : int
+            Number of relative-TEC arcs (e.g. from conPhs files) to be
+            assimilated.  Each arc contributes one unknown carrier-phase bias
+            that is jointly estimated with the ionospheric state.  Absolute-TEC
+            arcs (podTc2) require no bias term and are not counted here.
+        bias_prior_sigma : float
+            1-σ prior standard deviation (TECU) for each arc bias.  A large
+            value (default 50 TECU) makes the prior non-informative so the KF
+            estimates the bias from the data.
+        gaussian_cov_sigma : tuple (sigma_h_km, sigma_latlon_km) or None
+            When provided, applies a Gaussian smoother S to the ensemble
+            covariance: P_grid = S @ P_ensemble @ S.T.  sigma_h_km is the
+            vertical smoothing scale (km, same units as EDPSam.altitude) and
+            sigma_latlon_km is the horizontal scale (km great-circle distance).
+            When None (default), the raw ensemble covariance is used.
+        altitude_taper_km : float
+            Depth (km) of the variance-taper zone at the top of the altitude
+            grid.  Within this zone the prior variance is smoothly reduced so
+            the Kalman filter cannot create large spikes near the spacecraft
+            altitude.  The scale factor drops from 1.0 at
+            ``altitude[-1] - altitude_taper_km`` to ``altitude_taper_min_scale``
+            at ``altitude[-1]`` following a cosine taper.  Set to 0.0 (default)
+            to disable.
+        altitude_taper_min_scale : float
+            Minimum variance scale factor applied at the very top of the grid
+            when ``altitude_taper_km > 0``.  Default 0.05 (5 % of raw variance).
+        topside_follow_f2 : bool
+            When True, the topside portion of ``P_grid`` (all altitudes above
+            the F2 peak) is replaced with a structured covariance that has
+            **no independent degrees of freedom**.  Every topside row/column
+            becomes a scaled copy of the F2-top row/column:
+
+                P[k_top, :] = weight(k_top) * P[k_F2, :]
+                P[:, k_top] = weight(k_top) * P[:, k_F2]
+
+            where ``weight(k) = exp(-(alt[k] - alt[k_F2]) / H_scale)`` and
+            ``H_scale`` is derived from ``topside_scale_height_m``.  This
+            means the Kalman filter can only modify the topside if it also
+            modifies the F2 top — the topside shape is locked to the F region
+            physics and cannot develop independent spikes.  Default: False.
         """
         self.EDPSam = EDPSam
         edps = EDPSam.edps  # Original shape: (n_height, n_geo, n_sample)
@@ -260,35 +307,135 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         if topside_prior_floor_tecu > 0.0:
             x_top_prior = np.maximum(x_top_prior, topside_prior_floor_tecu)
 
-        # 3. Initialize the FilterPy parent class with the augmented state size
-        super().__init__(dim_x=n_state_vars_aug, dim_z=1)
+        # 3. Initialize the FilterPy parent class.
+        # State vector layout: [x_grid (n_state_vars), x_top (n_geo), biases (n_rel_arcs)]
+        n_total_dim = n_state_vars_aug + n_rel_arcs
+        super().__init__(dim_x=n_total_dim, dim_z=1)
 
-        # 4. Set Initial State: anomaly from background; topside anomaly starts at zero
-        self.x = np.zeros((n_state_vars_aug, 1))
+        # 4. Set Initial State: anomaly from background; topside and bias anomalies start at zero
+        self.x = np.zeros((n_total_dim, 1))
 
-        # 5. Augmented prior covariance: block-diagonal (grid block | topside block)
-        P_grid = np.cov(edps_flat)                                     # (n_state_vars, n_state_vars)
-        P_top  = (topside_prior_sigma ** 2) * np.eye(n_geo)           # (n_geo, n_geo)
-        self.P = np.block([[P_grid,                          np.zeros((n_state_vars, n_geo))],
-                            [np.zeros((n_geo, n_state_vars)), P_top]])
+        # 5. Augmented prior covariance: block-diagonal
+        #    [grid | topside | bias] — biases are independent with large prior variance
+        P_grid = np.cov(edps_flat)                           # (n_state_vars, n_state_vars)
+        if gaussian_cov_sigma is not None:
+            sigma_h_km, sigma_latlon_km = gaussian_cov_sigma
+            lats = EDPSam.geolocation[:, 1]
+            lons = EDPSam.geolocation[:, 0]
+            S = build_gaussian_smoother(EDPSam.altitude, lats, lons,
+                                        sigma_h_km, sigma_latlon_km)
+            S_dense = S.toarray()
+            P_grid = S_dense @ P_grid @ S_dense.T
+        # Altitude-dependent variance taper: smoothly suppress prior variance
+        # in the top `altitude_taper_km` of the grid to prevent the Kalman
+        # filter from creating unrealistic spikes near the spacecraft altitude.
+        if altitude_taper_km > 0.0:
+            alt = EDPSam.altitude  # (n_height,) km
+            taper_start = alt[-1] - altitude_taper_km
+            # Per-altitude scale: 1.0 below taper_start, cosine ramp to
+            # altitude_taper_min_scale at alt[-1].
+            frac = np.clip((alt - taper_start) / altitude_taper_km, 0.0, 1.0)
+            alt_scale = 1.0 - (1.0 - altitude_taper_min_scale) * 0.5 * (1.0 - np.cos(np.pi * frac))
+            # Expand to full state vector: each altitude block covers n_geo nodes.
+            sv_scale = np.repeat(alt_scale, n_geo)  # (n_state_vars,)
+            # Apply as a Schur product on P_grid: P[i,j] *= sqrt(s[i])*sqrt(s[j])
+            scale_outer = np.outer(sv_scale, sv_scale)
+            P_grid = P_grid * scale_outer
+
+        # Topside-follows-F2 structured covariance:
+        # Replace every row/column of P_grid above the F2 peak with a scaled
+        # copy of the F2-top row/column.  Scaling uses exponential decay with
+        # the topside scale height.  After this operation the topside has no
+        # independent variance — it can only change if the F2 top changes,
+        # preventing the assimilation from creating unphysical topside spikes.
+        if topside_follow_f2:
+            alt       = EDPSam.altitude                          # (n_height,) km
+            H_scale_km = topside_scale_height_m / 1000.0
+
+            # Find F2 peak from the mean background Ne profile.
+            ne_mean_profile = edps_base.reshape(n_height, n_geo).mean(axis=1)
+            k_f2 = int(np.argmax(ne_mean_profile))
+
+            # Exponential weights: 1 at F2 peak, decaying above.
+            weights     = np.ones(n_height)
+            weights[k_f2 + 1:] = np.exp(
+                -(alt[k_f2 + 1:] - alt[k_f2]) / H_scale_km
+            )
+
+            # Indices of the F2-top block in the state vector.
+            f2_s = k_f2 * n_geo
+            f2_e = (k_f2 + 1) * n_geo
+
+            # Replace each topside altitude block's rows and columns with a
+            # weighted copy of the F2-top block.  The F2 block itself (k_f2)
+            # is never modified, so it stays the reference for all replacements.
+            # Skip altitude levels where the background Ne is at the physical
+            # floor (1e8 m^-3) — those cells have no real ensemble variance to
+            # propagate, and forcing F2-coupled covariance there allows the KF
+            # to drive analysis_x to zero or negative on the topside.
+            ne_mean_per_alt = edps_base.reshape(n_height, n_geo).mean(axis=1)
+            for k in range(k_f2 + 1, n_height):
+                if ne_mean_per_alt[k] <= 1e8 * 1.01:   # at or within 1% of floor
+                    continue
+                s, e = k * n_geo, (k + 1) * n_geo
+                w    = float(weights[k])
+                P_grid[s:e, :]  = w * P_grid[f2_s:f2_e, :]
+                P_grid[:, s:e]  = w * P_grid[:, f2_s:f2_e]
+
+        P_top  = (topside_prior_sigma ** 2) * np.eye(n_geo)  # (n_geo, n_geo)
+        P_bias = (bias_prior_sigma ** 2) * np.eye(n_rel_arcs) if n_rel_arcs > 0 else np.empty((0, 0))
+
+        if n_rel_arcs > 0:
+            self.P = np.block([
+                [P_grid,
+                 np.zeros((n_state_vars, n_geo)),
+                 np.zeros((n_state_vars, n_rel_arcs))],
+                [np.zeros((n_geo, n_state_vars)),
+                 P_top,
+                 np.zeros((n_geo, n_rel_arcs))],
+                [np.zeros((n_rel_arcs, n_state_vars)),
+                 np.zeros((n_rel_arcs, n_geo)),
+                 P_bias],
+            ])
+        else:
+            self.P = np.block([[P_grid,                          np.zeros((n_state_vars, n_geo))],
+                                [np.zeros((n_geo, n_state_vars)), P_top]])
 
         # Calculate effective topside scale height
         H_eff_m = (1.0 - topside_alpha) * topside_scale_height_m + topside_alpha * topside_H_H_m
 
         # 6. Store metadata
         self.attrs = {
-            "topside_H_eff_m":   H_eff_m,  # Added for numerical topside integration
-            "meanscale":         meanscale,
-            "initial_edps":      edps_flat,
-            "initial_edps_mean": edps_base,        # (n_state_vars, 1) m^-3 (or fractional)
-            "initial_edps_cov":        self.P.copy(),    # augmented prior covariance
-            "x_top_prior":             x_top_prior,      # (n_geo,) vertical TECU background
-            "topside_prior_floor_tecu": topside_prior_floor_tecu,  # floor for re-anchoring
-            "n_state_vars":            n_state_vars,
-            "n_geo":                   n_geo,
+            "topside_H_eff_m":          H_eff_m,
+            "meanscale":                meanscale,
+            "initial_edps":             edps_flat,
+            "initial_edps_mean":        edps_base,        # (n_state_vars, 1) m^-3 (or fractional)
+            "initial_edps_cov":         self.P.copy(),    # augmented prior covariance
+            "x_top_prior":              x_top_prior,      # (n_geo,) vertical TECU background
+            "topside_prior_floor_tecu": topside_prior_floor_tecu,
+            "n_state_vars":             n_state_vars,
+            "n_geo":                    n_geo,
+            "n_state_vars_aug":         n_state_vars_aug,  # grid + topside (no bias)
+            "n_rel_arcs":               n_rel_arcs,
         }
+    # ------------------------------------------------------------------
+    # Shared ray-tracing setup — built once and reused by both the
+    # single-arc and batch observation-operator methods.
+    # ------------------------------------------------------------------
+    def _ray_tracing_setup(self, num_segments: int):
+        """Return (transformer, tree, t_array, H_eff_m) ready for ray tracing."""
+        transformer = pyproj.Transformer.from_crs(
+            pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
+            pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+            always_xy=True,
+        )
+        tree    = cKDTree(self.EDPSam.geolocation) if self.EDPSam.geolocation.shape[0] > 1 else None
+        t       = np.linspace(0, 1, num_segments)
+        H_eff_m = self.attrs.get("topside_H_eff_m", 150000.0)
+        return transformer, tree, t, H_eff_m
+
     def get_observation_operator(self, podTc2_data: dict,
-                                 num_segments: int = 1000) -> np.ndarray:
+                                 num_segments: int = 500) -> np.ndarray:
         from joblib import Parallel, delayed
 
         altitude     = self.EDPSam.altitude
@@ -302,15 +449,7 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         GNSS   = podTc2_data['GNSS']
         n_rays = LEO.shape[1]
 
-        transformer = pyproj.Transformer.from_crs(
-            pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
-            pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
-            always_xy=True
-        )
-        tree = cKDTree(geolocation) if n_geo > 1 else None
-        t    = np.linspace(0, 1, num_segments)
-
-        H_eff_m = self.attrs.get("topside_H_eff_m", 150000.0)
+        transformer, tree, t, H_eff_m = self._ray_tracing_setup(num_segments)
 
         print(f"  -> Building H Matrix ({n_rays} rays, parallel)...")
         rows = Parallel(n_jobs=-1)(
@@ -399,6 +538,150 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
 # =============================================================================
 
         return H
+
+    def get_observation_operator_relative(self, podTc2_data: dict,
+                                          arc_idx: int,
+                                          num_segments: int = 1000) -> np.ndarray:
+        """
+        Build the observation operator for a *relative* TEC arc (e.g. conPhs).
+
+        Relative TEC carries an unknown carrier-phase bias ``b`` that is jointly
+        estimated with the ionospheric state.  The bias is modelled as an extra
+        scalar state variable.  This method appends ``n_rel_arcs`` columns to the
+        standard H matrix; column ``arc_idx`` is set to 1.0 (all other bias
+        columns are 0) so that H @ x picks up the correct bias for this arc.
+
+        Parameters
+        ----------
+        podTc2_data : dict
+            Must contain ``'LEO'`` and ``'GNSS'`` arrays (ECEF km, shape (3, N)).
+            Can be a parsed conPhs data dict — only the position arrays are used.
+        arc_idx : int
+            Zero-based index of this arc in the list of relative arcs.
+            Must satisfy ``0 <= arc_idx < n_rel_arcs``.
+        num_segments : int
+            Ray discretisation passed to ``get_observation_operator``.
+
+        Returns
+        -------
+        H_rel : ndarray, float32, shape (N, dim_x)
+            Observation operator with bias column appended.
+        """
+        n_rel_arcs = self.attrs["n_rel_arcs"]
+        if n_rel_arcs == 0:
+            raise RuntimeError(
+                "This inverter was initialised with n_rel_arcs=0.  "
+                "Rebuild with n_rel_arcs > 0 to assimilate relative-TEC arcs."
+            )
+        if arc_idx < 0 or arc_idx >= n_rel_arcs:
+            raise ValueError(
+                f"arc_idx={arc_idx} is out of range for n_rel_arcs={n_rel_arcs}."
+            )
+
+        H_base = self.get_observation_operator(podTc2_data, num_segments)
+        n_rays = H_base.shape[0]
+
+        # Bias block: n_rays × n_rel_arcs, all zeros except column arc_idx
+        bias_cols = np.zeros((n_rays, n_rel_arcs), dtype=np.float32)
+        bias_cols[:, arc_idx] = 1.0
+
+        return np.hstack([H_base, bias_cols])   # (n_rays, dim_x)
+
+    def get_observation_operator_batch(
+        self,
+        arc_data_list: list,
+        num_segments: int = 500,
+    ) -> list:
+        """
+        Build H matrices for *all* arcs in a **single** parallel sweep.
+
+        The key performance advantage over calling ``get_observation_operator``
+        once per arc is that the joblib worker pool is spawned and torn down
+        only once regardless of how many arcs are processed.  Profiling shows
+        that pool-management overhead (``time.sleep`` polling) dominates
+        runtime when there are many short arcs.
+
+        Parameters
+        ----------
+        arc_data_list : list of dict
+            Each dict must contain:
+              ``'LEO'``      — (3, N_i) ECEF km
+              ``'GNSS'``     — (3, N_i) ECEF km
+              ``'tec_type'`` — ``'absolute'`` (default) or ``'relative'``
+        num_segments : int
+            Number of integration segments per ray.  500 (default) gives a
+            good accuracy/speed trade-off; reduce to 250 for a further ~2×
+            speed-up at slightly coarser ray integrals.
+
+        Returns
+        -------
+        list of ndarray, shape (N_i, dim_x), one per arc in the same order
+        as ``arc_data_list``.  Absolute arcs have zeros in the bias columns;
+        relative arcs have a 1.0 in their designated bias column.
+        """
+        from joblib import Parallel, delayed
+
+        altitude     = self.EDPSam.altitude
+        geolocation  = self.EDPSam.geolocation
+        n_height     = len(altitude)
+        n_geo        = geolocation.shape[0]
+        n_state_vars     = n_height * n_geo
+        n_state_vars_aug = n_state_vars + n_geo
+        n_rel_arcs       = self.attrs["n_rel_arcs"]
+
+        transformer, tree, t, H_eff_m = self._ray_tracing_setup(num_segments)
+
+        # ── Flatten all arcs into one ray list, tracking arc membership ──────
+        all_gnss:  list = []
+        all_leo:   list = []
+        arc_sizes: list = []
+
+        for arc in arc_data_list:
+            LEO  = arc['LEO']
+            GNSS = arc['GNSS']
+            n_rays = LEO.shape[1]
+            arc_sizes.append(n_rays)
+            for i in range(n_rays):
+                all_gnss.append(GNSS[:, i])
+                all_leo.append(LEO[:, i])
+
+        total_rays = len(all_gnss)
+        n_arcs     = len(arc_data_list)
+        print(f"  -> Building H matrices ({total_rays} rays across "
+              f"{n_arcs} arc(s), single parallel sweep) …")
+
+        # ── Single Parallel call — workers spawned/joined once ───────────────
+        rows = Parallel(n_jobs=-1)(
+            delayed(_process_single_ray)(
+                all_gnss[i], all_leo[i], t,
+                altitude, n_height, n_geo, n_state_vars, n_state_vars_aug,
+                geolocation, self.EDPSam.mesh, tree, transformer, H_eff_m,
+            )
+            for i in range(total_rays)
+        )
+
+        # Scale grid columns (path length m → m/TECU)
+        H_all = np.array(rows, dtype=np.float32)
+        H_all[:, :n_state_vars] /= 1e16
+
+        # ── Split rows back into per-arc H matrices and append bias columns ──
+        H_list: list = []
+        rel_arc_counter = 0
+        offset = 0
+        for arc, n_rays in zip(arc_data_list, arc_sizes):
+            H_arc = H_all[offset: offset + n_rays]   # (n_rays, n_state_vars_aug)
+            offset += n_rays
+
+            if n_rel_arcs > 0:
+                bias_cols = np.zeros((n_rays, n_rel_arcs), dtype=np.float32)
+                if arc.get('tec_type') == 'relative':
+                    bias_cols[:, rel_arc_counter] = 1.0
+                    rel_arc_counter += 1
+                H_arc = np.hstack([H_arc, bias_cols])
+
+            H_list.append(H_arc)
+
+        return H_list
 
     def _build_localization_matrix(
         self,
@@ -508,7 +791,18 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
                 "Choose from: 'gaussian', 'inverse_distance', 'gaspari_cohn'."
             )
 
-        return L.astype(np.float32)
+        L_sv_aug = L.astype(np.float32)   # (n_state_vars_aug, n_obs)
+
+        # Bias states are not distance-localised: set their weights to 1.0 so
+        # the Schur product leaves the bias–observation covariances unchanged.
+        n_rel_arcs = self.attrs.get("n_rel_arcs", 0)
+        if n_rel_arcs > 0:
+            L_sv_aug = np.vstack([
+                L_sv_aug,
+                np.ones((n_rel_arcs, n_obs), dtype=np.float32),
+            ])
+
+        return L_sv_aug
 
     def assimilate(self, obs: np.ndarray, podTc2_data: dict = None, obs_operator: np.ndarray = None,
                    relaxation: float = 1.0, relaxation_top: float = 0.99,
@@ -565,29 +859,36 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         assert obs.shape[0] == obs_operator.shape[0], "Observation length must match H matrix rows"
         assert obs_operator.shape[1] == self.dim_x, "H matrix columns must match State vector length"
 
-        n_obs        = obs.shape[0]
-        n_state_vars = self.attrs["n_state_vars"]
+        n_obs            = obs.shape[0]
+        n_state_vars     = self.attrs["n_state_vars"]
+        n_state_vars_aug = self.attrs["n_state_vars_aug"]  # grid + topside (no bias)
+        n_rel_arcs       = self.attrs.get("n_rel_arcs", 0)
 
         # 2. Apply Mean Scaling to the in-grid columns only.
-        # The topside columns are already in TECU units and need no scaling.
+        # The topside and bias columns are already in TECU units and need no scaling.
         if self.attrs["meanscale"] == 1:
             H = obs_operator.copy()
             H[:, :n_state_vars] *= self.attrs["initial_edps_mean"].T
         else:
             H = obs_operator
 
-        # 3. Gauss-Markov Predict with separate relaxation for grid and topside.
-        # Build a per-state relaxation vector; outer product gives F⊗F elementwise on P.
-        r_vec                = np.full(self.dim_x, relaxation)
-        r_vec[n_state_vars:] = relaxation_top
+        # 3. Gauss-Markov Predict with separate relaxation for grid, topside, and bias.
+        # Bias states use relaxation=1.0 (no decay) — they are estimated fresh each
+        # assimilation window and should not be pulled back toward zero.
+        r_vec = np.full(self.dim_x, relaxation)
+        r_vec[n_state_vars:n_state_vars_aug] = relaxation_top
+        r_vec[n_state_vars_aug:] = 1.0   # bias states: no decay
         self.x = r_vec[:, None] * self.x
         r_outer = np.outer(r_vec, r_vec)
         self.P  = r_outer * self.P + (1.0 - r_outer) * self.attrs["initial_edps_cov"]
 
-        # 4. Innovation — background includes grid mean and topside TECU prior
-        x_prior_aug    = np.vstack([self.attrs["initial_edps_mean"],
-                                    self.attrs["x_top_prior"][:, None]])
-        background_tec = obs_operator @ x_prior_aug
+        # 4. Innovation — background includes grid mean, topside TECU prior, and zero bias prior
+        x_prior_full = np.vstack([
+            self.attrs["initial_edps_mean"],
+            self.attrs["x_top_prior"][:, None],
+            np.zeros((n_rel_arcs, 1)),   # arc biases: prior is zero
+        ])
+        background_tec = obs_operator @ x_prior_full
         y = (obs - background_tec) - H @ self.x
 
         # 5. Compute cross-covariance P @ H.T and optionally apply localization.
@@ -615,16 +916,26 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         self.x = self.x + K @ y
         self.P = self.P - K @ PHT.T
 
-        # 6. Split state: reconstruct grid EDP and expose topside TECU estimate
+        # 6. Split state: reconstruct grid EDP, topside TECU, and arc biases
         x_grid = self.x[:n_state_vars]
-        x_top  = self.x[n_state_vars:]
+        x_top  = self.x[n_state_vars:n_state_vars_aug]
         # Absolute topside TECU per geo node (prior + estimated anomaly)
         self.x_top_tecu = self.attrs["x_top_prior"][:, None] + x_top  # (n_geo, 1)
+        # Estimated carrier-phase biases for each relative arc (TECU)
+        self.x_bias = self.x[n_state_vars_aug:]   # (n_rel_arcs, 1); empty if n_rel_arcs=0
 
         if self.attrs["meanscale"] == 1:
             analysis_x = self.attrs["initial_edps_mean"] * (1.0 + x_grid)
         else:
             analysis_x = self.attrs["initial_edps_mean"] + x_grid
+
+        # Guard: the Kalman update is unconstrained and can drive cells to zero
+        # or negative, especially at floor-level altitudes above ~500 km where
+        # topside_follow_f2 injects F2-coupled covariance into cells whose
+        # prior Ne is at the physical floor.  Clip to the same floor used at
+        # initialisation so downstream functions (e.g. _fit_iri_params) receive
+        # a physically valid profile.
+        analysis_x = np.maximum(analysis_x, 1e8)
 
         return analysis_x
 
