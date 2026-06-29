@@ -64,7 +64,7 @@ from TEC_model.igs_tec_pipeline import (
 CAMPAIGN_DATE     = datetime(2026, 6, 2)
 POI_LAT           = 50.0          # °N — centre of search region
 POI_LON           = 10.0          # °E
-SEARCH_RADIUS_DEG = 1.0          # great-circle search radius
+SEARCH_RADIUS_DEG = 3.0          # great-circle search radius
 WINDOW_MIN        = 90            # minutes per display window
 
 RINEX_VERSION  = 3
@@ -75,7 +75,7 @@ SAVE_DIR       = str(ROOT / "Figures" / "Demo_Ground_Station")
 MAX_RAYS_PER_ARC = 100
 MIN_VALID_RAYS   = 20
 NUM_SV_WORKERS   = 10    # parallel SV workers per station (1 = serial)
-VERBOSE          = True # verbose per-SV timing output
+VERBOSE          = False # verbose per-SV timing output
 EPHEM_STRIDE     = 0    # 0 = auto-detect from sample rate (~150 s target)
 
 # Constellation display config — order matches 2×2 panel layout
@@ -278,6 +278,55 @@ def process_all_stations(stations:      list[dict],
             print(f"  [{code}] ERROR: {exc}", flush=True)
 
     return obs_all, clean_all
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §3c  GLONASS diagnostic summary
+# ─────────────────────────────────────────────────────────────────────────────
+
+def print_glonass_diagnostics(obs_all: list[dict]) -> None:
+    """Print a per-(station, PRN) summary for every GLONASS arc.
+
+    Columns:
+      PRN  k   G1 MHz   G2 MHz  code_A  code_B   Tx DCB   Rx DCB  Total DCB
+    k is the FDMA channel number back-computed from f1_hz:
+      k = round((f1_hz - 1602e6) / 0.5625e6)
+    DCBs are in TECU.
+    """
+    glo_arcs = [o for o in obs_all if o.get("conid") == "R"]
+    if not glo_arcs:
+        print("  No GLONASS arcs to report.")
+        return
+
+    # Aggregate by (station, PRN) — DCBs are constant per pair, take first arc
+    seen: dict[tuple, dict] = {}
+    for obs in glo_arcs:
+        sta  = obs.get("station_id", "????")
+        prn  = "R" + str(obs.get("prn_id", "??"))
+        key  = (sta, prn)
+        if key not in seen:
+            seen[key] = obs
+
+    # Header
+    print(f"\n  {'STA':<6} {'PRN':<5} {'k':>3}  "
+          f"{'f1 (G1) MHz':>12}  {'f2 (G2) MHz':>12}  "
+          f"{'code_A':<7} {'code_B':<7}  "
+          f"{'Tx DCB':>9}  {'Rx DCB':>9}  {'Total':>9}")
+    print("  " + "-" * 86)
+
+    for (sta, prn), obs in sorted(seen.items()):
+        f1 = float(obs.get("f1_hz") or 0.0)
+        f2 = float(obs.get("f2_hz") or 0.0)
+        k  = round((f1 - 1602e6) / 0.5625e6) if f1 else 0
+        fp = obs.get("freq_pair", ("?", "?"))
+        cA = obs.get("code_obs_A", "?")
+        cB = obs.get("code_obs_B", "?")
+        tx = float(obs.get("dcb_sv_tecu") or 0.0)
+        rx = float(obs.get("dcb_rx_tecu") or 0.0)
+        print(f"  {sta:<6} {prn:<5} {k:>+3}  "
+              f"{f1/1e6:>12.4f}  {f2/1e6:>12.4f}  "
+              f"{cA:<7} {cB:<7}  "
+              f"{tx:>+9.4f}  {rx:>+9.4f}  {tx+rx:>+9.4f}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -627,6 +676,10 @@ def main() -> None:
     total_rays = sum(len(e["tec"]) for e in clean_all)
     print(f"\n  Arcs accepted  : {len(clean_all)}")
     print(f"  Observations   : {total_rays:,}")
+
+    # ── §4c  GLONASS diagnostic summary ──────────────────────────────────────
+    print(f"\n──── §4c  GLONASS satellite diagnostics ────────────────────────────")
+    print_glonass_diagnostics(obs_all)
 
     if not clean_all:
         print("\n  ERROR: No usable observations — check credentials and network.")

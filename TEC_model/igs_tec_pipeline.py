@@ -191,6 +191,17 @@ _FREQ_PRIORITY: Dict[str, List[Tuple]] = {
     ],
 }
 
+# 3-character RINEX-3 observable codes the pipeline actually uses.
+# Passed to gr.load(meas=...) so georinex skips loading Doppler, SNR,
+# and any other types we never access — reducing per-epoch merge cost.
+_RINEX3_MEAS: List[str] = sorted({
+    code
+    for pairs in _FREQ_PRIORITY.values()
+    for (_, _, _, _, cA, cB, pA, pB) in pairs
+    for code in cA + cB + pA + pB
+    if len(code) == 3   # exclude 2-char RINEX-2 aliases (P1, P2, L1, L2 …)
+})
+
 # Minimum number of valid epochs per arc to retain for processing
 MIN_ARC_SAMPLES = 20
 # Gap larger than this (seconds) triggers an arc break
@@ -454,10 +465,25 @@ def _glonass_ecef(eph: dict, t_utc: float) -> Optional[np.ndarray]:
     (3,) array (km) or None.
     """
     try:
-        r = np.array([float(eph['X']), float(eph['Y']), float(eph['Z'])],        dtype=float)
-        v = np.array([float(eph['Xdot']), float(eph['Ydot']), float(eph['Zdot'])], dtype=float)
-        a = np.array([float(eph['Xdotdot']), float(eph['Ydotdot']), float(eph['Zdotdot'])], dtype=float)
         toe = float(eph['toe'])
+        if 'dX' in eph:
+            # georinex RINEX-3 convention: X/Y/Z in metres, dX/dY/dZ in m/s,
+            # dX2/dY2/dZ2 in m/s².  Convert to km / km·s⁻¹ / km·s⁻² for the
+            # RK4 integrator below.
+            r = np.array([float(eph['X']),   float(eph['Y']),   float(eph['Z'])],
+                         dtype=float) * 1e-3
+            v = np.array([float(eph['dX']),  float(eph['dY']),  float(eph['dZ'])],
+                         dtype=float) * 1e-3
+            a = np.array([float(eph['dX2']), float(eph['dY2']), float(eph['dZ2'])],
+                         dtype=float) * 1e-3
+        else:
+            # Legacy / alternative naming already in km, km/s, km/s²
+            r = np.array([float(eph['X']),        float(eph['Y']),        float(eph['Z'])],
+                         dtype=float)
+            v = np.array([float(eph['Xdot']),     float(eph['Ydot']),     float(eph['Zdot'])],
+                         dtype=float)
+            a = np.array([float(eph['Xdotdot']),  float(eph['Ydotdot']),  float(eph['Zdotdot'])],
+                         dtype=float)
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -515,14 +541,7 @@ class BroadcastEphemeris:
         if not _HAS_GEORINEX:
             raise ImportError("georinex required for navigation parsing.")
         nav_str = str(nav_path)
-        try:
-            self._nav_ds = gr.load(nav_str)
-        except Exception as exc:
-            # Mixed nav files sometimes contain malformed IRNSS (System I)
-            # records that georinex cannot parse.  Retry loading only the
-            # constellations we actually use for TEC processing.
-            log.warning("Nav load failed (%s) — retrying without IRNSS: %s", nav_str, exc)
-            self._nav_ds = gr.load(nav_str, use='GRECSJ')
+        self._nav_ds = gr.load(nav_str, use='GRECSJ')
         self._cache: Dict[str, dict] = {}  # sv → dict of ephemeris records
         self._glo_slots: Dict[str, int] = {}  # GLONASS SV → FDMA channel k
         self._build_eph_cache()
@@ -541,7 +560,14 @@ class BroadcastEphemeris:
     }
 
     def _build_eph_cache(self) -> None:
-        """Pre-process navigation dataset into per-SV dictionaries."""
+        """Pre-process navigation dataset into per-SV dictionaries.
+
+        The previous implementation called xarray .sel(time=t) inside a triple
+        nested loop (sv x time x variable), producing O(n_sv * n_t * n_var)
+        ~175 000 scalar xarray operations for a daily mixed nav file.  This
+        version pre-extracts each variable as a numpy array once per SV, then
+        uses plain integer indexing — reducing xarray overhead ~50x.
+        """
         ds = self._nav_ds
         svs = ds.sv.values if 'sv' in ds.dims else []
         for sv in svs:
@@ -549,14 +575,31 @@ class BroadcastEphemeris:
             sv_ds  = ds.sel(sv=sv)
             records = []
             times   = sv_ds.time.values if 'time' in sv_ds.dims else [sv_ds.time.values]
-            for t in times:
-                rec = {'_time': pd.Timestamp(t)}
-                for var in sv_ds.data_vars:
+
+            # Pre-extract all variables as numpy arrays ONCE per SV.
+            # Avoids n_time * n_var individual xarray scalar sel() calls.
+            bulk: Dict[str, np.ndarray] = {}
+            for var in sv_ds.data_vars:
+                try:
+                    arr = sv_ds[var].values
+                    bulk[var] = arr if arr.ndim > 0 else np.full(len(times), float(arr))
+                except Exception:
+                    pass
+
+            for i_t, t in enumerate(times):
+                rec: Dict[str, object] = {'_time': pd.Timestamp(t)}
+                has_data = False
+                for var, arr in bulk.items():
                     try:
-                        val = sv_ds[var].sel(time=t).values
-                        rec[var] = float(val) if val.ndim == 0 else val
+                        val = float(arr[i_t])
+                        if np.isfinite(val):
+                            rec[var] = val
+                            has_data = True
                     except Exception:
                         pass
+
+                if not has_data:
+                    continue   # skip NaN-only rows (other SVs' epochs)
 
                 # Normalise georinex RINEX-3 names → IS-GPS-200 names so the
                 # Kepler propagator can find every required ephemeris field.
@@ -570,10 +613,9 @@ class BroadcastEphemeris:
                     # files.  For RINEX-3 GPS/Galileo/BeiDou the Toe alias above
                     # should have already populated rec['toe'] with GPS SOW.
                     ts = pd.Timestamp(t)
-                    h  = ts.hour
-                    m  = ts.minute
-                    rec['toe'] = h * 3600 + m * 60 + ts.second
+                    rec['toe'] = ts.hour * 3600 + ts.minute * 60 + ts.second
                 records.append(rec)
+
             if records:
                 self._cache[sv_str] = records
 
@@ -902,10 +944,32 @@ class RinexDownloader:
     # ------------------------------------------------------------------
     def dcb_sinex(self,
                   date: datetime,
-                  local_path: Optional[str] = None) -> Optional[Path]:
+                  local_path: Optional[str] = None,
+                  product: str = 'CAS') -> Optional[Path]:
         """Download a daily DCB SINEX (BSX) file from CDDIS.
 
-        Tries CODE/CAS products in order. Returns None if unavailable.
+        Parameters
+        ----------
+        date : datetime
+            The UTC day for which the DCB file is needed.
+        local_path : str, optional
+            If given, load from this local path instead of downloading.
+        product : {'CAS', 'CODE'}
+            DCB product vendor to prefer.
+
+            * ``'CODE'`` — try the CODE MGEX Final product
+              (``COD0MGXFIN_YYYYDDD0000_01D_01D_DCB.BIA.gz``) first, then
+              the CODE MGEX Rapid (``COD0MGXRAP_...``), both served from
+              ``cddis.nasa.gov/archive/gnss/products/mgex/{gpsweek}/``.
+              CODE estimates GPS and Galileo receiver DCBs under a joint
+              zero-mean constraint, which typically eliminates the ~9 TECU
+              inter-constellation offset seen in the CAS RAPID product.
+              Falls back to CAS RAPID when CODE files are unavailable.
+            * ``'CAS'`` (default) — use the CAS/GFZ RAPID product from
+              ``cddis.nasa.gov/archive/gnss/products/bias/{year}/``
+              (previous behaviour).
+
+        Returns ``None`` if no product can be obtained.
         """
         if local_path:
             p = Path(local_path)
@@ -914,10 +978,20 @@ class RinexDownloader:
         year = date.year
         doy  = date.timetuple().tm_yday
 
-        # All DCB products live in the flat yearly directory bias/{year}/ —
-        # there is no per-DOY subdirectory.
+        # GPS week number for the CODE MGEX directory.
+        # Leap-second offset is ~18 s — negligible for week-level indexing.
+        _GPS_EPOCH_DT = datetime(1980, 1, 6)
+        _d = date.replace(tzinfo=None) if hasattr(date, 'tzinfo') and date.tzinfo else date
+        gps_week = (_d - _GPS_EPOCH_DT).days // 7
+
+        # Directory roots
+        _bias_dir = f"{CDDIS_BASE}/products/bias/{year}"
+        _mgex_dir = f"{CDDIS_BASE}/products/mgex/{gps_week:04d}"
+
         # Known filename formats (time field is always 0000 for daily products):
-        #   CAS0OPSRAP_20261530000_01D_01D_DCB.BIA.gz  (current CAS/GFZ)
+        #   COD0MGXFIN_20261530000_01D_01D_DCB.BIA.gz  CODE MGEX Final (~4 wk lag)
+        #   COD0MGXRAP_20261530000_01D_01D_DCB.BIA.gz  CODE MGEX Rapid (~1–2 d lag)
+        #   CAS0OPSRAP_20261530000_01D_01D_DCB.BIA.gz  CAS  RAPID (near real-time)
         #   CAS1OPSRAP_20261530000_01D_01D_DCB.BIA.gz
         #   GFZ0OPSRAP_20261530000_01D_01D_DCB.BIA.gz
         #   CAS0MGXRAP_20261530000_01D_01D_DCB.BSX.gz  (legacy)
@@ -925,22 +999,31 @@ class RinexDownloader:
         # We construct URLs directly — CDDIS directory listings require a
         # cookie-based session that the netrc Basic Auth cannot satisfy, so
         # HTML-parsing via _list_cddis_dir is unreliable for this endpoint.
-        _bias_dir = f"{CDDIS_BASE}/products/bias/{year}"
-        direct_filenames = [
-            f"CAS0OPSRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz",
-            f"CAS1OPSRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz",
-            f"GFZ0OPSRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz",
-            f"DLR0OPSRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz",
-            f"COD0OPSRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz",
-            f"CAS0MGXRAP_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz",
-            f"DLR0MGXRAP_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz",
+        _code_entries = [
+            (_mgex_dir, f"COD0MGXFIN_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz"),
+            (_mgex_dir, f"COD0MGXRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz"),
+        ]
+        _cas_entries = [
+            (_bias_dir, f"CAS0OPSRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz"),
+            (_bias_dir, f"CAS1OPSRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz"),
+            (_bias_dir, f"GFZ0OPSRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz"),
+            (_bias_dir, f"DLR0OPSRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz"),
+            (_bias_dir, f"COD0OPSRAP_{year}{doy:03d}0000_01D_01D_DCB.BIA.gz"),
+            (_bias_dir, f"CAS0MGXRAP_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz"),
+            (_bias_dir, f"DLR0MGXRAP_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz"),
         ]
 
-        for fname in direct_filenames:
+        # Prioritise CODE products when requested; always fall back to CAS
+        if product.upper() == 'CODE':
+            ordered = _code_entries + _cas_entries
+        else:
+            ordered = _cas_entries
+
+        for url_base, fname in ordered:
             dest = self.cache_dir / fname
             try:
-                self._download(f"{_bias_dir}/{fname}", dest)
-                log.info("DCB SINEX: %s", fname)
+                self._download(f"{url_base}/{fname}", dest)
+                log.info("DCB SINEX: %s  (product=%s)", fname, product)
                 return self._decompress(dest)
             except FileNotFoundError:
                 continue  # try next provider
@@ -948,19 +1031,21 @@ class RinexDownloader:
                 log.warning("DCB download failed (%s): %s", fname, exc)
 
         # Fallback: directory listing (works when the session has a valid cookie)
-        for pat_str, ext in [
-            (rf'^(?:CAS0|CAS1|GFZ0|DLR0|COD0|WHU0)OPSRAP[_+]{year}{doy:03d}\d{{4}}_01D_01D_DCB\.BIA(\.gz)?$', '.BIA'),
-            (rf'^(?:CAS0|DLR0)MGXRAP_{year}{doy:03d}\d{{4}}_01D_01D_DCB\.BSX(\.gz)?$', '.BSX'),
+        for pat_str, ext, url_base in [
+            (rf'^(?:CAS0|CAS1|GFZ0|DLR0|COD0|WHU0)OPSRAP[_+]{year}{doy:03d}\d{{4}}_01D_01D_DCB\.BIA(\.gz)?$',
+             '.BIA', _bias_dir),
+            (rf'^(?:CAS0|DLR0)MGXRAP_{year}{doy:03d}\d{{4}}_01D_01D_DCB\.BSX(\.gz)?$',
+             '.BSX', _bias_dir),
         ]:
             pat   = re.compile(pat_str, re.I)
-            files = self._list_cddis_dir(_bias_dir)
+            files = self._list_cddis_dir(url_base)
             matches = [f for f in files if pat.match(f)]
             if matches:
                 fname = matches[0]
                 print(fname)
                 dest  = self.cache_dir / fname
                 try:
-                    self._download(f"{_bias_dir}/{fname}", dest)
+                    self._download(f"{url_base}/{fname}", dest)
                     return self._decompress(dest)
                 except Exception as exc:
                     log.warning("DCB download failed (%s): %s", fname, exc)
@@ -988,11 +1073,33 @@ class DCBCorrector:
     def __init__(self, bsx_path: str | Path) -> None:
         self._sv_dcb:  Dict[str, Dict[str, float]] = {}  # sv  → {obs_pair: ns}
         self._sta_dcb: Dict[str, Dict[str, float]] = {}  # sta → {obs_pair: ns}
+        # constellation-specific receiver DCBs: sta → {(conid, obs_pair): ns}
+        # The CAS/CODE SINEX provides separate G-tagged and E-tagged entries for
+        # the same obs pair (e.g. C1C-C5Q) because the receiver hardware bias can
+        # differ between GPS L1/L5 and Galileo E1/E5a even at the same frequency.
+        # Keying by (conid, pair) prevents GPS entries from overwriting Galileo.
+        self._sta_dcb_con: Dict[str, Dict[tuple, float]] = {}  # sta → {(con, pair): ns}
         self._parse(Path(bsx_path))
 
     # ------------------------------------------------------------------
     def _parse(self, path: Path) -> None:
-        """Read DSB lines from the BSX file."""
+        """Read DSB lines from the BSX file using fixed-width column parsing.
+
+        Bias-SINEX is a fixed-width format.  Using line.split() fails because
+        the STATION field is blank for satellite biases, causing all subsequent
+        tokens to shift left by one: obs1→sta, obs2→obs1, START→obs2, and
+        STD_DEV ends up at parts[9] instead of the actual bias value.
+        Receiver-bias lines happen to have STATION populated so they parse
+        correctly with split(), but satellite biases were silently wrong.
+
+        Fixed-width column offsets (0-indexed):
+            [1:4]   record type ('DSB')
+            [11:14] PRN  (e.g. 'G01'; constellation letter only for rx lines)
+            [15:25] STATION (10 chars, all spaces for satellite biases)
+            [25:28] OBS1 (e.g. 'C1C')
+            [30:33] OBS2 (e.g. 'C2W')
+            [33:]   remainder: START END UNIT VALUE STD → split()[3] = value
+        """
         in_block = False
         with open(path, 'r', errors='ignore') as fh:
             for line in fh:
@@ -1003,23 +1110,33 @@ class DCBCorrector:
                     break
                 if not in_block or line.startswith('*'):
                     continue
-                # DSB  SV   PRN  STATION   OBS1 OBS2  START  END  UNIT  VALUE ...
-                parts = line.split()
-                if len(parts) < 10 or parts[0] != 'DSB':
+                if len(line) < 34 or line[1:4] != 'DSB':
                     continue
-                prn   = parts[2].strip()  # e.g. 'G01', empty for receiver biases
-                sta   = parts[3].strip()  # station (empty for satellite biases)
-                obs1  = parts[4].strip()  # e.g. 'C1C'
-                obs2  = parts[5].strip()  # e.g. 'C5Q'
+                prn  = line[11:14].strip()   # 'G01' for SV, 'G' for station rx
+                sta  = line[15:25].strip()   # blank for satellite, 'FFMJ' for rx
+                obs1 = line[25:28].strip()   # e.g. 'C1C'
+                obs2 = line[30:33].strip()   # e.g. 'C2W' — blank for OSB entries
+                if not obs1 or not obs2:
+                    continue                  # skip OSB (single-signal absolute bias)
+                rest = line[33:].split()     # ['START', 'END', 'UNIT', 'VALUE', 'STD']
+                if len(rest) < 4:
+                    continue
                 try:
-                    val_ns = float(parts[9])  # bias in nanoseconds
-                except (IndexError, ValueError):
+                    val_ns = float(rest[3])  # bias value in nanoseconds
+                except ValueError:
                     continue
                 pair_key = f"{obs1}-{obs2}"
-                if prn:
+                if prn and not sta:
                     self._sv_dcb.setdefault(prn, {})[pair_key] = val_ns
                 if sta:
-                    self._sta_dcb.setdefault(sta.upper(), {})[pair_key] = val_ns
+                    sta_key = sta.upper()
+                    self._sta_dcb.setdefault(sta_key, {})[pair_key] = val_ns
+                    # Also store constellation-specific entry so GPS (G) and
+                    # Galileo (E) can both keep their C1C-C5Q receiver DCBs.
+                    # prn on receiver lines is a single constellation letter.
+                    conid = prn[0] if prn else ''
+                    if conid:
+                        self._sta_dcb_con.setdefault(sta_key, {})[(conid, pair_key)] = val_ns
 
     # ------------------------------------------------------------------
     def get_sv_dcb_tecu(self, sv: str, obs1: str, obs2: str,
@@ -1046,17 +1163,377 @@ class DCBCorrector:
 
     # ------------------------------------------------------------------
     def get_rx_dcb_tecu(self, station: str, obs1: str, obs2: str,
-                          f1_hz: float, f2_hz: float) -> float:
-        """Receiver DCB in TECU for the given obs pair.  Returns 0.0 if not found."""
-        pair = f"{obs1}-{obs2}"
-        ns   = self._sta_dcb.get(station.upper(), {}).get(pair)
+                          f1_hz: float, f2_hz: float,
+                          conid: Optional[str] = None) -> float:
+        """Receiver DCB in TECU for the given obs pair.  Returns 0.0 if not found.
+
+        Parameters
+        ----------
+        conid : str, optional
+            One-letter constellation identifier (e.g. 'G', 'E', 'R', 'C').
+            When provided, constellation-specific receiver entries (e.g. the
+            Galileo 'E'-tagged C1C-C5Q entry vs the GPS 'G'-tagged C1C-C5Q
+            entry) are preferred over the generic fallback that is stored
+            under the bare obs-pair key.  This prevents GPS L1/L5 from
+            inadvertently using Galileo receiver DCBs and vice-versa for
+            the shared C1C-C5Q pair.
+        """
+        sta_key = station.upper()
+        pair    = f"{obs1}-{obs2}"
+        rev     = f"{obs2}-{obs1}"
+        ns: Optional[float] = None
+
+        # 1. Constellation-specific lookup (preferred)
+        if conid:
+            con_dict = self._sta_dcb_con.get(sta_key, {})
+            ns = con_dict.get((conid, pair))
+            if ns is None:
+                rev_ns = con_dict.get((conid, rev))
+                if rev_ns is not None:
+                    ns = -rev_ns
+
+        # 2. Generic (constellation-agnostic) fallback
         if ns is None:
-            ns = self._sta_dcb.get(station.upper(), {}).get(f"{obs2}-{obs1}")
-            if ns is not None:
-                ns = -ns
+            gen_dict = self._sta_dcb.get(sta_key, {})
+            ns = gen_dict.get(pair)
+            if ns is None:
+                rev_ns = gen_dict.get(rev)
+                if rev_ns is not None:
+                    ns = -rev_ns
+
         if ns is None:
             return 0.0
         return ns * 1e-9 * C * _beta_i(f1_hz, f2_hz)
+
+    # ------------------------------------------------------------------
+    def sv_pairs(self, conid: Optional[str] = None) -> Dict[str, set]:
+        """
+        Return all obs pairs stored in the SINEX file, grouped by SV.
+
+        Parameters
+        ----------
+        conid : str or None
+            If given, restrict to SVs whose identifier starts with this letter
+            (e.g. ``'E'`` for Galileo, ``'G'`` for GPS).  None returns all SVs.
+
+        Returns
+        -------
+        dict  sv → frozenset of 'OBS1-OBS2' strings  (e.g. ``{'E01': {'C1C-C5Q', ...}}``)
+        """
+        out: Dict[str, set] = {}
+        for sv, pairs in self._sv_dcb.items():
+            if conid is None or sv.startswith(conid):
+                out[sv] = set(pairs.keys())
+        return out
+
+    def sta_pairs(self, station: str) -> set:
+        """All obs pairs stored for *station* in the SINEX file."""
+        return set(self._sta_dcb.get(station.upper(), {}).keys())
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# §4b  Frequency / DCB coverage diagnostic
+# ──────────────────────────────────────────────────────────────────────────────
+
+def report_freq_dcb_coverage(
+    obs_path: str | Path,
+    dcb: "DCBCorrector | None",
+    station: str,
+    conids: Optional[List[str]] = None,
+) -> str:
+    """
+    Cross-reference the observable codes declared in a RINEX-3 observation
+    file's header against the DSB pairs available in a loaded DCBCorrector,
+    for every frequency-pair candidate in ``_FREQ_PRIORITY``.
+
+    For each (constellation, freq-pair) candidate the report shows:
+
+    * Whether all four required obs codes (code_A, code_B, phase_A, phase_B)
+      are declared in the RINEX header.
+    * What DSB pairs are stored for the **satellite** side in the SINEX file
+      (one row per unique Galileo SV, summarised as a union of pairs).
+    * What DSB pairs are stored for the **receiver** side (``station``).
+    * Whether a DCB match would be found at runtime, or whether the lookup
+      would silently return 0.0.
+
+    Parameters
+    ----------
+    obs_path : str or Path
+        Path to the RINEX-3 observation file (only the header is read).
+    dcb      : DCBCorrector or None
+        Loaded bias-SINEX corrector.  Pass ``None`` to skip the DCB side
+        (only the RINEX obs-type inventory is printed).
+    station  : str
+        Four-character station / receiver code used for receiver DCB lookups.
+    conids   : list of str or None
+        Constellation identifiers to report (e.g. ``['E', 'G']``).
+        Defaults to all constellations in ``_FREQ_PRIORITY``.
+
+    Returns
+    -------
+    str
+        The formatted report (also printed to stdout).
+    """
+    obs_path = Path(obs_path)
+    if conids is None:
+        conids = list(_FREQ_PRIORITY.keys())
+
+    # ── 1. Parse only the RINEX-3 header ─────────────────────────────────────
+    rinex_obs: Dict[str, List[str]] = {}   # sys_char → [obs_code, ...]
+    try:
+        with open(obs_path, 'r', errors='ignore') as fh:
+            for line in fh:
+                label = line[60:].rstrip() if len(line) > 60 else ''
+                if 'END OF HEADER' in label:
+                    break
+                if 'SYS / # / OBS TYPES' in label:
+                    sys_char = line[0]
+                    if sys_char == ' ':
+                        # Continuation line — append to last system
+                        for k in list(rinex_obs.keys())[::-1]:
+                            rinex_obs[k].extend(line[:60].split())
+                            break
+                    else:
+                        parts = line[1:60].split()
+                        if not parts:
+                            continue
+                        try:
+                            n_declared = int(parts[0])
+                        except ValueError:
+                            continue
+                        rinex_obs[sys_char] = list(parts[1:])[:n_declared]
+    except OSError as exc:
+        return f"[report_freq_dcb_coverage] Cannot read {obs_path}: {exc}"
+
+    # ── 2. Collect DCB pairs ───────────────────────────────────────────────────
+    if dcb is not None:
+        sv_pairs_all   = dcb.sv_pairs()          # {sv: {pair, ...}}
+        sta_pairs_here = dcb.sta_pairs(station)  # {pair, ...}
+    else:
+        sv_pairs_all   = {}
+        sta_pairs_here = set()
+
+    # ── 3. Build the report ───────────────────────────────────────────────────
+    lines_out: List[str] = []
+    sep = '─' * 78
+
+    lines_out.append(sep)
+    lines_out.append(
+        f"  Frequency / DCB coverage report"
+        f"   station={station.upper()}"
+        f"   obs={obs_path.name}"
+    )
+    lines_out.append(sep)
+
+    for conid in conids:
+        candidates = _FREQ_PRIORITY.get(conid, [])
+        if not candidates:
+            continue
+
+        rinex_codes_con = set(rinex_obs.get(conid, []))
+        # Union of all DCB pairs available for this constellation's SVs
+        sv_dcb_con_pairs: set = set()
+        sv_con_list: List[str] = []
+        for sv, pairs in sorted(sv_pairs_all.items()):
+            if sv.startswith(conid):
+                sv_dcb_con_pairs.update(pairs)
+                sv_con_list.append(sv)
+
+        con_names = {'G': 'GPS', 'E': 'Galileo', 'R': 'GLONASS', 'C': 'BeiDou'}
+        lines_out.append(
+            f"\n  [{conid}] {con_names.get(conid, conid)}"
+        )
+
+        # RINEX observable inventory for this constellation
+        if rinex_codes_con:
+            lines_out.append(
+                f"    RINEX obs codes declared: {', '.join(sorted(rinex_codes_con))}"
+            )
+        else:
+            lines_out.append(
+                f"    RINEX obs codes declared: (none — constellation not in file)"
+            )
+
+        # DCB pairs in SINEX file for this constellation
+        if sv_con_list:
+            lines_out.append(
+                f"    SINEX SV DCB pairs ({len(sv_con_list)} SVs): "
+                + (', '.join(sorted(sv_dcb_con_pairs)) if sv_dcb_con_pairs else '(none)')
+            )
+        else:
+            lines_out.append(
+                f"    SINEX SV DCB pairs: (no {conid} entries in SINEX file)"
+            )
+
+        # Receiver DCB pairs for this station
+        sta_dcb_con = {p for p in sta_pairs_here if _rx_pair_matches_conid(p, conid)}
+        if sta_dcb_con:
+            lines_out.append(
+                f"    SINEX RX DCB pairs (station {station.upper()}): "
+                + ', '.join(sorted(sta_dcb_con))
+            )
+        else:
+            lines_out.append(
+                f"    SINEX RX DCB pairs (station {station.upper()}): (none)"
+            )
+
+        # Per-candidate pair analysis
+        lines_out.append(f"    {'─'*70}")
+        lines_out.append(
+            f"    {'Freq pair':<12} {'code_A':>6} {'code_B':>6} "
+            f"{'phase_A':>7} {'phase_B':>7}  "
+            f"{'RINEX?':<8} {'SV DCB?':<10} {'RX DCB?':<10} Status"
+        )
+        lines_out.append(f"    {'─'*70}")
+
+        for (fA_n, fB_n, f1, f2, cA_opts, cB_opts, pA_opts, pB_opts) in candidates:
+            pair_label = f"{fA_n}/{fB_n}"
+
+            # Best available code from each list (first present in RINEX header)
+            cA_sel = next((c for c in cA_opts if c in rinex_codes_con), None)
+            cB_sel = next((c for c in cB_opts if c in rinex_codes_con), None)
+            pA_sel = next((c for c in pA_opts if c in rinex_codes_con), None)
+            pB_sel = next((c for c in pB_opts if c in rinex_codes_con), None)
+
+            rinex_ok = all([cA_sel, cB_sel, pA_sel, pB_sel])
+
+            # DCB match check: try forward and reversed pair
+            sv_dcb_match:  Optional[str] = None
+            rx_dcb_match:  Optional[str] = None
+            if cA_sel and cB_sel:
+                fwd = f"{cA_sel}-{cB_sel}"
+                rev = f"{cB_sel}-{cA_sel}"
+                # SV side: check if *any* SV of this constellation has this pair
+                if fwd in sv_dcb_con_pairs:
+                    sv_dcb_match = fwd
+                elif rev in sv_dcb_con_pairs:
+                    sv_dcb_match = f"↔{rev}"
+                # Check all candidate code combinations (data may pick any)
+                if sv_dcb_match is None:
+                    for cA_try in cA_opts:
+                        for cB_try in cB_opts:
+                            fp = f"{cA_try}-{cB_try}"
+                            rp = f"{cB_try}-{cA_try}"
+                            if fp in sv_dcb_con_pairs:
+                                sv_dcb_match = f"({fp})"
+                                break
+                            if rp in sv_dcb_con_pairs:
+                                sv_dcb_match = f"(↔{rp})"
+                                break
+                        if sv_dcb_match:
+                            break
+                # RX side
+                if fwd in sta_dcb_con or fwd in sta_pairs_here:
+                    rx_dcb_match = fwd
+                elif rev in sta_dcb_con or rev in sta_pairs_here:
+                    rx_dcb_match = f"↔{rev}"
+                if rx_dcb_match is None:
+                    for cA_try in cA_opts:
+                        for cB_try in cB_opts:
+                            fp = f"{cA_try}-{cB_try}"
+                            rp = f"{cB_try}-{cA_try}"
+                            if fp in sta_pairs_here:
+                                rx_dcb_match = f"({fp})"
+                                break
+                            if rp in sta_pairs_here:
+                                rx_dcb_match = f"(↔{rp})"
+                                break
+                        if rx_dcb_match:
+                            break
+
+            # Status flag
+            if not rinex_codes_con:
+                status = "SKIP — constellation absent from file"
+            elif not rinex_ok:
+                missing = []
+                if not cA_sel: missing.append(f"codeA∈{cA_opts[:2]}")
+                if not cB_sel: missing.append(f"codeB∈{cB_opts[:2]}")
+                if not pA_sel: missing.append(f"phsA∈{pA_opts[:2]}")
+                if not pB_sel: missing.append(f"phsB∈{pB_opts[:2]}")
+                status = "SKIP — RINEX missing: " + ", ".join(missing)
+            elif sv_dcb_match is None and rx_dcb_match is None:
+                status = "⚠ USABLE (no DCB found → correction=0)"
+            elif sv_dcb_match is None:
+                status = "⚠ USABLE (no SV DCB → SV bias uncorrected)"
+            elif rx_dcb_match is None:
+                status = "⚠ USABLE (no RX DCB → RX bias uncorrected)"
+            else:
+                # Check if selected RINEX codes match the DCB pair exactly
+                fwd = f"{cA_sel}-{cB_sel}"
+                exact_sv = (sv_dcb_match == fwd or sv_dcb_match == f"({fwd})")
+                exact_rx = (rx_dcb_match == fwd or rx_dcb_match == f"({fwd})")
+                if exact_sv and exact_rx:
+                    status = "✓ OK — exact match"
+                else:
+                    status = "✓ OK — closest match (code variant differs)"
+
+            cA_disp  = cA_sel  or f"?({cA_opts[0]})"
+            cB_disp  = cB_sel  or f"?({cB_opts[0]})"
+            pA_disp  = pA_sel  or f"?({pA_opts[0]})"
+            pB_disp  = pB_sel  or f"?({pB_opts[0]})"
+            rinex_s  = "YES" if rinex_ok else "NO"
+            sv_dcb_s = sv_dcb_match or "NONE"
+            rx_dcb_s = rx_dcb_match or "NONE"
+
+            f1_mhz   = f"{f1/1e6:.3f}" if f1 else "runtime"
+            f2_mhz   = f"{f2/1e6:.3f}" if f2 else "runtime"
+            lines_out.append(
+                f"    {pair_label:<12} {cA_disp:>6} {cB_disp:>6} "
+                f"{pA_disp:>7} {pB_disp:>7}  "
+                f"{rinex_s:<8} {sv_dcb_s:<10} {rx_dcb_s:<10} {status}"
+            )
+            lines_out.append(
+                f"    {'':12}   f₁={f1_mhz} MHz  f₂={f2_mhz} MHz  β_I≈"
+                + (f"{_beta_i(f1, f2):.4f} TECU/m" if f1 and f2 else "N/A")
+            )
+
+        lines_out.append("")
+
+    lines_out.append(sep)
+    report = "\n".join(lines_out)
+    print(report)
+    return report
+
+
+def _rx_pair_matches_conid(pair: str, conid: str) -> bool:
+    """
+    Heuristic: decide whether a receiver DCB obs pair plausibly belongs to
+    a given constellation.
+
+    The SINEX-Bias format does not tag receiver DCBs with a constellation, so
+    we use the RINEX band numbers that are unique to each system:
+
+    * Galileo  (E): bands 6, 7, 8  (C6x, C7x, C8x, L6x, L7x, L8x)
+    * BeiDou   (C): bands 2, 6     (C2I, C6I, L2I, L6I)
+    * GLONASS  (R): (all band 1/2 codes shared with GPS — not distinguished)
+    * GPS      (G): bands 2, 5     (and band 1 shared with others)
+
+    Returns True if the pair could belong to *conid*, or if no
+    constellation-specific bands are present (i.e., shared bands only).
+    """
+    codes = pair.replace('-', ' ').split()
+    band_chars = {c[1] for c in codes if len(c) == 3}
+    gal_exclusive  = {'6', '7', '8'}   # E6, E5b, E5 (AltBOC)
+    bds_exclusive  = {'2'}             # B1I at 1561 MHz (band 2)
+    # band 5 → shared by GPS L5, Galileo E5a, BeiDou B2a
+    # band 1 → shared by GPS L1, Galileo E1, BeiDou B1C
+    if conid == 'E':
+        if band_chars & gal_exclusive:
+            return True
+        # No exclusive Galileo band → could be shared (C1C-C5Q appears for both G+E)
+        return True   # always include shared-band pairs for Galileo
+    if conid == 'G':
+        if band_chars & gal_exclusive:
+            return False   # Galileo-only bands — not GPS
+        if band_chars & bds_exclusive:
+            return False
+        return True
+    if conid == 'C':
+        if band_chars & gal_exclusive:
+            return False
+        return True
+    # GLONASS: band 1 and 2 shared — include all
+    return True
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1064,11 +1541,19 @@ class DCBCorrector:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _first_available(ds, options: List[str]) -> Optional[str]:
-    """Return the first obs code in *options* that exists as a variable in *ds*."""
+    """Return the first obs code in *options* that exists in *ds* AND has at
+    least MIN_ARC_SAMPLES finite values for this SV slice.
+
+    A variable present at the dataset level but with no valid epochs for this
+    SV (e.g. C1C present for GPS but empty for a Galileo SV) is skipped so
+    that the correct per-constellation code is chosen.
+    """
     avail = set(ds.data_vars)
     for opt in options:
         if opt in avail:
-            return opt
+            arr = ds[opt].values.astype(float)
+            if int(np.isfinite(arr).sum()) >= MIN_ARC_SAMPLES:
+                return opt
     return None
 
 
@@ -1244,6 +1729,19 @@ def _compute_sv_tec(task: dict) -> list:
 
     elev_mask  = (elevs > ELEV_CUT_DEG)
     valid_mask = valid_both & elev_mask & np.all(np.isfinite(sv_xyz_km), axis=0)
+
+    if verbose:
+        fin_el  = elevs[np.isfinite(elevs)]
+        el_lo   = float(fin_el.min()) if len(fin_el) else 0.0
+        el_hi   = float(fin_el.max()) if len(fin_el) else 0.0
+        n_above = int(valid_mask.sum())
+        n_valid = int(valid_both.sum())
+        print(f"  [{station}] {sv_str:4s}: "
+              f"Kepler×{kepler_calls} (stride={stride})  "
+              f"el={el_lo:.0f}–{el_hi:.0f}°  "
+              f"{n_above}/{n_valid} ep above {ELEV_CUT_DEG:.0f}° cut",
+              flush=True)
+
     if not np.any(valid_mask):
         return []
 
@@ -1258,9 +1756,16 @@ def _compute_sv_tec(task: dict) -> list:
     if not arc_groups:
         return []
 
+    if verbose:
+        arc_sizes = [len(ag) for ag in arc_groups]
+        print(f"  [{station}] {sv_str:4s}: "
+              f"arc split → {len(arc_groups)} arc(s)  "
+              f"[{' '.join(str(n) for n in arc_sizes)} ep]",
+              flush=True)
+
     # ── F–J. Per-arc leveling, DCB correction, IPP, output ────────────────
     results = []
-    for arc_local_idx in arc_groups:
+    for arc_idx, arc_local_idx in enumerate(arc_groups):
         global_idx = valid_idx[arc_local_idx]
 
         arc_t   = t_sod[global_idx]
@@ -1275,8 +1780,26 @@ def _compute_sv_tec(task: dict) -> list:
         stec_tecu      = betaI * leveled_m
         stec_corrected = stec_tecu + dcb_sv_tecu + dcb_rx_tecu
 
-        med_tec = np.nanmedian(stec_corrected)
-        if not (0.1 < med_tec < 300.0):
+        med_tec    = np.nanmedian(stec_corrected)
+        arc_accept = (0.1 < med_tec < 300.0)
+        if verbose:
+            _w      = np.sin(np.radians(np.clip(arc_el, 5.0, 90.0))) ** 2
+            level_m = float(np.average(arc_P - arc_phi, weights=_w))
+            raw_lo  = float(np.nanmin(stec_tecu))
+            raw_hi  = float(np.nanmax(stec_tecu))
+            cor_lo  = float(np.nanmin(stec_corrected))
+            cor_hi  = float(np.nanmax(stec_corrected))
+            el_lo_a = float(arc_el.min())
+            el_hi_a = float(arc_el.max())
+            verdict = "ACCEPT" if arc_accept else f"REJECT (med={med_tec:.1f})"
+            print(f"  [{station}] {sv_str:4s}:   arc {arc_idx+1}/{len(arc_groups)}"
+                  f"  {len(arc_el)} ep  el={el_lo_a:.0f}–{el_hi_a:.0f}°"
+                  f"  level={level_m:+.1f}m"
+                  f"  raw={raw_lo:.1f}–{raw_hi:.1f}"
+                  f"  →DCB→{cor_lo:.1f}–{cor_hi:.1f} TECU"
+                  f"  med={med_tec:.1f}  {verdict}",
+                  flush=True)
+        if not arc_accept:
             log.debug("[%s] Arc %s median TEC=%.1f TECU — discarding.",
                       station, sv_str, med_tec)
             continue
@@ -1338,19 +1861,191 @@ def _compute_sv_tec(task: dict) -> list:
         results.append(obs)
 
     if verbose:
-        n_ep    = int(valid_both.sum())
-        fin_el  = elevs[np.isfinite(elevs)]
-        el_rng  = f"{fin_el.min():.0f}–{fin_el.max():.0f}" if len(fin_el) else "?"
-        tec_all = np.concatenate([r['TEC'] for r in results]) if results else np.array([])
-        tec_rng = f"{tec_all.min():.1f}–{tec_all.max():.1f}" if len(tec_all) else "—"
-        print(f"  [{station}] {sv_str:4s}: {n_ep:5d} ep  "
-              f"stride={stride:2d}  Kepler×{kepler_calls:3d}  "
-              f"el={el_rng}°  "
-              f"{len(results):2d} arcs  TEC={tec_rng} TECU  "
+        print(f"  [{station}] {sv_str:4s}: done  "
+              f"{len(results)}/{len(arc_groups)} arcs accepted  "
               f"{time.time()-t0_sv:.2f}s",
               flush=True)
 
     return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# §5c  Fast RINEX-3 observation file parser
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _parse_rinex3_fast(obs_path: Path, needed_meas: List[str]):
+    """Single-pass RINEX-3 observation file parser — O(N) vs georinex's O(N²).
+
+    georinex calls xarray.merge() once per epoch, so a 24-hour 30-second file
+    (2880 epochs) triggers ~4 million incremental merges.  This function
+    accumulates plain Python lists in one pass then builds the xarray Dataset
+    once at the end.
+
+    Parameters
+    ----------
+    obs_path    : path to an *uncompressed* RINEX-3 observation file (.rnx).
+    needed_meas : list of 3-char RINEX-3 observable codes to extract
+                  (e.g. ['C1C', 'L1C', 'C2W', 'L2W', ...]).
+
+    Returns
+    -------
+    xarray.Dataset with dims (time, sv) — same schema as ``gr.load()`` output.
+
+    Raises
+    ------
+    ValueError if the file is RINEX-2 or contains fewer than 2 parsed epochs.
+    """
+    import xarray as xr
+
+    needed_set = set(needed_meas)
+
+    # ── 1. Read entire file into memory (text is fast to read) ─────────────
+    with open(obs_path, 'r', errors='replace') as fh:
+        raw_lines = fh.readlines()
+
+    # ── 2. Parse header ────────────────────────────────────────────────────
+    obs_types: Dict[str, List[str]] = {}   # system char → [obs_code, ...]
+    sys_total: Dict[str, int]       = {}   # declared count per system
+    position_xyz = [0.0, 0.0, 0.0]
+    last_sys     = ''
+    header_end   = 0
+
+    for i, line in enumerate(raw_lines):
+        label = line[60:].rstrip() if len(line) > 60 else ''
+        if 'END OF HEADER' in label:
+            header_end = i + 1
+            break
+        if 'RINEX VERSION' in label:
+            try:
+                if float(line[:9]) < 3.0:
+                    raise ValueError(
+                        f"RINEX {float(line[:9]):.2f} — fast parser supports RINEX 3 only"
+                    )
+            except (ValueError, TypeError) as exc:
+                if 'fast parser' in str(exc):
+                    raise
+        if 'APPROX POSITION XYZ' in label:
+            try:
+                position_xyz = [float(line[0:14]), float(line[14:28]), float(line[28:42])]
+            except (ValueError, IndexError):
+                pass
+        if 'SYS / # / OBS TYPES' in label:
+            sys_char = line[0]
+            if sys_char == ' ':
+                # continuation line: same system, more codes
+                obs_types.setdefault(last_sys, []).extend(line[:60].split())
+            else:
+                last_sys = sys_char
+                parts    = line[1:60].split()
+                if not parts:
+                    continue
+                try:
+                    sys_total[sys_char] = int(parts[0])
+                except ValueError:
+                    pass
+                obs_types[sys_char] = list(parts[1:])
+
+    if header_end == 0:
+        raise ValueError("No END OF HEADER found")
+    if not obs_types:
+        raise ValueError("No SYS / # / OBS TYPES records — may be RINEX-2")
+
+    # Trim each obs list to the declared count
+    for s, n in sys_total.items():
+        obs_types[s] = obs_types.get(s, [])[:n]
+
+    # For each system: list of (column_index, obs_name) pairs we actually need
+    sys_needed: Dict[str, List[Tuple[int, str]]] = {
+        s: [(i, obs) for i, obs in enumerate(codes) if obs in needed_set]
+        for s, codes in obs_types.items()
+    }
+
+    # ── 3. Data pass: accumulate per-SV lists ─────────────────────────────
+    epoch_times: List[datetime] = []
+    # sv_data[sv_str][obs_name] = list of float|nan, one entry per epoch
+    sv_data: Dict[str, Dict[str, list]] = {}
+    ep_idx = -1
+
+    for line in raw_lines[header_end:]:
+        if not line:
+            continue
+        first = line[0]
+
+        if first == '>':
+            # Epoch header: > YYYY MM DD hh mm ss.sssssss  flag  numSV
+            try:
+                y, mo, d = int(line[2:6]),  int(line[7:9]),  int(line[10:12])
+                h, mi    = int(line[13:15]), int(line[16:18])
+                ss       = float(line[19:29])
+                sec      = int(ss)
+                usec     = int(round((ss - sec) * 1e6))
+                epoch_times.append(datetime(y, mo, d, h, mi, sec, usec))
+                ep_idx += 1
+                # Extend every existing SV list by one NaN for this new epoch
+                for sd in sv_data.values():
+                    for lst in sd.values():
+                        lst.append(np.nan)
+            except (ValueError, IndexError):
+                continue
+
+        elif ep_idx >= 0 and len(line) >= 3:
+            # SV data line: cols 0-2 = SV id, then observables at 16-char intervals
+            sv_str   = line[0:3].rstrip()
+            sys_char = sv_str[0] if sv_str else ''
+            cols     = sys_needed.get(sys_char)
+            if not cols:
+                continue
+
+            if sv_str not in sv_data:
+                # First time we see this SV — pre-fill NaN for all past epochs
+                sv_data[sv_str] = {
+                    obs: [np.nan] * (ep_idx + 1) for _, obs in cols
+                }
+
+            sv_dict = sv_data[sv_str]
+            n_line  = len(line)
+            for col_idx, obs_name in cols:
+                s = 3 + col_idx * 16
+                e = s + 14   # 14-char value field (LLI + signal-strength excluded)
+                if e <= n_line:
+                    raw = line[s:e].strip()
+                    if raw:
+                        try:
+                            sv_dict[obs_name][ep_idx] = float(raw)
+                        except ValueError:
+                            pass
+
+    n_epochs = len(epoch_times)
+    if n_epochs < 2:
+        raise ValueError(f"Only {n_epochs} epoch(s) parsed from {obs_path.name}")
+
+    # ── 4. Build xarray Dataset in one shot ───────────────────────────────
+    times_pd = pd.DatetimeIndex(epoch_times)
+    svs      = sorted(sv_data.keys())
+    n_svs    = len(svs)
+    sv_idx   = {sv: j for j, sv in enumerate(svs)}
+
+    all_obs: set = set()
+    for sd in sv_data.values():
+        all_obs.update(sd.keys())
+
+    data_vars = {}
+    for obs_name in sorted(all_obs):
+        arr = np.full((n_epochs, n_svs), np.nan)
+        for sv_str, j in sv_idx.items():
+            vals = sv_data[sv_str].get(obs_name)
+            if vals is not None:
+                n = min(len(vals), n_epochs)
+                arr[:n, j] = vals[:n]
+        data_vars[obs_name] = xr.DataArray(
+            arr, dims=('time', 'sv'),
+            coords={'time': times_pd, 'sv': svs},
+        )
+
+    ds = xr.Dataset(data_vars)
+    ds.attrs['position_xyz'] = position_xyz
+    ds.attrs['position']     = position_xyz   # backup key used by _rx_position
+    return ds
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1472,6 +2167,11 @@ class IGSTECPipeline:
         If given, load the nav file from this local path instead of CDDIS.
     local_dcb : str, optional
         If given, load the DCB SINEX from this local path.
+    dcb_product : {'CAS', 'CODE'}
+        DCB product preference passed to :meth:`RinexDownloader.dcb_sinex`.
+        ``'CODE'`` uses the CODE MGEX Final/Rapid product, which has better
+        GPS–Galileo inter-constellation calibration than the CAS RAPID product.
+        Defaults to ``'CAS'`` for backward compatibility.
     """
 
     def __init__(self,
@@ -1486,10 +2186,13 @@ class IGSTECPipeline:
                  local_obs:        Optional[str] = None,
                  local_nav:        Optional[str] = None,
                  local_dcb:        Optional[str] = None,
+                 dcb_product:      str = 'CAS',
                  ephem_stride:     int = 1,
                  show_progress:    bool = True,
                  verbose:          bool = False,
-                 num_sv_workers:   int  = 1) -> None:
+                 num_sv_workers:   int  = 1,
+                 tlim:             Optional[Tuple] = None,
+                 shared_ephem:     Optional["BroadcastEphemeris"] = None) -> None:
         if not _HAS_GEORINEX:
             raise ImportError(
                 "georinex is required.  Install with: pip install georinex unlzw3"
@@ -1501,10 +2204,16 @@ class IGSTECPipeline:
         self.local_obs     = local_obs
         self.local_nav     = local_nav
         self.local_dcb     = local_dcb
+        self.dcb_product   = dcb_product.upper() if dcb_product else 'CAS'
         self._ephem_stride   = max(1, int(ephem_stride))
         self._show_progress  = show_progress
         self._verbose        = verbose
         self._num_sv_workers = max(1, int(num_sv_workers))
+        self._tlim           = tlim  # optional (t_start, t_end) datetime pair
+        # Pre-built ephemeris shared across stations (avoids re-parsing nav file).
+        # When set, the nav download step is still executed (idempotent cache hit)
+        # but BroadcastEphemeris construction is skipped in run().
+        self._shared_ephem   = shared_ephem
 
         self.downloader = RinexDownloader(cache_dir=cache_dir, netrc_path=netrc_path)
 
@@ -1535,14 +2244,63 @@ class IGSTECPipeline:
             self.station, self.date, self.rinex_ver, self.local_obs)
         nav_path = self.downloader.nav_file(
             self.station, self.date, self.rinex_ver, self.local_nav)
-        dcb_path = self.downloader.dcb_sinex(self.date, self.local_dcb)
+        dcb_path = self.downloader.dcb_sinex(self.date, self.local_dcb,
+                                              product=self.dcb_product)
         if self._verbose:
             print(f"  [{self.station}] Files ready  ({time.time()-t0:.1f}s)", flush=True)
 
         # 2. Parse observation file
+        # Load priority:
+        #   (A) netCDF4 cache  — near-instant on 2nd+ run
+        #   (B) custom fast parser — O(N), single pass, no per-epoch merge
+        #   (C) georinex fallback — for RINEX-2, .crx Hatanaka, or parse errors
         t0 = time.time()
         log.info("[%s] Parsing RINEX obs …", self.station)
-        obs_ds = gr.load(str(obs_path))
+        obs_path_nc  = obs_path.with_suffix('.nc')
+        need_cache   = True
+        obs_ds       = None
+
+        # (A) netCDF4 cache
+        if obs_path_nc.exists():
+            try:
+                import xarray as _xr
+                obs_ds = _xr.open_dataset(str(obs_path_nc))
+                if self._tlim is not None:
+                    obs_ds = obs_ds.sel(time=slice(pd.Timestamp(self._tlim[0]),
+                                                   pd.Timestamp(self._tlim[1])))
+                need_cache = False
+                log.debug("[%s] RINEX obs loaded from netCDF4 cache", self.station)
+            except Exception as exc:
+                log.debug("[%s] Cache load failed (%s) — reparsing", self.station, exc)
+                obs_ds = None
+
+        # (B) Custom fast parser (RINEX-3 .rnx only)
+        if obs_ds is None and obs_path.suffix.lower() in ('.rnx', '.obs'):
+            try:
+                obs_ds = _parse_rinex3_fast(obs_path, _RINEX3_MEAS)
+                if self._tlim is not None:
+                    obs_ds = obs_ds.sel(time=slice(pd.Timestamp(self._tlim[0]),
+                                                   pd.Timestamp(self._tlim[1])))
+                log.debug("[%s] RINEX obs parsed with fast parser", self.station)
+            except Exception as exc:
+                log.debug("[%s] Fast parser failed (%s) — using georinex", self.station, exc)
+                obs_ds = None
+
+        # (C) georinex fallback
+        if obs_ds is None:
+            gr_kwargs: dict = {'meas': _RINEX3_MEAS}
+            if self._tlim is not None:
+                gr_kwargs['tlim'] = self._tlim
+            obs_ds = gr.load(str(obs_path), **gr_kwargs)
+
+        # Cache result as netCDF4 for future runs (skipped if loaded from cache)
+        if need_cache:
+            try:
+                obs_ds.to_netcdf(str(obs_path_nc))
+                log.debug("[%s] RINEX obs cached → %s", self.station, obs_path_nc.name)
+            except Exception as exc:
+                log.debug("[%s] Could not write netCDF4 cache: %s", self.station, exc)
+
         if self._verbose:
             n_sv  = len(obs_ds.sv.values)
             n_ep  = len(obs_ds.time.values)
@@ -1554,15 +2312,24 @@ class IGSTECPipeline:
         if self._verbose:
             print(f"  [{self.station}] Rx pos: lat={rx_lat:.3f}° lon={rx_lon:.3f}° "
                   f"alt={rx_alt_m/1e3:.1f}km", flush=True)
-
+        
         # 4. Broadcast ephemeris
         t0 = time.time()
         log.info("[%s] Loading navigation ephemeris …", self.station)
-        ephem = BroadcastEphemeris(nav_path)
-        if self._verbose:
-            n_eph = len(ephem._cache)
-            print(f"  [{self.station}] Ephemeris: {n_eph} SVs in cache  "
-                  f"({time.time()-t0:.1f}s)", flush=True)
+        if self._shared_ephem is not None:
+            # Reuse a pre-built ephemeris shared across stations; the mixed nav
+            # file is the same for all stations on a given day so parsing it
+            # once and passing it in here avoids O(N_stations) re-parses.
+            ephem = self._shared_ephem
+            if self._verbose:
+                print(f"  [{self.station}] Ephemeris: reusing shared cache "
+                      f"({len(ephem._cache)} SVs)", flush=True)
+        else:
+            ephem = BroadcastEphemeris(nav_path)
+            if self._verbose:
+                n_eph = len(ephem._cache)
+                print(f"  [{self.station}] Ephemeris: {n_eph} SVs in cache  "
+                      f"({time.time()-t0:.1f}s)", flush=True)
 
         # 5. DCB corrector
         dcb = DCBCorrector(dcb_path) if dcb_path else None
@@ -1634,12 +2401,13 @@ class IGSTECPipeline:
         arc_count  = 0
         _BAR       = 28
 
-        if self._num_sv_workers > 1 and n_tasks > 1:
+        effective_workers = 1 if self._verbose else self._num_sv_workers
+        if effective_workers > 1 and n_tasks > 1:
             if self._verbose:
                 print(f"  [{self.station}] Parallel TEC: {n_tasks} SVs × "
-                      f"{self._num_sv_workers} workers", flush=True)
+                      f"{effective_workers} workers", flush=True)
             t0 = time.time()
-            with ProcessPoolExecutor(max_workers=self._num_sv_workers) as pool:
+            with ProcessPoolExecutor(max_workers=effective_workers) as pool:
                 future_sv = {pool.submit(_compute_sv_tec, t): t['sv_str']
                              for t in sv_tasks}
                 done = 0
@@ -1726,15 +2494,27 @@ class IGSTECPipeline:
         Returns None if no usable frequency pair is found for this SV.
         """
         # ── A. Select frequency pair ──────────────────────────────────────────
-        freq_pair = self._select_freq_pair(sv_str, conid, sv_obs)
+        freq_pair = self._select_freq_pair(sv_str, conid, sv_obs,
+                                           dcb=dcb, station=self.station)
         if freq_pair is None:
-            log.debug("[%s] No suitable frequency pair for %s", self.station, sv_str)
+            if self._verbose:
+                print(f"  [{self.station}] {sv_str:4s}: no usable dual-freq pair — skip",
+                      flush=True)
+            else:
+                log.debug("[%s] No suitable frequency pair for %s", self.station, sv_str)
             return None
 
         (fA_name, fB_name, f1_hz, f2_hz,
          code_A_var, code_B_var, phase_A_var, phase_B_var) = freq_pair
 
         betaI = _beta_i(f1_hz, f2_hz)
+
+        if self._verbose:
+            print(f"  [{self.station}] {sv_str:4s}: "
+                  f"freq {fA_name}/{fB_name} ({f1_hz/1e6:.3f}/{f2_hz/1e6:.3f} MHz)  "
+                  f"code={code_A_var}+{code_B_var}  phase={phase_A_var}+{phase_B_var}  "
+                  f"betaI={betaI:.4f} TECU/m",
+                  flush=True)
 
         # ── B. Extract time series arrays ─────────────────────────────────────
         def _arr(varname: str) -> np.ndarray:
@@ -1757,10 +2537,22 @@ class IGSTECPipeline:
         valid_both = np.isfinite(P_diff) & np.isfinite(phi_diff)
 
         # Pre-compute DCB scalars (floats — picklable; avoid passing DCBCorrector)
+        # Pass conid so get_rx_dcb_tecu prefers the constellation-specific
+        # receiver entry (e.g. Galileo 'E'-tagged C1C-C5Q ≠ GPS 'G'-tagged).
         dcb_sv_tecu = (dcb.get_sv_dcb_tecu(sv_str, code_A_var, code_B_var, f1_hz, f2_hz)
                        if dcb else 0.0)
-        dcb_rx_tecu = (dcb.get_rx_dcb_tecu(self.station, code_A_var, code_B_var, f1_hz, f2_hz)
+        dcb_rx_tecu = (dcb.get_rx_dcb_tecu(self.station, code_A_var, code_B_var,
+                                             f1_hz, f2_hz, conid=conid)
                        if dcb else 0.0)
+
+        if self._verbose:
+            n_valid = int(valid_both.sum())
+            dcb_src = "SINEX" if dcb else "none"
+            print(f"  [{self.station}] {sv_str:4s}: "
+                  f"DCB({dcb_src}) sv={dcb_sv_tecu:+.3f} rx={dcb_rx_tecu:+.3f} "
+                  f"total={dcb_sv_tecu+dcb_rx_tecu:+.3f} TECU  "
+                  f"| {n_valid} valid dual-freq epochs",
+                  flush=True)
 
         # Pre-extract ephemeris records as plain dicts (picklable, no xarray)
         eph_records = ephem._cache.get(sv_str, [])
@@ -1820,12 +2612,22 @@ class IGSTECPipeline:
         return _compute_sv_tec(task)
 
     # ------------------------------------------------------------------
-    def _select_freq_pair(self, sv: str, conid: str, sv_obs) -> Optional[Tuple]:
+    def _select_freq_pair(self, sv: str, conid: str, sv_obs,
+                          dcb: Optional["DCBCorrector"] = None,
+                          station: Optional[str] = None) -> Optional[Tuple]:
         """Select the best dual-frequency pair for *sv* from *sv_obs*.
 
-        Iterates the priority list for the constellation and returns the first
-        pair where both code and phase observables have ≥ MIN_ARC_SAMPLES
-        finite values.
+        Collects all candidates with sufficient RINEX data, then ranks by DCB
+        match quality so that a pair with an exact SINEX entry is preferred
+        over one that would silently return a 0.0 correction:
+
+            tier 0 — SV DCB entry  AND  receiver DCB entry both found
+            tier 1 — SV DCB entry found only
+            tier 2 — no DCB match (correction will be 0)
+
+        Within each tier the original _FREQ_PRIORITY order is preserved
+        (stable sort).  For Galileo a warning is emitted when no exact match
+        is available for any viable pair.
 
         Returns
         -------
@@ -1834,6 +2636,12 @@ class IGSTECPipeline:
         """
         candidates = _FREQ_PRIORITY.get(conid, [])
         avail = set(sv_obs.data_vars)
+
+        def _n_valid(var: str) -> int:
+            v = sv_obs[var].values.astype(float)
+            return int(np.isfinite(v).sum())
+
+        viable: list = []  # (dcb_tier, fA_n, fB_n, f1, f2, cA, cB, pA, pB)
 
         for (fA_n, fB_n, f1, f2, cA_opts, cB_opts, pA_opts, pB_opts) in candidates:
             cA = _first_available(sv_obs, cA_opts)
@@ -1845,23 +2653,48 @@ class IGSTECPipeline:
                           self.station, sv, fA_n, fB_n, cA, cB, pA, pB,
                           sorted(avail))
                 continue
+            if not all(_n_valid(v) >= MIN_ARC_SAMPLES for v in [cA, cB, pA, pB]):
+                continue
 
-            # Check data density
-            def _n_valid(var):
-                v = sv_obs[var].values.astype(float)
-                return int(np.isfinite(v).sum())
+            # Resolve GLONASS frequencies at runtime
+            if conid == 'R':
+                k  = self._glo_channel(sv)
+                f1 = _glo_freq('G1', k)
+                f2 = _glo_freq('G2', k)
+                if f1 == 0 or f2 == 0:
+                    continue
 
-            if all(_n_valid(v) >= MIN_ARC_SAMPLES for v in [cA, cB, pA, pB]):
-                # Resolve GLONASS frequencies at runtime
-                if conid == 'R':
-                    k  = self._glo_channel(sv)
-                    f1 = _glo_freq('G1', k)
-                    f2 = _glo_freq('G2', k)
-                    if f1 == 0 or f2 == 0:
-                        continue
-                return (fA_n, fB_n, f1, f2, cA, cB, pA, pB)
+            # Determine DCB tier for this obs-code pair
+            dcb_tier = 2  # default: no DCB match
+            if dcb is not None:
+                fwd = f"{cA}-{cB}"
+                rev = f"{cB}-{cA}"
+                sv_dcbs  = dcb._sv_dcb.get(sv, {})
+                sta_dcbs = dcb._sta_dcb.get((station or '').upper(), {})
+                has_sv = (fwd in sv_dcbs) or (rev in sv_dcbs)
+                has_rx = (fwd in sta_dcbs) or (rev in sta_dcbs)
+                if has_sv and has_rx:
+                    dcb_tier = 0
+                elif has_sv:
+                    dcb_tier = 1
 
-        return None
+            viable.append((dcb_tier, fA_n, fB_n, f1, f2, cA, cB, pA, pB))
+
+        if not viable:
+            return None
+
+        # Stable sort: lowest tier wins (best DCB coverage first)
+        viable.sort(key=lambda x: x[0])
+        dcb_tier, fA_n, fB_n, f1, f2, cA, cB, pA, pB = viable[0]
+
+        if dcb_tier == 2 and dcb is not None and conid == 'E':
+            log.warning(
+                "[%s] %s: no exact DCB match for any viable Galileo pair — "
+                "DCB correction will be 0; selected %s/%s (%s-%s)",
+                self.station, sv, fA_n, fB_n, cA, cB,
+            )
+
+        return (fA_n, fB_n, f1, f2, cA, cB, pA, pB)
 
     # ------------------------------------------------------------------
     def _glo_channel(self, sv: str) -> int:
@@ -2050,13 +2883,14 @@ def process_igs_station(station:       str,
                          local_obs:     Optional[str] = None,
                          local_nav:     Optional[str] = None,
                          local_dcb:     Optional[str] = None,
+                         dcb_product:   str = 'CAS',
                          max_rays:      int = 500) -> List[dict]:
     """High-level wrapper: run the full IGS TEC pipeline for one station/date.
 
     Parameters
     ----------
     station, date, rinex_version, cache_dir, netrc_path, use_iri,
-    local_obs, local_nav, local_dcb
+    local_obs, local_nav, local_dcb, dcb_product
         See ``IGSTECPipeline`` for documentation.
     max_rays : int
         Maximum number of epochs per arc in the returned clean_list entries.
@@ -2076,6 +2910,7 @@ def process_igs_station(station:       str,
         local_obs     = local_obs,
         local_nav     = local_nav,
         local_dcb     = local_dcb,
+        dcb_product   = dcb_product,
     )
     obs_list = pipe.run()
 

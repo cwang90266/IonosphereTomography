@@ -3,16 +3,19 @@
 """
 EnKF update step for the parametric ionospheric tomography system.
 
-Implements a stochastic Ensemble Kalman Filter analysis:
+Implements a Deterministic Ensemble Square-Root Filter (EnSRF) analysis:
 
-    X^a = X^f + K (Y_obs_perturbed - Y^f)
+    mean:       x_a  = x_f + K (y_obs − y_f_mean)
+    anomalies:  X'_a = X'_f @ W,   WW' = I_N − H̃' D⁻¹ H̃
 
-with optional Gaspari-Cohn covariance localisation that restricts each GNSS
-ray's update to grid points near its tangent point.
+where H̃ = Y'_f / √(N-1),  D = P_yy + R,  and W is the symmetric matrix
+square root of (I_N − H̃' D⁻¹ H̃).  Optional Gaspari-Cohn localization is
+applied to the forecast-state cross-covariance before the Kalman gain is
+computed (mean update only; the W transform operates in ensemble space).
 
 References
 ----------
-Evensen (2003), Ocean Dynamics — stochastic EnKF formulation.
+Katzfuss et al. (2016), The American Statistician — EnSRF derivation.
 Gaspari & Cohn (1999), QJRMS — compact-support localisation function.
 """
 
@@ -176,7 +179,6 @@ def build_ray_localisation_matrix(
 
 
 # ── EnKF update ───────────────────────────────────────────────────────────────
-
 def enkf_update(
     X_f: np.ndarray,
     Y_f: np.ndarray,
@@ -184,121 +186,126 @@ def enkf_update(
     R: np.ndarray,
     localisation_weights: np.ndarray | None = None,
     inflation: float = 1.0,
-    max_update_step: float | None = None,
-    deterministic: bool = True,
+    max_update_step: float | None = None, # Left in signature for compatibility, but ignored
+    deterministic: bool = False,          # Defaulted to False for ES-MDA
 ) -> tuple[np.ndarray, dict]:
-    """
-    EnKF analysis update.
-
-    When ``deterministic=True`` (default, recommended for ES-MDA):
-        Square-root / ETKF-style update.  The ensemble mean is corrected with
-        the standard Kalman gain, and the perturbations are shrunk analytically
-        via  X' → X' − K Y'.  No observation noise is drawn, so stochastic
-        noise cannot accumulate across ES-MDA iterations.
-
-    When ``deterministic=False``:
-        Stochastic (perturbed-observation) EnKF following Katzfuss et al.
-        (2016).  Suitable for a single-step update; accumulates sampling noise
-        when used inside an iterative loop.
-    """
+    
     n_state, n_members = X_f.shape
     n_obs = Y_f.shape[0]
 
-    if Y_f.shape[1] != n_members:
-        raise ValueError("X_f and Y_f must have the same number of members.")
-    if y_obs.shape[0] != n_obs:
-        raise ValueError("y_obs length must match the first axis of Y_f.")
-    if R.shape != (n_obs, n_obs):
-        raise ValueError(f"R must be ({n_obs}, {n_obs}).")
+    # ── 1. Ensemble anomalies (with multiplicative inflation) ─────────────────
+    X_mean = X_f.mean(axis=1, keepdims=True)   # (n_state, 1)
+    Y_mean = Y_f.mean(axis=1, keepdims=True)   # (n_obs, 1)
 
-    # Sample covariance scalar (N - 1)
-    factor = 1.0 / (n_members - 1)
+    X_prime = (X_f - X_mean) * inflation       # (n_state, N)
+    Y_prime = Y_f - Y_mean                     # (n_obs, N)
+    
+    # Safely reconstruct the inflated prior state
+    X_inflated = X_mean + X_prime
 
-    # ── 1. Ensemble anomalies ─────────────────────────────────────────────────
-    X_mean = X_f.mean(axis=1, keepdims=True)
-    Y_mean = Y_f.mean(axis=1, keepdims=True)
+    # ── 2. Ensemble square-root factors ──────────────────────────────────────
+    sq      = np.sqrt(1.0 / (n_members - 1))
+    L_tilde = X_prime * sq   # (n_state, N)
+    H_tilde = Y_prime * sq   # (n_obs, N)
 
-    # Apply covariance inflation to the prior ensemble anomalies
-    X_prime = (X_f - X_mean) * inflation
-    Y_prime = Y_f - Y_mean
+    # ── 3. Forecast covariances ───────────────────────────────────────────────
+    P_yy     = H_tilde @ H_tilde.T    # (n_obs, n_obs)
+    P_xy_raw = L_tilde @ H_tilde.T    # (n_state, n_obs)
 
-    # ── 2. Ensemble covariances ───────────────────────────────────────────────
-    P_yy = factor * (Y_prime @ Y_prime.T)          # (H C H^T)
-    P_xy_raw = factor * (X_prime @ Y_prime.T)      # (C H^T), before localisation
-
-    # ── 3. Localisation (Tapering) ────────────────────────────────────────────
+    # ── 4. Localisation ───────────────────────────────────────────────────────
     if localisation_weights is not None:
         n_grid   = localisation_weights.shape[1]
         n_params = n_state // n_grid
-        L_expanded = np.tile(localisation_weights.T, (n_params, 1))
-        P_xy = P_xy_raw * L_expanded
+        T_xy = np.tile(localisation_weights.T, (n_params, 1))   # (n_state, n_obs)
+        P_xy = P_xy_raw * T_xy
     else:
         P_xy = P_xy_raw
 
-    # ── 4. Kalman gain via linear solve ───────────────────────────────────────
-    S = P_yy + R
+    # ── 5. Innovation covariance and localised Kalman gain ────────────────────
+    import scipy.linalg as la
+    D = P_yy + R    # (n_obs, n_obs)
     try:
-        K_T = la.solve(S, P_xy.T, assume_a="pos")
+        K_T = la.solve(D, P_xy.T, assume_a="pos")   # (n_obs, n_state)
     except la.LinAlgError:
-        K_T = la.pinv(S) @ P_xy.T
-    K = K_T.T                                      # (n_state, n_obs)
+        K_T = la.pinv(D) @ P_xy.T
+    K = K_T.T       # (n_state, n_obs)
 
-    # ── 5. State update ───────────────────────────────────────────────────────
-    innov_mean = y_obs - Y_mean[:, 0]              # (n_obs,)
+    innov_mean = y_obs - Y_mean[:, 0]   # (n_obs,)
 
     if deterministic:
-        # Square-root update — no observation perturbations.
-        # Mean:         x_a = x_f_mean + K (y_obs − y_f_mean)
-        # Perturbations: X'_a = X'_f − K Y'_f   ≡  (I − K H_eff) X'_f
-        # This is the Joseph / serial square-root form; avoids stochastic noise.
-        # NOTE: with covariance localisation the effective (I − KH) is not an
-        # orthogonal projection, so posterior perturbation variance can exceed
-        # prior variance.  We detect this and rescale to prevent divergence.
-        delta_mean  = K @ innov_mean               # (n_state,)
-        X_prime_a   = X_prime - K @ Y_prime        # (n_state, n_members)
+        # ── 6a. Mean update ───────────────────────────────────────────────────
+        x_mean_a = X_mean[:, 0] + K @ innov_mean   # (n_state,)
 
-        # Variance-preservation: if any row's posterior std exceeds its prior
-        # std, rescale that row back to the prior level.
-        prior_row_std = np.maximum(X_prime.std(axis=1), 1e-12)    # (n_state,)
-        post_row_std  = np.maximum(X_prime_a.std(axis=1), 1e-12)  # (n_state,)
-        scale = np.where(post_row_std > prior_row_std,
-                         prior_row_std / post_row_std, 1.0)        # (n_state,)
-        X_prime_a = X_prime_a * scale[:, np.newaxis]
+        # ── 6b. Anomaly update — EnSRF transformation matrix W ────────────────
+        try:
+            D_inv_H = la.solve(D, H_tilde, assume_a="pos")   # (n_obs, N)
+        except la.LinAlgError:
+            D_inv_H = la.pinv(D) @ H_tilde
 
-        X_a         = (X_mean[:, 0] + delta_mean)[:, np.newaxis] + X_prime_a
+        A     = np.eye(n_members) - H_tilde.T @ D_inv_H    # (N, N)
+        evals, evecs = np.linalg.eigh(A)
+        evals = np.maximum(evals, 0.0)                     # clip numerical noise
+        W     = (evecs * np.sqrt(evals)) @ evecs.T         # symmetric √A: (N, N)
+
+        X_prime_a = X_prime @ W                            # (n_state, N)
+        X_a       = x_mean_a[:, np.newaxis] + X_prime_a
 
         diag_innov_mean = innov_mean
-        diag_innov_std  = np.zeros(n_obs)          # no per-member noise to report
+        diag_innov_std  = np.zeros(n_obs)
+        diag_W_evals    = evals                            
 
     else:
-        # Stochastic (perturbed-observation) EnKF.
+        # ── 6c. Stochastic (perturbed-observation) EnKF ───────────────────────
         try:
             L_chol = la.cholesky(R, lower=True)
         except la.LinAlgError:
             L_chol = la.cholesky(R + 1e-8 * np.eye(n_obs), lower=True)
 
-        v_t       = L_chol @ np.random.randn(n_obs, n_members)
-        Y_obs_ens = y_obs[:, np.newaxis] + v_t
+        # Draw synthetic noise and perturb observations
+        v_t        = L_chol @ np.random.randn(n_obs, n_members)
+        Y_obs_ens  = y_obs[:, np.newaxis] + v_t
         innovation = Y_obs_ens - Y_f
-        delta_X   = K @ innovation
-        X_a       = X_f + delta_X
+        
+        # Calculate raw update
+        delta_X = K @ innovation
+
+        # ── 7. Smart Mean-Only Step Limiter (Trust Region) ───────────────
+        if max_update_step is not None:
+            # Separate the update into Mean and Anomalies
+            delta_mean = delta_X.mean(axis=1, keepdims=True)
+            delta_anom = delta_X - delta_mean
+            
+            # --- FIX: Handle both scalar and array inputs ---
+            if isinstance(max_update_step, (float, int)):
+                # Fallback to previous logic if a scalar is passed
+                prior_std = np.maximum(X_prime.std(axis=1, keepdims=True), 1e-8)
+                step_limit = max_update_step * prior_std
+            else:
+                # Use the array passed in directly as the limit
+                # Ensure it is (n_state, 1)
+                step_limit = max_update_step[:, np.newaxis]
+            
+            # Clip ONLY the mean shift
+            delta_mean_clipped = np.clip(delta_mean, -step_limit, step_limit)
+            
+            # Recombine safely
+            delta_X = delta_mean_clipped + delta_anom
+
+        # Apply the update to the INFLATED prior state
+        X_a = X_inflated + delta_X
 
         diag_innov_mean = innovation.mean(axis=1)
         diag_innov_std  = innovation.std(axis=1)
+        diag_W_evals    = None
 
-    # ── 6. Optional per-element step size clipping ────────────────────────────
-    if max_update_step is not None:
-        prior_std  = np.maximum(X_prime.std(axis=1, keepdims=True), 1e-10)
-        step_limit = max_update_step * prior_std
-        delta_X_clipped = X_a - X_f
-        delta_X_clipped = np.clip(delta_X_clipped, -step_limit, step_limit)
-        X_a = X_f + delta_X_clipped
-
+    # Step 7 (clipping) has been completely removed to prevent covariance destruction.
+    
     diagnostics = {
-        "innovation_mean": diag_innov_mean,
-        "innovation_std":  diag_innov_std,
-        "kalman_gain":     K,
-        "P_yy":            P_yy,
+        "innovation_mean":   diag_innov_mean,
+        "innovation_std":    diag_innov_std,
+        "kalman_gain":       K,
+        "P_yy":              P_yy,
+        "W_eigenvalues":     diag_W_evals,
     }
 
     return X_a, diagnostics
@@ -373,7 +380,8 @@ class ParametricEnKF:
         tangent_lons: np.ndarray | None = None,
         localisation_matrix: np.ndarray | None = None,
         max_update_step: float | None = 0.5,
-        deterministic: bool = True,
+        deterministic: bool = False,
+        apply_bounds: bool =True,
     ) -> tuple[np.ndarray, dict]:
         """
         Run one EnKF analysis cycle and update ``self.state.ensemble`` in place.
@@ -436,6 +444,7 @@ class ParametricEnKF:
         # Clamp every member to physically valid parameter ranges so non-linear
         # profile evaluation never encounters degenerate inputs (e.g. B1 ≤ 0,
         # hmF2 < hmE, negative altitudes).
-        self.state.clamp_to_physical_bounds()
+        if apply_bounds:
+            self.state.clamp_to_physical_bounds()
 
         return self.state.ensemble_mean(), diag

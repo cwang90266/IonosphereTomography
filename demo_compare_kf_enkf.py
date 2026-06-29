@@ -1379,22 +1379,24 @@ def _default_background_covariance() -> np.ndarray:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _plot_arc_innovation_diagnostic(
-    arc_labels:     list,           # (n_arcs,)  PRN strings, e.g. "G15", "E03"
-    arc_prior_mean: np.ndarray,     # (n_arcs,)  mean (obs−model) prior per arc
-    arc_post_mean:  np.ndarray,     # (n_arcs,)  mean (obs−model) post  per arc
-    arc_prior_rmse: np.ndarray,     # (n_arcs,)  RMSE prior per arc
-    arc_post_rmse:  np.ndarray,     # (n_arcs,)  RMSE post  per arc
-    arc_lats:       np.ndarray,     # (n_arcs,)  tangent-pt centroid lat
-    arc_lons:       np.ndarray,     # (n_arcs,)  tangent-pt centroid lon
-    all_prior:      np.ndarray,     # (n_total,) flat prior residuals → histogram
-    all_post_main:  np.ndarray,     # (n_total,) flat post  residuals → histogram
-    group_key:      str,
-    save_dir:       str,
-    filter_name:    str,            # "KF" or "EnKF" — used in titles and filename
-    prior_rmse:     float,          # global prior RMSE (for title)
-    post_rmse:      float,          # global post  RMSE (for title)
-    all_post_raw:   np.ndarray | None = None,  # optional 2nd post (histogram only)
-    post_raw_label: str = "Post (raw)",
+    arc_labels:         list,           # (n_arcs,)  PRN strings, e.g. "G15", "E03"
+    arc_prior_mean:     np.ndarray,     # (n_arcs,)  mean (obs−model) prior per arc
+    arc_post_mean:      np.ndarray,     # (n_arcs,)  mean (obs−model) post  per arc
+    arc_prior_rmse:     np.ndarray,     # (n_arcs,)  RMSE prior per arc
+    arc_post_rmse:      np.ndarray,     # (n_arcs,)  RMSE post  per arc
+    arc_lats:           np.ndarray,     # (n_arcs,)  tangent-pt centroid lat
+    arc_lons:           np.ndarray,     # (n_arcs,)  tangent-pt centroid lon
+    all_prior:          np.ndarray,     # (n_total,) flat prior residuals → histogram
+    all_post_main:      np.ndarray,     # (n_total,) flat post  residuals → histogram
+    group_key:          str,
+    save_dir:           str,
+    filter_name:        str,            # "KF" or "EnKF" — used in titles and filename
+    prior_rmse:         float,          # global prior RMSE (for title)
+    post_rmse:          float,          # global post  RMSE (for title)
+    all_post_raw:       np.ndarray | None = None,  # optional 2nd post (histogram only)
+    post_raw_label:     str = "Post (raw)",
+    mda_arc_means_list: list | None = None,  # per-step (n_arcs,) arrays (Panel A)
+    mda_flat_list:      list | None = None,  # per-step flat innovation arrays (Panel D)
 ) -> None:
     """
     Four-panel figure summarising per-arc TEC residual statistics.
@@ -1452,22 +1454,54 @@ def _plot_arc_innovation_diagnostic(
     bh    = 0.28
     y_pos = np.arange(n_arcs, dtype=float)
 
-    for k, si in enumerate(sort_idx):
-        y   = y_pos[k]
-        imp = bool(imp_mean[si])
+    _has_mda = mda_arc_means_list is not None and len(mda_arc_means_list) > 1
 
-        # Prior bar (steel blue, top slot)
-        ax_bar.barh(y + bh, arc_prior_mean[si], height=bh * 1.85,
-                    color="#2166ac", alpha=0.88,
-                    label="Prior  mean(obs−model)" if k == 0 else "")
+    if _has_mda:
+        # Overlapping bars: prior → MDA steps → final posterior
+        # All drawn at the same y position with partial alpha.
+        # Color gradient: dark blue (prior) → light blue/teal (steps) → green/red (final).
+        _n_steps   = len(mda_arc_means_list)
+        _bar_h     = bh * 2.6
+        # Blues palette for prior + intermediate steps
+        _step_cols = _plt.cm.Blues_r(np.linspace(0.15, 0.65, _n_steps))
 
-        # Post bar (green = improved, red = degraded, bottom slot)
-        bar_col = "#1a9641" if imp else "#d7191c"
-        ax_bar.barh(y - bh, arc_post_mean[si], height=bh * 1.85,
-                    color=bar_col, alpha=0.84,
-                    label=("Post  ↓ improved" if (k == 0 and imp)
-                           else ("Post  ↑ degraded" if (k == 0 and not imp)
-                                 else "")))
+        for k, si in enumerate(sort_idx):
+            y   = y_pos[k]
+            imp = bool(imp_mean[si])
+
+            # Draw MDA steps from bottom (prior) to top — earlier steps show through
+            for _si, (_smeans, _scol) in enumerate(
+                    zip(mda_arc_means_list, _step_cols)):
+                _alpha = 0.38 + 0.18 * (_si / max(_n_steps - 1, 1))
+                _lbl = ("Initial (prior)" if _si == 0
+                        else f"MDA step {_si}")
+                ax_bar.barh(y, _smeans[si], height=_bar_h,
+                            color=_scol, alpha=_alpha, zorder=_si + 2,
+                            label=_lbl if k == 0 else "")
+
+            # Final posterior bar (top layer, narrower so earlier bars bleed through)
+            _post_col = "#1a9641" if imp else "#d7191c"
+            ax_bar.barh(y, arc_post_mean[si], height=_bar_h * 0.55,
+                        color=_post_col, alpha=0.88, zorder=_n_steps + 3,
+                        label=("Final (post ↓)" if (k == 0 and imp)
+                               else ("Final (post ↑)" if (k == 0 and not imp)
+                                     else "")))
+    else:
+        # Original two-bar layout (no MDA data)
+        for k, si in enumerate(sort_idx):
+            y   = y_pos[k]
+            imp = bool(imp_mean[si])
+
+            ax_bar.barh(y + bh, arc_prior_mean[si], height=bh * 1.85,
+                        color="#2166ac", alpha=0.88,
+                        label="Prior  mean(obs−model)" if k == 0 else "")
+
+            bar_col = "#1a9641" if imp else "#d7191c"
+            ax_bar.barh(y - bh, arc_post_mean[si], height=bh * 1.85,
+                        color=bar_col, alpha=0.84,
+                        label=("Post  ↓ improved" if (k == 0 and imp)
+                               else ("Post  ↑ degraded" if (k == 0 and not imp)
+                                     else "")))
 
     ax_bar.axvline(0, color="k", lw=0.9)
     ax_bar.set_yticks(y_pos)
@@ -1481,11 +1515,25 @@ def _plot_arc_innovation_diagnostic(
         f"Global RMSE: Prior {prior_rmse:.2f} TECU  →  Post {post_rmse:.2f} TECU",
         fontsize=9, fontweight="bold",
     )
-    handles = [
-        _mpatch.Patch(color="#2166ac", alpha=0.88, label="Prior  mean(obs−model)"),
-        _mpatch.Patch(color="#1a9641", alpha=0.84, label="Post  ↓ |bias| reduced"),
-        _mpatch.Patch(color="#d7191c", alpha=0.84, label="Post  ↑ |bias| increased"),
-    ]
+    if _has_mda:
+        _n_steps = len(mda_arc_means_list)
+        _step_cols_leg = _plt.cm.Blues_r(np.linspace(0.15, 0.65, _n_steps))
+        handles = (
+            [_mpatch.Patch(color=_step_cols_leg[0], alpha=0.56,
+                           label="Initial (prior)")]
+            + [_mpatch.Patch(color=_step_cols_leg[_si],
+                             alpha=0.38 + 0.18 * (_si / max(_n_steps - 1, 1)),
+                             label=f"MDA step {_si}")
+               for _si in range(1, _n_steps)]
+            + [_mpatch.Patch(color="#1a9641", alpha=0.88, label="Final (post ↓ improved)"),
+               _mpatch.Patch(color="#d7191c", alpha=0.88, label="Final (post ↑ degraded)")]
+        )
+    else:
+        handles = [
+            _mpatch.Patch(color="#2166ac", alpha=0.88, label="Prior  mean(obs−model)"),
+            _mpatch.Patch(color="#1a9641", alpha=0.84, label="Post  ↓ |bias| reduced"),
+            _mpatch.Patch(color="#d7191c", alpha=0.84, label="Post  ↑ |bias| increased"),
+        ]
     ax_bar.legend(handles=handles, fontsize=8, loc="lower right")
     ax_bar.grid(axis="x", lw=0.4, alpha=0.5)
 
@@ -1569,40 +1617,100 @@ def _plot_arc_innovation_diagnostic(
     ax_map.grid(lw=0.3, alpha=0.4)
 
     # ── Panel D: residual histograms ──────────────────────────────────────────
+    _has_mda_flat = mda_flat_list is not None and len(mda_flat_list) > 1
+
     all_arrs = [all_prior, all_post_main]
     if all_post_raw is not None:
         all_arrs.append(all_post_raw)
+    if _has_mda_flat:
+        all_arrs += [f[np.isfinite(f)] for f in mda_flat_list]
     finite_vals = np.concatenate([a[np.isfinite(a)] for a in all_arrs])
     lo = np.percentile(finite_vals,  1) - 5
     hi = np.percentile(finite_vals, 99) + 5
     bins = np.linspace(lo, hi, 45)
+    x_k  = np.linspace(bins[0], bins[-1], 300)
 
-    hist_series = [
-        (all_prior,     "#2166ac",
-         f"Prior      μ={np.nanmean(all_prior):+.1f}  σ={np.nanstd(all_prior):.1f}"),
-        (all_post_main, "#1a9641",
-         f"Post {filter_name}   μ={np.nanmean(all_post_main):+.1f}  σ={np.nanstd(all_post_main):.1f}"),
-    ]
-    if all_post_raw is not None:
-        hist_series.append(
-            (all_post_raw, "#fdae61",
-             f"{post_raw_label}  μ={np.nanmean(all_post_raw):+.1f}  σ={np.nanstd(all_post_raw):.1f}")
-        )
-
-    for arr, col, lbl in hist_series:
-        ax_hist.hist(arr[np.isfinite(arr)], bins=bins,
-                     density=True, alpha=0.42, color=col, label=lbl)
+    if _has_mda_flat:
+        # Prior: filled histogram + KDE (reference anchor)
+        _arr_pr = all_prior[np.isfinite(all_prior)]
+        ax_hist.hist(_arr_pr, bins=bins, density=True, alpha=0.30,
+                     color="#2166ac",
+                     label=f"Prior  μ={np.nanmean(all_prior):+.1f}  σ={np.nanstd(all_prior):.1f}")
         try:
-            kde_fn = _kde(arr[np.isfinite(arr)])
-            x_k    = np.linspace(bins[0], bins[-1], 300)
-            ax_hist.plot(x_k, kde_fn(x_k), color=col, lw=1.6)
+            ax_hist.plot(x_k, _kde(_arr_pr)(x_k), color="#2166ac", lw=2.0)
         except Exception:
             pass
+
+        # MDA intermediate steps: KDE curves only (avoid filled-histogram clutter)
+        _n_flat = len(mda_flat_list)
+        _flat_cols = _plt.cm.Blues_r(np.linspace(0.15, 0.65, _n_flat))
+        for _fi, (_farr, _fcol) in enumerate(zip(mda_flat_list, _flat_cols)):
+            _a = _farr[np.isfinite(_farr)]
+            _mu, _sg = float(np.nanmean(_farr)), float(np.nanstd(_farr))
+            _lbl = (f"Initial (prior, rep)  μ={_mu:+.1f} σ={_sg:.1f}"
+                    if _fi == 0
+                    else f"MDA step {_fi}  μ={_mu:+.1f} σ={_sg:.1f}")
+            # Light-fill histogram + curve
+            ax_hist.hist(_a, bins=bins, density=True,
+                         alpha=0.18 + 0.06 * (_fi / max(_n_flat - 1, 1)),
+                         color=_fcol, label=_lbl)
+            try:
+                ax_hist.plot(x_k, _kde(_a)(x_k), color=_fcol,
+                             lw=1.3 + 0.4 * (_fi / max(_n_flat - 1, 1)),
+                             alpha=0.75 + 0.20 * (_fi / max(_n_flat - 1, 1)))
+            except Exception:
+                pass
+
+        # Final posterior: filled + KDE (prominent anchor)
+        _arr_po = all_post_main[np.isfinite(all_post_main)]
+        ax_hist.hist(_arr_po, bins=bins, density=True, alpha=0.35,
+                     color="#1a9641",
+                     label=f"Final post  μ={np.nanmean(all_post_main):+.1f}  σ={np.nanstd(all_post_main):.1f}")
+        try:
+            ax_hist.plot(x_k, _kde(_arr_po)(x_k), color="#1a9641", lw=2.2)
+        except Exception:
+            pass
+
+        if all_post_raw is not None:
+            _arr_rw = all_post_raw[np.isfinite(all_post_raw)]
+            ax_hist.hist(_arr_rw, bins=bins, density=True, alpha=0.28,
+                         color="#fdae61",
+                         label=f"{post_raw_label}  μ={np.nanmean(all_post_raw):+.1f}  σ={np.nanstd(all_post_raw):.1f}")
+            try:
+                ax_hist.plot(x_k, _kde(_arr_rw)(x_k), color="#fdae61", lw=1.6)
+            except Exception:
+                pass
+
+        ax_hist.set_title(
+            f"{filter_name}  residual distribution per MDA iteration", fontsize=8)
+    else:
+        hist_series = [
+            (all_prior,     "#2166ac",
+             f"Prior      μ={np.nanmean(all_prior):+.1f}  σ={np.nanstd(all_prior):.1f}"),
+            (all_post_main, "#1a9641",
+             f"Post {filter_name}   μ={np.nanmean(all_post_main):+.1f}  σ={np.nanstd(all_post_main):.1f}"),
+        ]
+        if all_post_raw is not None:
+            hist_series.append(
+                (all_post_raw, "#fdae61",
+                 f"{post_raw_label}  μ={np.nanmean(all_post_raw):+.1f}  σ={np.nanstd(all_post_raw):.1f}")
+            )
+
+        for arr, col, lbl in hist_series:
+            ax_hist.hist(arr[np.isfinite(arr)], bins=bins,
+                         density=True, alpha=0.42, color=col, label=lbl)
+            try:
+                kde_fn = _kde(arr[np.isfinite(arr)])
+                ax_hist.plot(x_k, kde_fn(x_k), color=col, lw=1.6)
+            except Exception:
+                pass
+
+        ax_hist.set_title(
+            f"{filter_name}  residual distribution (all samples)", fontsize=8)
 
     ax_hist.axvline(0, color="k", lw=0.8, linestyle="--")
     ax_hist.set_xlabel("Residual  obs − model  (TECU)", fontsize=8)
     ax_hist.set_ylabel("Density", fontsize=8)
-    ax_hist.set_title(f"{filter_name}  residual distribution (all samples)", fontsize=8)
     ax_hist.legend(fontsize=7)
     ax_hist.grid(lw=0.3, alpha=0.4)
 
@@ -2003,12 +2111,18 @@ def _run_parametric_enkf(
     # Save the prior ensemble before the update so we can build P_prior later
     prior_ensemble_snapshot = state.ensemble.copy()   # (N_STATE, n_geo, n_members)
 
+    # ── Apply prior inflation ONCE before the ES-MDA loop ─────────────────────
+    if inflation > 1.0:
+        print(f"  [EnKF] Applying prior covariance inflation (factor {inflation})")
+        X_mean = state.ensemble.mean(axis=2, keepdims=True)
+        state.ensemble = X_mean + (state.ensemble - X_mean) * inflation
+
     enkf = ParametricEnKF(
         state         = state,
         grid_lats     = grid_lats,
         grid_lons     = grid_lons,
         loc_radius_km = loc_radius_km,
-        inflation     = inflation,
+        inflation     = 1.0,  # <-- FIX: Set to 1.0 so it doesn't double-dip inside assimilate()
     )
 
     # ── Helper: print per-arc mean TEC residual ───────────────────────────────
@@ -2053,7 +2167,7 @@ def _run_parametric_enkf(
         R                   = R,              # un-inflated — full correction in one step
         localisation_matrix = L_ray,
         max_update_step     = max_update_step,
-        deterministic       = True,
+        deterministic       = False,
     )
     Y_raw_post_ens  = ObservationOperator(raw_state, alt_grid).compute_stec_ensemble(
         rep_rays, grid_point_weights=rep_W
@@ -2073,22 +2187,29 @@ def _run_parametric_enkf(
     print(f"\n  [EnKF] {_update_label}, "
           f"{n_update_obs} obs, {n_members} members …")
     R_mda = n_mda_iterations * R
+    _mda_inno_list: list[np.ndarray] = []   # per-step update-ray innovations
     for mda_i in range(n_mda_iterations):
         Y_mda_ens  = op.compute_stec_ensemble(rep_rays, grid_point_weights=rep_W)
         inno_mda   = y_obs_arc - Y_mda_ens.mean(axis=1)
+        _mda_inno_list.append(inno_mda.copy())
         _step_label = (
             f"ES-MDA {mda_i+1}/{n_mda_iterations}"
             if n_mda_iterations > 1
             else "EnKF update"
         )
         _print_arc_innovations(_step_label, inno_mda)
+        
+        # Only enforce physical clamps on the very last MDA iteration
+        # is_final_step = (mda_i == n_mda_iterations - 1)
+        
         analysis_mean, diag = enkf.assimilate(
             Y_f                  = Y_mda_ens,
             y_obs                = y_obs_arc,
             R                    = R_mda,
             localisation_matrix  = L_ray,
             max_update_step      = max_update_step,
-            deterministic        = True,
+            deterministic        = False,           # <-- FIX: Use Stochastic Path A
+            apply_bounds         = True    # <-- FIX: Delay physical clamping
         )
     # state.ensemble now holds the ES-MDA posterior
 
@@ -2176,21 +2297,33 @@ def _run_parametric_enkf(
             _arc_labels_e.append(f"arc{_i:02d}")
         _soff += _ns
 
+    # Per-arc mean residuals at each MDA step (from update rays)
+    _arc_upd_offsets = np.concatenate([[0], np.cumsum(arc_update_counts)])
+    _mda_arc_means_list: list[np.ndarray] = []
+    for _inno_step in _mda_inno_list:
+        _step_means = []
+        for _ai in range(len(clean_list)):
+            _sl = slice(int(_arc_upd_offsets[_ai]), int(_arc_upd_offsets[_ai + 1]))
+            _step_means.append(float(np.nanmean(_inno_step[_sl])))
+        _mda_arc_means_list.append(np.array(_step_means))
+
     _plot_arc_innovation_diagnostic(
-        arc_labels     = _arc_labels_e,
-        arc_prior_mean = np.array(_arc_prior_mean),
-        arc_post_mean  = np.array(_arc_post_mean),
-        arc_prior_rmse = np.array(_arc_prior_rmse),
-        arc_post_rmse  = np.array(_arc_post_rmse),
-        arc_lats       = np.array(_arc_lats_e),
-        arc_lons       = np.array(_arc_lons_e),
-        all_prior      = _all_prior_resid,
-        all_post_main  = _all_post_resid,
-        group_key      = group_key,
-        save_dir       = save_dir,
-        filter_name    = "EnKF",
-        prior_rmse     = prior_rmse,
-        post_rmse      = post_rmse,
+        arc_labels          = _arc_labels_e,
+        arc_prior_mean      = np.array(_arc_prior_mean),
+        arc_post_mean       = np.array(_arc_post_mean),
+        arc_prior_rmse      = np.array(_arc_prior_rmse),
+        arc_post_rmse       = np.array(_arc_post_rmse),
+        arc_lats            = np.array(_arc_lats_e),
+        arc_lons            = np.array(_arc_lons_e),
+        all_prior           = _all_prior_resid,
+        all_post_main       = _all_post_resid,
+        group_key           = group_key,
+        save_dir            = save_dir,
+        filter_name         = "EnKF",
+        prior_rmse          = prior_rmse,
+        post_rmse           = post_rmse,
+        mda_arc_means_list  = _mda_arc_means_list,
+        mda_flat_list       = _mda_inno_list,
     )
 
     # ── Build tec_slices — one profile per occultation ────────────────────────
@@ -3770,35 +3903,27 @@ def demo_compare_kf_enkf() -> None:
     # C_spatial (derived from IRI EDP ensemble) is used ONLY to seed the
     # Kronecker prior ensemble.  The ES-MDA update uses a pure GC taper on
     # ray–grid distances, set by loc_radius_km.
+    
+    # Assuming you have 8 parameters per grid point
+    # Adjust this array to match the order of parameters in your state vector
+    # Order: [NmF2(log), hmF2, H0, gamma, B0, B1, NmE(log), hmE]
+    max_step_array = np.array([0.2, 20.0, 10.0, 0.1, 5.0, 0.1, 0.2, 5.0])
+    
+    # If you have n_grid points, tile this to the full state size
+    n_grid = state.n_grid_points
+    full_max_step_array = np.tile(max_step_array, n_grid)
+
     enkf_config = {
-        "n_members":               200,
-        "loc_radius_km":           100.0,
-        "corr_length_km":          200.0,
-        "inflation":               1.0,
-        "sigma_obs_tecu":          10.0,
-        # With n_mda_iterations=1, R_mda = R (no inflation) and the loop runs
-        # exactly once — equivalent to a single-step deterministic square-root
-        # EnKF.  Diagnostic runs showed the raw single-step update (std 27.52→
-        # 24.91 TECU) outperforms the 4-iteration ES-MDA (std 28.94 TECU, RMSE
-        # 29→34 TECU), which oscillates because each re-linearization at the
-        # partially-updated state compounds localization errors.  One clean step
-        # with the full R avoids this runaway.
-        "n_mda_iterations":        1,
-        # No additional per-element clipping needed: the deterministic update
-        # with variance-preservation rescaling already prevents inflation.
-        # Leaving max_update_step at 1.0 (= 1× prior σ) keeps a mild safety
-        # margin without artificially truncating the optimal correction.
-        "max_update_step":         1.0,
-        # An occultation arc has ~6–8 independent altitude levels (ionospheric
-        # vertical coherence length ≈ 100 km; arc spans ≈ 100–700 km).
-        # Using all 200 KF-decimated samples per arc (5202 total) treats
-        # adjacent nearly-identical ray geometries as independent, inflating
-        # the effective observation information by ~30×, driving K → 1 per
-        # ES-MDA step and causing divergence.  7 per arc (≈217 total obs)
-        # is commensurate with both the physical DOF and the 200-member
-        # ensemble, keeping the gain well-conditioned.
-        "max_update_rays_per_arc": 100,
-    }
+            "n_members":               200,
+            "loc_radius_km":           100.0,
+            "corr_length_km":          200.0,
+            "inflation":               1.0, # <-- Handled manually below
+            "sigma_obs_tecu":          10.0,
+            "n_mda_iterations":        4,   # 4 iterations is standard for ES-MDA
+            "max_update_step":         0.15, # <-- FIX: Restrict to ~40% max change per step
+            "max_update_rays_per_arc": 100,
+            "max_update_step": full_max_step_array, # Pass the array, not a float
+        }
 
     isr_files = [
         "./DataFiles/EDPS/mlh250603m.002.nc",

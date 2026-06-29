@@ -151,6 +151,16 @@ def _tangent_latlon_single(
     return lat, lon
 
 
+def _haversine_dist_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two lat/lon points (degrees)."""
+    R = 6371.0
+    phi1, phi2 = np.radians(lat1), np.radians(lat2)
+    dphi  = np.radians(lat2 - lat1)
+    dlam  = np.radians(lon2 - lon1)
+    a = np.sin(dphi / 2) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlam / 2) ** 2
+    return 2 * R * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+
 def _arc_stats_from_tec_slices(
     tec_slices: list,
     clean_list: list,
@@ -402,6 +412,228 @@ def _plot_arc_innovation_diagnostic(
     print(f"    [{filter_name}] Arc innovation diagnostic → {out_path}")
 
 
+def _plot_arc_cross_validation_diagnostic(
+    arc_labels:     list,
+    arc_prior_mean: np.ndarray,
+    arc_post_mean:  np.ndarray,
+    arc_prior_rmse: np.ndarray,
+    arc_post_rmse:  np.ndarray,
+    arc_lats:       np.ndarray,
+    arc_lons:       np.ndarray,
+    assim_lats:     np.ndarray,
+    assim_lons:     np.ndarray,
+    all_prior:      np.ndarray,
+    all_post_main:  np.ndarray,
+    group_key:      str,
+    save_dir:       str,
+    filter_name:    str,
+    prior_rmse:     float,
+    post_rmse:      float,
+) -> None:
+    """
+    Four-panel cross-validation arc diagnostic figure.
+
+    Panel A  Signed mean residual bars (prior vs posterior, sorted by |prior|).
+    Panel B  Prior vs posterior RMSE scatter coloured by distance to nearest
+             assimilated RO tangent-point centroid.
+    Panel C  Geographic map: grey dots = assimilated arc centroids;
+             hollow grey ring (sized by prior RMSE, grey edge) = prior state;
+             filled circle (sized by post RMSE) coloured by ΔRMSE via diverging
+             colorbar (green = improved, red = degraded); PRN annotated once per arc.
+    Panel D  Per-sample residual KDE + histogram (prior vs posterior).
+    """
+    n_arcs   = len(arc_labels)
+    imp_mean = np.abs(arc_post_mean) < np.abs(arc_prior_mean)
+    sort_idx = np.argsort(np.abs(arc_prior_mean))[::-1]
+
+    # Distance from each CV arc centroid to the nearest assimilation arc centroid
+    has_assim = len(assim_lats) > 0 and len(assim_lons) > 0
+    dist_to_assim = np.full(n_arcs, np.nan)
+    if has_assim:
+        for k in range(n_arcs):
+            dists = [
+                _haversine_dist_km(arc_lats[k], arc_lons[k], alat, alon)
+                for alat, alon in zip(assim_lats, assim_lons)
+            ]
+            dist_to_assim[k] = float(np.min(dists))
+
+    fig = plt.figure(figsize=(18, max(13, 0.38 * n_arcs + 5)))
+    gs  = fig.add_gridspec(
+        3, 2,
+        width_ratios=[1.5, 1],
+        height_ratios=[1, 1, 1],
+        hspace=0.52, wspace=0.42,
+    )
+    ax_bar  = fig.add_subplot(gs[:, 0])
+    ax_scat = fig.add_subplot(gs[0, 1])
+    ax_map  = fig.add_subplot(gs[1, 1])
+    ax_hist = fig.add_subplot(gs[2, 1])
+
+    # ── Panel A: signed mean residual bar chart ───────────────────────────────
+    bh    = 0.28
+    y_pos = np.arange(n_arcs, dtype=float)
+    for k, si in enumerate(sort_idx):
+        y   = y_pos[k]
+        imp = bool(imp_mean[si])
+        ax_bar.barh(y + bh, arc_prior_mean[si], height=bh * 1.85,
+                    color="#2166ac", alpha=0.88,
+                    label="Prior  mean(obs−model)" if k == 0 else "")
+        bar_col = "#1a9641" if imp else "#d7191c"
+        ax_bar.barh(y - bh, arc_post_mean[si], height=bh * 1.85,
+                    color=bar_col, alpha=0.84,
+                    label=("Post  ↓ improved"  if (k == 0 and imp)
+                           else ("Post  ↑ degraded" if (k == 0 and not imp)
+                                 else "")))
+    ax_bar.axvline(0, color="k", lw=0.9)
+    ax_bar.set_yticks(y_pos)
+    ax_bar.set_yticklabels(
+        [arc_labels[sort_idx[k]] for k in range(n_arcs)],
+        fontsize=8, fontfamily="monospace",
+    )
+    ax_bar.set_xlabel("Mean residual  obs − model  (TECU)", fontsize=9)
+    ax_bar.set_title(
+        f"Cross-Validation mean TEC error — {filter_name}  ·  group {group_key}\n"
+        f"Global CV RMSE: Prior {prior_rmse:.2f} TECU  →  Post {post_rmse:.2f} TECU",
+        fontsize=9, fontweight="bold",
+    )
+    handles = [
+        _mpatch.Patch(color="#2166ac", alpha=0.88, label="Prior  mean(obs−model)"),
+        _mpatch.Patch(color="#1a9641", alpha=0.84, label="Post  ↓ |bias| reduced"),
+        _mpatch.Patch(color="#d7191c", alpha=0.84, label="Post  ↑ |bias| increased"),
+    ]
+    ax_bar.legend(handles=handles, fontsize=8, loc="lower right")
+    ax_bar.grid(axis="x", lw=0.4, alpha=0.5)
+
+    # ── Panel B: prior vs posterior RMSE scatter (coloured by dist to assim) ──
+    finite_dist = dist_to_assim[np.isfinite(dist_to_assim)]
+    if len(finite_dist) > 0:
+        dist_vmin = 0.0
+        dist_vmax = max(float(np.percentile(finite_dist, 95)), 100.0)
+        sc_cmap   = "plasma_r"
+        sc_norm   = _MplNorm(dist_vmin, dist_vmax)
+        sc_colors = dist_to_assim
+        cb_label  = "Distance to nearest\nassimilated RO centroid (km)"
+    else:
+        sc_cmap   = "viridis"
+        sc_norm   = _MplNorm(0, 1)
+        sc_colors = np.zeros(n_arcs)
+        cb_label  = "Distance (km) [unavailable]"
+
+    sc = ax_scat.scatter(arc_prior_rmse, arc_post_rmse,
+                         c=sc_colors, cmap=sc_cmap, norm=sc_norm,
+                         s=60, edgecolors="k", linewidths=0.4, zorder=4)
+    lim = max(float(np.concatenate([arc_prior_rmse, arc_post_rmse]).max()) * 1.08, 5.0)
+    ax_scat.plot([0, lim], [0, lim], "--", color="0.5", lw=0.9, label="no change")
+    ax_scat.set_xlim(0, lim); ax_scat.set_ylim(0, lim)
+    ax_scat.set_xlabel("Prior RMSE (TECU)", fontsize=8)
+    ax_scat.set_ylabel("Post RMSE (TECU)",  fontsize=8)
+    ax_scat.set_title(f"{filter_name}  Prior → Posterior RMSE per CV arc", fontsize=8)
+    ax_scat.legend(fontsize=7)
+    cb_sc = fig.colorbar(sc, ax=ax_scat, fraction=0.05, pad=0.02)
+    cb_sc.set_label(cb_label, fontsize=7)
+    for k in range(n_arcs):
+        ax_scat.annotate(arc_labels[k],
+                         (arc_prior_rmse[k], arc_post_rmse[k]),
+                         fontsize=5, ha="center", va="bottom",
+                         xytext=(0, 3), textcoords="offset points", zorder=5)
+
+    # ── Panel C: geographic map coloured by ΔRMSE ────────────────────────────
+    _sz_scale      = 5.0
+    sz_prior       = 20 + _sz_scale * arc_prior_rmse
+    sz_post        = 20 + _sz_scale * arc_post_rmse
+    delta_rmse_map = arc_post_rmse - arc_prior_rmse
+    v_map          = max(float(np.percentile(np.abs(delta_rmse_map), 95)), 2.0)
+
+    # All assimilated arc centroids as small grey reference dots
+    if has_assim:
+        ax_map.scatter(assim_lons, assim_lats,
+                       s=18, marker="o", color="#888888", zorder=2,
+                       label="Assimilated RO centroids")
+
+    # Prior: hollow circles, grey edge, sized by prior RMSE
+    ax_map.scatter(arc_lons, arc_lats,
+                   s=sz_prior, facecolors="none",
+                   edgecolors="#555555", linewidths=1.6, zorder=3)
+
+    # Posterior: filled circles, sized by post RMSE, coloured by ΔRMSE
+    sc_map = ax_map.scatter(arc_lons, arc_lats,
+                             s=sz_post,
+                             c=delta_rmse_map, cmap="RdYlGn_r",
+                             norm=_MplNorm(-v_map, v_map),
+                             alpha=0.85, edgecolors="k", linewidths=0.35, zorder=4)
+    cb_map = fig.colorbar(sc_map, ax=ax_map, fraction=0.05, pad=0.02)
+    cb_map.set_label("ΔRMSE  post − prior (TECU)\n← improved   degraded →", fontsize=7)
+
+    # PRN annotation once per unique PRN code
+    annotated_prns: set = set()
+    for k in range(n_arcs):
+        prn = arc_labels[k]
+        if prn not in annotated_prns:
+            ax_map.annotate(prn, (arc_lons[k], arc_lats[k]),
+                            fontsize=5, ha="center", va="bottom",
+                            xytext=(0, 4), textcoords="offset points", zorder=5)
+            annotated_prns.add(prn)
+
+    map_handles = [
+        _mpatch.Patch(facecolor="none", edgecolor="#555555",
+                      linewidth=1.6, label="Prior RMSE (ring size, grey edge)"),
+        _mpatch.Patch(facecolor="grey", edgecolor="k",
+                      linewidth=0.5, label="Post RMSE (dot size, coloured by ΔRMSE)"),
+    ]
+    if has_assim:
+        map_handles.insert(0, _mpatch.Patch(facecolor="#888888", edgecolor="none",
+                                            label="Assimilated RO centroids"))
+    ax_map.legend(handles=map_handles, fontsize=6, loc="best")
+    ax_map.set_xlabel("Longitude (°E)", fontsize=8)
+    ax_map.set_ylabel("Latitude (°N)",  fontsize=8)
+    ax_map.set_title(
+        f"{filter_name}  CV arcs: ○ Prior vs ● Posterior RMSE\n"
+        f"Dot colour: ΔRMSE (green = improved, red = degraded)",
+        fontsize=8,
+    )
+    ax_map.grid(lw=0.3, alpha=0.4)
+
+    # ── Panel D: per-sample residual KDE + histogram ──────────────────────────
+    finite_vals = np.concatenate([
+        all_prior[np.isfinite(all_prior)],
+        all_post_main[np.isfinite(all_post_main)],
+    ])
+    lo   = np.percentile(finite_vals,  1) - 5
+    hi   = np.percentile(finite_vals, 99) + 5
+    bins = np.linspace(lo, hi, 45)
+
+    hist_series = [
+        (all_prior,     "#2166ac",
+         f"Prior      μ={np.nanmean(all_prior):+.1f}  σ={np.nanstd(all_prior):.1f}"),
+        (all_post_main, "#1a9641",
+         f"Post {filter_name}   μ={np.nanmean(all_post_main):+.1f}  σ={np.nanstd(all_post_main):.1f}"),
+    ]
+    for arr, col, lbl in hist_series:
+        ax_hist.hist(arr[np.isfinite(arr)], bins=bins,
+                     density=True, alpha=0.42, color=col, label=lbl)
+        try:
+            kde_fn = _gaussian_kde(arr[np.isfinite(arr)])
+            x_k    = np.linspace(bins[0], bins[-1], 300)
+            ax_hist.plot(x_k, kde_fn(x_k), color=col, lw=1.6)
+        except Exception:
+            pass
+    ax_hist.axvline(0, color="k", lw=0.8, linestyle="--")
+    ax_hist.set_xlabel("Residual  obs − model  (TECU)", fontsize=8)
+    ax_hist.set_ylabel("Density", fontsize=8)
+    ax_hist.set_title(f"{filter_name}  CV residual distribution (all samples)", fontsize=8)
+    ax_hist.legend(fontsize=7)
+    ax_hist.grid(lw=0.3, alpha=0.4)
+
+    # ── save ──────────────────────────────────────────────────────────────────
+    os.makedirs(save_dir, exist_ok=True)
+    safe_key = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
+    tag      = filter_name.lower().replace(" ", "_").replace("(", "").replace(")", "")
+    out_path = os.path.join(save_dir, f"{tag}_arc_crossval_{safe_key}.png")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"    [{filter_name}] Arc cross-validation diagnostic → {out_path}")
+
+
 def _split_orbit_meta(
     meta: pd.DataFrame,
     seed: int = 42,
@@ -575,6 +807,8 @@ def _verif_tec_rmse(
             "prior_tec":  pr_arc,
             "post_tec":   po_arc,
             "tangent_km": cl["tangent_km"],
+            "LEO":        cl["LEO"],
+            "GNSS":       cl["GNSS"],
         })
 
     obs_all   = np.concatenate(all_obs)
@@ -939,6 +1173,8 @@ def tune_covariance_main() -> None:
             }
 
         # Arc innovation diagnostic for the assimilation arcs
+        _assim_arc_lats = np.array([])
+        _assim_arc_lons = np.array([])
         if res.get("status") == "Success":
             try:
                 _kf_stats = _arc_stats_from_tec_slices(
@@ -947,6 +1183,8 @@ def tune_covariance_main() -> None:
                     sat_ids    = res.get("sat_ids", []),
                 )
                 if _kf_stats["arc_labels"]:
+                    _assim_arc_lats = _kf_stats["arc_lats"]
+                    _assim_arc_lons = _kf_stats["arc_lons"]
                     _plot_arc_innovation_diagnostic(
                         arc_labels     = _kf_stats["arc_labels"],
                         arc_prior_mean = _kf_stats["arc_prior_mean"],
@@ -973,6 +1211,36 @@ def tune_covariance_main() -> None:
 
         # Cross-validation TEC plot (withheld occultations)
         _plot_verif_all_tec(cv, orbit1_key, label, run_save)
+
+        # Cross-validation arc diagnostic (per-arc residuals + proximity map)
+        if cv["tec_slices"]:
+            try:
+                _cv_stats = _arc_stats_from_tec_slices(
+                    tec_slices = cv["tec_slices"],
+                    clean_list = cv["tec_slices"],
+                    sat_ids    = cv["sat_ids"],
+                )
+                if _cv_stats["arc_labels"]:
+                    _plot_arc_cross_validation_diagnostic(
+                        arc_labels     = _cv_stats["arc_labels"],
+                        arc_prior_mean = _cv_stats["arc_prior_mean"],
+                        arc_post_mean  = _cv_stats["arc_post_mean"],
+                        arc_prior_rmse = _cv_stats["arc_prior_rmse"],
+                        arc_post_rmse  = _cv_stats["arc_post_rmse"],
+                        arc_lats       = _cv_stats["arc_lats"],
+                        arc_lons       = _cv_stats["arc_lons"],
+                        assim_lats     = _assim_arc_lats,
+                        assim_lons     = _assim_arc_lons,
+                        all_prior      = _cv_stats["all_prior"],
+                        all_post_main  = _cv_stats["all_post"],
+                        group_key      = orbit1_key,
+                        save_dir       = run_save,
+                        filter_name    = "KF (CV)",
+                        prior_rmse     = cv["verif_tec_rmse_prior"],
+                        post_rmse      = cv["verif_tec_rmse_post"],
+                    )
+            except Exception as _exc:
+                print(f"    [warn] CV arc diagnostic plot failed: {_exc}")
 
         gauss_tag = "noSmooth" if gauss is None else f"g{gauss[0]}h{gauss[1]}ll"
 
