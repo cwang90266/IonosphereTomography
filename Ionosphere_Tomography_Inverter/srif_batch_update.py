@@ -19,10 +19,20 @@ observations in streaming batches so that the full H is never assembled.
 
 Mathematical summary
 --------------------
-State prior:   x_f ∈ R^n,  P_f = L_f L_f^T   (Cholesky)
+State prior:   x_f ∈ R^n,  P_f = L_f L_f^T   (lower Cholesky)
 
-Information square root:
-    R̄_f = (L_f^{-1})^T  →  R̄_f^T R̄_f = P_f^{-1}
+Information square root (upper triangular R̄_f, required invariant
+R̄_f^T R̄_f = P_f^{-1} — note this is *not* the same as (L_f^{-1})^T, which
+instead satisfies (L_f^{-1})^T (L_f^{-1}) ... = P_f^{-1} under the opposite
+ordering; the two coincide only when P_f is diagonal):
+
+    L_f^{-1} = Q R   (QR decomposition)  →  R̄_f := R,
+    since  L_f^{-T} L_f^{-1} = R^T Q^T Q R = R^T R = P_f^{-1}
+
+For the separable (Kronecker) ionospheric prior
+``P_f = diag(sigma_abs) @ kron(C_v, C_s) @ diag(sigma_abs)`` this reduces to
+a closed form that avoids ever factorising the full n×n P_f — see
+``SRIFBatchUpdate.from_kron_prior``.
 
 Information vector:
     z_f = R̄_f x_f   →   R̄_f^T z_f = P_f^{-1} x_f  ≡ N_f (prior normal eqs)
@@ -87,6 +97,27 @@ def _chol_regularised(M: np.ndarray, eps: float = 1e-6) -> np.ndarray:
         d   = np.maximum(np.diag(M), 1.0)
         reg = M + eps * np.diag(d)
         return la.cholesky(reg, lower=True, check_finite=False)
+
+
+def _upper_chol_of_inverse(M: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """
+    Return upper-triangular  U  such that  U^T U = inv(M),  without ever
+    forming ``inv(M)`` explicitly.
+
+    ``M = L L^T`` (lower Cholesky).  ``inv(M) = L^{-T} L^{-1}``.  Taking the
+    QR decomposition of the lower-triangular ``L^{-1} = Q R`` gives
+    ``L^{-T} L^{-1} = R^T Q^T Q R = R^T R``, so ``U = R``.
+
+    Note: this is algebraically distinct from simply transposing
+    ``L^{-1}`` — ``(L^{-1})^T`` satisfies ``(L^{-1})(L^{-1})^T = inv(M)``
+    (the *other* matrix ordering), not ``U^T U = inv(M)``, and the two only
+    coincide when ``M`` is diagonal.
+    """
+    n       = M.shape[0]
+    L       = _chol_regularised(M, eps=eps)
+    L_inv   = la.solve_triangular(L, np.eye(n), lower=True, check_finite=False)
+    _, U    = np.linalg.qr(L_inv, mode='reduced')
+    return np.ascontiguousarray(U)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -154,16 +185,7 @@ class SRIFBatchUpdate:
         d       = np.maximum(np.diag(P_prior), 1.0)
         P_reg   = P_prior + reg_eps * np.diag(d)
 
-        # Cholesky: P_f = L_f L_f^T  (lower triangular L_f)
-        L_f     = _chol_regularised(P_reg, eps=reg_eps)
-
-        # Prior information square root (upper triangular):
-        # R̄_f  s.t.  R̄_f^T R̄_f = P_f^{-1}
-        # R̄_f = (L_f^{-1})^T  ←  computed via triangular solve
-        L_f_inv = la.solve_triangular(L_f, np.eye(n),
-                                      lower=True, check_finite=False)
-        # R̄_f is upper triangular
-        self._R: np.ndarray = np.ascontiguousarray(L_f_inv.T)   # (n, n)
+        self._R: np.ndarray = _upper_chol_of_inverse(P_reg, eps=reg_eps)  # (n, n)
 
         # Information vector:  z_f = R̄_f x_f
         # Satisfies: R̄_f^T z_f = P_f^{-1} x_f  (the prior normal equations)
@@ -173,6 +195,88 @@ class SRIFBatchUpdate:
         self._n_obs_total:  int   = 0
         self._n_arcs:       int   = 0   # arcs that contributed ≥1 finite row
         self._sum_sq_resid: float = 0.0
+
+    # ── Alternate constructor: Kronecker-structured prior ─────────────────────
+
+    @classmethod
+    def from_kron_prior(
+        cls,
+        x_prior:    np.ndarray,
+        sigma_abs:  np.ndarray,
+        C_v:        np.ndarray,
+        C_s:        np.ndarray,
+        obs_sigma:  float = 5.0,
+        chunk_size: int   = 512,
+        reg_eps:    float = 1e-6,
+    ) -> "SRIFBatchUpdate":
+        """
+        Fast constructor for priors of the separable form::
+
+            P_f = diag(sigma_abs) @ kron(C_v, C_s) @ diag(sigma_abs)
+
+        (vertical correlation ``C_v`` (n_alt × n_alt) ⊗ horizontal correlation
+        ``C_s`` (n_grid × n_grid)), as used for the ionospheric grid prior.
+
+        Building the full ``P_f`` and Cholesky-factorising/inverting it is
+        O(n_state³) with n_state = n_alt·n_grid — infeasible for n_state in
+        the tens of thousands (this is what previously caused multi-GB
+        RAM/swap thrashing during initialisation). This constructor instead
+        factorises only the small ``C_v``/``C_s`` blocks (O(n_alt³ + n_grid³))
+        and assembles the information square root in closed form::
+
+            U_v, U_s  upper triangular, U_v^T U_v = C_v^{-1}, U_s^T U_s = C_s^{-1}
+            R̄_f = kron(U_v, U_s) @ diag(1 / sigma_abs)
+
+        ``kron(U_v, U_s)`` is upper triangular (Kronecker product of two
+        upper-triangular factors), and one can verify
+        ``R̄_f^T R̄_f = diag(1/sigma_abs) @ kron(C_v^{-1}, C_s^{-1}) @ diag(1/sigma_abs)
+        = P_f^{-1}`` — the same invariant required by the default constructor.
+
+        The only O(n_state²) cost is materialising the ``kron(U_v, U_s)``
+        product itself (same size as ``R̄_f``); no O(n_state³) operation is
+        performed on the full state dimension.
+
+        Parameters
+        ----------
+        x_prior : ndarray, shape (n_state,)
+        sigma_abs : ndarray, shape (n_state,)
+            Absolute (non-normalised) marginal std. dev. of each state element.
+        C_v : ndarray, shape (n_alt, n_alt)
+            Vertical correlation matrix.
+        C_s : ndarray, shape (n_grid, n_grid)
+            Horizontal correlation matrix.
+        obs_sigma, chunk_size, reg_eps : see ``__init__``.
+        """
+        x_prior   = np.asarray(x_prior, dtype=float)
+        sigma_abs = np.asarray(sigma_abs, dtype=float)
+        C_v       = np.asarray(C_v, dtype=float)
+        C_s       = np.asarray(C_s, dtype=float)
+
+        n_v = C_v.shape[0]
+        n_s = C_s.shape[0]
+        n   = n_v * n_s
+        if x_prior.shape[0] != n or sigma_abs.shape[0] != n:
+            raise ValueError(
+                f"x_prior/sigma_abs must have length n_alt*n_grid = {n}; "
+                f"got {x_prior.shape[0]} / {sigma_abs.shape[0]}")
+
+        U_v = _upper_chol_of_inverse(C_v, eps=reg_eps)
+        U_s = _upper_chol_of_inverse(C_s, eps=reg_eps)
+
+        R = np.kron(U_v, U_s)
+        R *= (1.0 / sigma_abs)[None, :]
+
+        self = cls.__new__(cls)
+        self._n          = n
+        self._sigma_obs  = float(obs_sigma)
+        self._chunk_size = int(chunk_size)
+        self._R: np.ndarray = np.ascontiguousarray(R)
+        self._z: np.ndarray = self._R @ x_prior
+
+        self._n_obs_total:  int   = 0
+        self._n_arcs:       int   = 0
+        self._sum_sq_resid: float = 0.0
+        return self
 
     # ── Public properties ─────────────────────────────────────────────────────
 
@@ -259,11 +363,24 @@ class SRIFBatchUpdate:
 
     # ── Solve ─────────────────────────────────────────────────────────────────
 
-    def solve(self) -> tuple[np.ndarray, np.ndarray]:
+    def solve(
+        self, return_full_cov: bool = False
+    ) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Retrieve the posterior state estimate and diagonal posterior variance.
+        Retrieve the posterior state estimate and posterior variance.
 
-        Uses back-substitution only — no matrix inversion is performed.
+        Uses back-substitution only — no matrix inversion is performed for
+        the state estimate itself.
+
+        Parameters
+        ----------
+        return_full_cov : bool
+            If True, also return the full dense posterior covariance
+            ``P_post = R̄_a^{-1} R̄_a^{-T}`` (n × n).  The triangular inverse
+            is already computed as an intermediate for the diagonal, so this
+            costs no extra RAM beyond the one (n × n) buffer — comparable to
+            holding a single dense state-covariance matrix, as callers that
+            propagate a full P across assimilation cycles already do.
 
         Returns
         -------
@@ -272,6 +389,8 @@ class SRIFBatchUpdate:
         diag_P_post : ndarray, shape (n,)
             Diagonal of the posterior covariance  P_a = (R̄_a^T R̄_a)^{-1}.
             Computed as the row-wise squared-norm of  R̄_a^{-1}.
+        P_post : ndarray, shape (n, n) — only when ``return_full_cov=True``.
+            Full posterior covariance matrix.
         """
         n = self._n
         R = self._R
@@ -280,29 +399,37 @@ class SRIFBatchUpdate:
         # ── Posterior state via back-substitution ─────────────────────────────
         x_post = la.solve_triangular(R, z, lower=False, check_finite=False)
 
-        # ── Diagonal of P_a = R̄_a^{-1} R̄_a^{-T} ─────────────────────────────
+        # ── R̄_a^{-1}, needed for the diagonal (and optionally the full) P_a ──
         # R̄_a^{-1} is upper triangular (inverse of upper triangular is upper tri).
-        # Compute it column-by-column: solve R̄ v = e_j for each j.
-        # diag(P_a)[i] = Σ_j  R̄_a^{-1}[i,j]^2  =  ||row i of R̄_a^{-1}||²
-        #
         # We solve all n right-hand sides at once via a single triangular solve
         # with the identity matrix.  Result is (n × n).  RAM: n² × 8 bytes = 40 MB
         # for n = 2254 — acceptable.  For very large n (> 10 000) consider the
         # column-by-column approach to avoid large temporaries.
         try:
-            R_inv       = la.solve_triangular(R, np.eye(n),
-                                              lower=False, check_finite=False)
-            diag_P_post = np.sum(R_inv ** 2, axis=1)
+            R_inv = la.solve_triangular(R, np.eye(n),
+                                        lower=False, check_finite=False)
+            if return_full_cov:
+                P_post      = R_inv @ R_inv.T
+                diag_P_post = np.diag(P_post)
+            else:
+                diag_P_post = np.sum(R_inv ** 2, axis=1)
         except la.LinAlgError:
-            # Fallback: diagonal only via back-substitution of each basis vector
-            diag_P_post = np.empty(n)
-            e           = np.zeros(n)
+            # Fallback: build R_inv column-by-column via back-substitution of
+            # each basis vector (avoids the single large np.eye(n) solve).
+            R_inv = np.empty((n, n))
+            e     = np.zeros(n)
             for i in range(n - 1, -1, -1):
-                e[i] = 1.0
-                v    = la.solve_triangular(R, e, lower=False, check_finite=False)
-                diag_P_post += v ** 2
-                e[i] = 0.0
+                e[i]       = 1.0
+                R_inv[:, i] = la.solve_triangular(R, e, lower=False, check_finite=False)
+                e[i]       = 0.0
+            if return_full_cov:
+                P_post      = R_inv @ R_inv.T
+                diag_P_post = np.diag(P_post)
+            else:
+                diag_P_post = np.sum(R_inv ** 2, axis=1)
 
+        if return_full_cov:
+            return x_post, diag_P_post, P_post
         return x_post, diag_P_post
 
     # ── Diagnostics ───────────────────────────────────────────────────────────

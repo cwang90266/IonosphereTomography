@@ -20,6 +20,8 @@ from filterpy.kalman import KalmanFilter
 # Ensure you import these from your edp_samples module
 from EDPSamples.edp_samples import EDPSamples, interp_heights, find_containing_triangles
 from Ionosphere_Tomography_Inverter.gaussian_smoother import build_gaussian_smoother
+from Ionosphere_Tomography_Inverter.srif_batch_update import SRIFBatchUpdate
+from Ionosphere_Tomography_Inverter.info_batch_update import InfoBatchUpdate
 
 
 def _gaspari_cohn(r: np.ndarray) -> np.ndarray:
@@ -651,7 +653,15 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
               f"{n_arcs} arc(s), single parallel sweep) …")
 
         # ── Single Parallel call — workers spawned/joined once ───────────────
-        rows = Parallel(n_jobs=-1)(
+        # return_as="generator" keeps the one-pool-spawn performance benefit
+        # (see docstring) while streaming results back in submission order as
+        # each ray finishes, so we can render a live progress bar. This bar is
+        # unconditional — it reflects H-matrix construction only, independent
+        # of whether the caller later runs a localized (Λ) or plain batch
+        # update.
+        _BAR = 28
+        rows = []
+        ray_gen = Parallel(n_jobs=-1, return_as="generator")(
             delayed(_process_single_ray)(
                 all_gnss[i], all_leo[i], t,
                 altitude, n_height, n_geo, n_state_vars, n_state_vars_aug,
@@ -659,6 +669,14 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             )
             for i in range(total_rays)
         )
+        for done, row in enumerate(ray_gen, 1):
+            rows.append(row)
+            filled = int(_BAR * done / max(total_rays, 1))
+            bar    = '█' * filled + '░' * (_BAR - filled)
+            print(f"\r  -> Building H matrices [{bar}] {done:6d}/{total_rays} rays",
+                  end='', flush=True)
+        print(f"\r  -> Building H matrices [{'█' * _BAR}] "
+              f"{total_rays:6d}/{total_rays} rays  ✓", flush=True)
 
         # Scale grid columns (path length m → m/TECU)
         H_all = np.array(rows, dtype=np.float32)
@@ -826,7 +844,10 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
                    # -----------------------------------------------------------------------
                    distance_localization:  bool  = False,
                    localization_radius_km: float = 1000.0,
-                   localization_mode:      str   = 'gaussian') -> np.ndarray:
+                   localization_mode:      str   = 'gaussian',
+                   use_srif:               bool  = False,
+                   srif_chunk_size:        int   = 512,
+                   use_info_form:          bool  = False) -> np.ndarray:
         """
         Runs a single Kalman Filter assimilation step.
 
@@ -842,13 +863,51 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             of P @ H.T is multiplied by L[j, i] ∈ [0, 1] where L decreases with the
             3-D Euclidean distance from voxel j to the ray midpoint of observation i.
             Reduces spurious long-range updates. Requires podTc2_data.  Default: False.
+            Not supported together with ``use_srif`` — the Schur taper has no
+            information-form equivalent.
         localization_radius_km : float
             Characteristic length scale (km) for the localization kernel.  Default: 1000.
         localization_mode : str
             Localization kernel: 'gaussian', 'inverse_distance', or 'gaspari_cohn'.
             Default: 'gaussian'.
+        use_srif : bool
+            Replace the covariance-form update (which forms the dense
+            ``n_obs × n_obs`` innovation covariance ``S = H @ P @ H.T`` — the
+            RAM/time blowup for large joint observation batches) with a
+            Square-Root Information Filter update.  The SRIF ingests
+            ``obs_operator`` in row chunks of ``srif_chunk_size`` and
+            accumulates only an ``n_state × n_state`` information square
+            root, so memory no longer scales with ``n_obs``.  Mathematically
+            equivalent to the standard update for isotropic R (same
+            ``measurement_err`` scalar used as R = measurement_err · I).
+            Incompatible with ``distance_localization``.
+        srif_chunk_size : int
+            Rows processed per Householder QR step when ``use_srif=True``.
+            Smaller values use less peak RAM; larger values are faster.
+        use_info_form : bool
+            Replace the covariance-form update with a plain information-form
+            (normal-equations) batch update:  Λ += H^T R^-1 H,  N += H^T R^-1 y,
+            solved once at the end as  x = Λ^-1 N.  Same n_state × n_state
+            memory footprint as ``use_srif``, but each observation batch is
+            accumulated via a single BLAS matrix product (H^T H) instead of a
+            Householder QR re-triangularisation — substantially faster per
+            batch, at the cost of squaring H's condition number relative to
+            the square-root form (standard information-filter tradeoff).
+            Mutually exclusive with ``use_srif`` and incompatible with
+            ``distance_localization`` (same reason as ``use_srif``).
         """
         obs = np.asarray(obs).reshape(-1, 1)
+
+        if (use_srif or use_info_form) and distance_localization:
+            raise ValueError(
+                "use_srif/use_info_form=True is incompatible with "
+                "distance_localization=True: the Schur-product covariance "
+                "taper has no information-form equivalent. Disable one of the two."
+            )
+        if use_srif and use_info_form:
+            raise ValueError(
+                "use_srif and use_info_form are mutually exclusive — pick one."
+            )
 
         # 1. Generate or validate the H matrix
         if obs_operator is None:
@@ -889,32 +948,68 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             np.zeros((n_rel_arcs, 1)),   # arc biases: prior is zero
         ])
         background_tec = obs_operator @ x_prior_full
-        y = (obs - background_tec) - H @ self.x
+        resid = obs - background_tec   # (n_obs, 1) — residual relative to the fixed background
 
-        # 5. Compute cross-covariance P @ H.T and optionally apply localization.
-        #    When distance_localization=True, each element PHT[j, i] is multiplied
-        #    by L[j, i] ∈ [0, 1] — a weight inversely related to the distance from
-        #    voxel j to the ray midpoint of observation i.  Both the Kalman gain K
-        #    and the covariance update use the same localized PHT for consistency.
-        #    Toggle: pass distance_localization=True to assimilate() to enable.
-        PHT = self.P @ H.T   # (n_state_vars_aug, n_obs)
-
-        if distance_localization:
-            if podTc2_data is None:
-                raise ValueError(
-                    "podTc2_data must be provided when distance_localization=True "
-                    "(needed to compute ray midpoints for the localization matrix)."
-                )
-            L   = self._build_localization_matrix(
-                podTc2_data, localization_radius_km, localization_mode
+        if use_srif:
+            # ── Information-form update ──────────────────────────────────────
+            # Avoids ever forming PHT (n_state × n_obs) or S (n_obs × n_obs);
+            # the SRIF accumulates only an (n_state × n_state) information
+            # square root, processing H in row-chunks of srif_chunk_size.
+            # x_prior/P_prior here are the *current* self.x/self.P (already
+            # advanced through the Gauss-Markov predict above), and resid is
+            # fed directly (not H @ self.x subtracted) since the SRIF's own
+            # prior term accounts for the current state estimate.
+            srif = SRIFBatchUpdate(
+                x_prior    = self.x[:, 0],
+                P_prior    = self.P,
+                obs_sigma  = np.sqrt(max(measurement_err, 1e-6)),
+                chunk_size = srif_chunk_size,
             )
-            PHT = PHT * L   # Schur product: taper cross-covariances by distance
+            srif.update(H, resid[:, 0])
+            x_post, _diag_var, P_post = srif.solve(return_full_cov=True)
+            self.x = x_post[:, None]
+            self.P = P_post
+        elif use_info_form:
+            # ── Information-form (normal-equations) update ────────────────────
+            # Same rationale as the SRIF branch above (avoids PHT/S), but
+            # accumulates Λ/N via plain BLAS matrix products instead of a
+            # Householder QR step — faster per observation batch.
+            info = InfoBatchUpdate(
+                x_prior   = self.x[:, 0],
+                P_prior   = self.P,
+                obs_sigma = np.sqrt(max(measurement_err, 1e-6)),
+            )
+            info.update(H, resid[:, 0])
+            x_post, _diag_var, P_post = info.solve(return_full_cov=True)
+            self.x = x_post[:, None]
+            self.P = P_post
+        else:
+            # ── Covariance-form update ────────────────────────────────────────
+            # 5. Compute cross-covariance P @ H.T and optionally apply localization.
+            #    When distance_localization=True, each element PHT[j, i] is multiplied
+            #    by L[j, i] ∈ [0, 1] — a weight inversely related to the distance from
+            #    voxel j to the ray midpoint of observation i.  Both the Kalman gain K
+            #    and the covariance update use the same localized PHT for consistency.
+            #    Toggle: pass distance_localization=True to assimilate() to enable.
+            y = resid - H @ self.x
+            PHT = self.P @ H.T   # (n_state_vars_aug, n_obs)
 
-        S      = H @ PHT
-        S     += max(measurement_err, 1e-6) * np.eye(n_obs)
-        K      = np.linalg.solve(S, PHT.T).T
-        self.x = self.x + K @ y
-        self.P = self.P - K @ PHT.T
+            if distance_localization:
+                if podTc2_data is None:
+                    raise ValueError(
+                        "podTc2_data must be provided when distance_localization=True "
+                        "(needed to compute ray midpoints for the localization matrix)."
+                    )
+                L   = self._build_localization_matrix(
+                    podTc2_data, localization_radius_km, localization_mode
+                )
+                PHT = PHT * L   # Schur product: taper cross-covariances by distance
+
+            S      = H @ PHT
+            S     += max(measurement_err, 1e-6) * np.eye(n_obs)
+            K      = np.linalg.solve(S, PHT.T).T
+            self.x = self.x + K @ y
+            self.P = self.P - K @ PHT.T
 
         # 6. Split state: reconstruct grid EDP, topside TECU, and arc biases
         x_grid = self.x[:n_state_vars]

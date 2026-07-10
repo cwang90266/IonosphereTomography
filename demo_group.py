@@ -36,11 +36,18 @@ sys.path.insert(0, str(ROOT / "iri2020_new" / "src"))
 import numpy as np
 import pandas as pd
 import matplotlib
+
+# NumPy >=2.0 removed np.trapz (renamed to np.trapezoid); NumPy <2.0 doesn't
+# have np.trapezoid yet. Resolve once at import time so call sites work
+# under either version.
+_trapz = getattr(np, "trapezoid", None) or getattr(np, "trapz")
 matplotlib.use("Agg")                    # non-interactive for batch runs
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+import matplotlib.colors as mcolors
 from matplotlib.ticker import ScalarFormatter
 from matplotlib.gridspec import GridSpec
 from collections import defaultdict
@@ -62,6 +69,16 @@ from Ionosphere_Tomography_Inverter.Ionophy_Tomography_Inverter import (
 )
 # Re-use the global EDP builder and F2-peak extractor already in demo.py.
 from demo import build_daily_global_edps, extract_robust_f2_peak
+
+# Plotting functions consolidated into plotIonosphereTomography.py. Imported
+# back here (top-level, not deferred) because process_group() calls these
+# directly and several other modules monkey-patch _demo_group._plot_group at
+# runtime, which requires this to remain a persistent module attribute.
+from plotIonosphereTomography import (
+    _draw_roi_boundary, _roi_centre_idx,
+    _plot_altitude_slices, _plot_covariance_panels_tagged,
+    _plot_group,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Grouping parameters (adjust as needed)
@@ -228,6 +245,7 @@ def _group_bounding_box(
     alt_grid: np.ndarray,
     region_key: str,
     margin_deg: float = 10.0,
+    extra_points: list[tuple[float, float]] | None = None,
 ) -> tuple[float, float, float, float]:
     """
     Compute a bounding box covering all occultations in `parsed_list` using
@@ -235,7 +253,9 @@ def _group_bounding_box(
 
       1. Call EDPSamples.get_occultation_extrema for each occultation to
          obtain three ray-path corner points (top, TEC-max, bottom tangent).
-      2. Merge all corner lat/lon values across occultations.
+      2. Merge all corner lat/lon values across occultations, plus any
+         `extra_points` (e.g. IGS ground-station pierce points) supplied by
+         the caller.
       3. Determine polar vs. mid-lat from the midpoint of the *official*
          region bounding box (region_bounding_box(region_key)), not from the
          ray extrema, so the classification is always consistent with the
@@ -264,6 +284,11 @@ def _group_bounding_box(
             # Fallback: use the TEC-max tangent point stored as metadata.
             all_pts_lat.append(float(data.get("lat_tecmax_tangent", 0.0)))
             all_pts_lon.append(float(data.get("lon_tecmax_tangent", 0.0)))
+
+    if extra_points:
+        for _lat, _lon in extra_points:
+            all_pts_lat.append(float(_lat))
+            all_pts_lon.append(float(_lon))
 
     if not all_pts_lat:
         return region_bounding_box(region_key)
@@ -304,6 +329,55 @@ def _group_bounding_box(
     return lat_min, lat_max, lon_min, lon_max
 
 
+def _tight_bbox_from_points(
+    lats: list[float],
+    lons: list[float],
+    margin_deg: float,
+) -> tuple[float, float, float, float]:
+    """
+    Compute a bounding box from raw lat/lon points with a flat margin, using
+    the same min/max ± margin_deg logic as the mid-lat branch of
+    `_group_bounding_box` (including antimeridian handling), but WITHOUT the
+    polar pole-extension special case — the box never extends to ±90° lat or
+    the full lon span regardless of latitude.
+
+    RO polar meshes deliberately span the full longitude circle for ray-
+    geometry reasons (see `_group_bounding_box`), but using that same
+    full-globe extent to size `igs_only`'s regular lat/lon grid would blow up
+    its point count enormously for no benefit (ground stations are fixed
+    points, not orbiting).  Use this helper instead for that purpose.
+    """
+    pts = [(float(a), float(b)) for a, b in zip(lats, lons)
+           if np.isfinite(a) and np.isfinite(b)]
+    if not pts:
+        raise ValueError("_tight_bbox_from_points: no finite lat/lon points supplied")
+    lats = [p[0] for p in pts]
+    lons = [p[1] for p in pts]
+
+    lat_min = max(min(lats) - margin_deg, -90.0)
+    lat_max = min(max(lats) + margin_deg,  90.0)
+    lon_spread = max(lons) - min(lons)
+    if lon_spread <= 180.0:
+        lon_min = max(min(lons) - margin_deg, -180.0)
+        lon_max = min(max(lons) + margin_deg,  180.0)
+    else:
+        # Antimeridian crossing: convert to 0–360, expand, shift back.
+        lons_360 = [(l + 360) % 360 for l in lons]
+        raw_min  = min(lons_360) - margin_deg
+        raw_max  = max(lons_360) + margin_deg
+        lon_min  = raw_min - 360 if raw_min > 180 else raw_min
+        lon_max  = raw_max - 360 if raw_max > 180 else raw_max
+        if lon_min > lon_max:
+            # Points scattered across most/all of the longitude circle (e.g.
+            # extrema very close to a pole, where longitude is nearly
+            # undefined) — the antimeridian shift-back can't represent that
+            # as a single non-wrapped [lon_min, lon_max] range.  Fall back to
+            # the full circle rather than return an inverted (empty) range.
+            lon_min, lon_max = -180.0, 180.0
+
+    return lat_min, lat_max, lon_min, lon_max
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # §D  Core: process one geographic group with a joint KF update
 # ─────────────────────────────────────────────────────────────────────────────
@@ -326,6 +400,8 @@ def process_group(
     altitude_taper_min_scale: float = 0.05,
     topside_follow_f2:      bool  = True,
     extra_clean_list:       list  = None,
+    roi_extra_points:       list[tuple[float, float]] | None = None,
+    filter_label:           str   = "",
 ) -> dict:
     """
     Process a geographic group of occultations with a single joint KF update.
@@ -365,6 +441,16 @@ def process_group(
                        GNSS–LEO ray when building the H matrix.  Lower values
                        are faster; 500 (default) gives a good accuracy/speed
                        trade-off.  Reduce to 250 for a further ~2× speed-up.
+    filter_label     : Optional short tag (e.g. "kf") inserted into the
+                       generated "_seq"/"_joint" figure filenames as
+                       "_{filter_label}_seq"/"_{filter_label}_joint" (and into
+                       the covariance-plot filename as "_{filter_label}"
+                       before "_covariance"), so callers that run more than
+                       one filter type against the same group_key can tell
+                       gridded-KF outputs apart from other filters' outputs
+                       on disk.  Default "" preserves the original
+                       "_seq"/"_joint"/"_covariance" filenames exactly, so
+                       existing callers are unaffected.
 
     Returns
     -------
@@ -535,7 +621,7 @@ def process_group(
         #   Mid-lat (rectangular bins): keep the bounding box fixed to the ray
         #           extrema; remove the occultation whose centroid is farthest
         #           from the group centroid until the mesh fits.
-        _BBOX_MARGIN = 1.0    # degrees of padding around ray-path footprints
+        _BBOX_MARGIN = 100.0 / 111.32    # 100 km of padding around ray-path footprints
         _SHRINK_STEP = 1.0     # equatorward shrink per polar iteration (degrees)
         _is_polar    = region in ("POLAR_N", "POLAR_S")
 
@@ -595,7 +681,8 @@ def process_group(
         if _is_polar:
             # ── Polar: shrink equatorward boundary, then apply union mask ────
             lat_min, lat_max, lon_min, lon_max = _group_bounding_box(
-                clean_parsed, alt_grid, region, margin_deg=_BBOX_MARGIN
+                clean_parsed, alt_grid, region, margin_deg=_BBOX_MARGIN,
+                extra_points=roi_extra_points,
             )
             while True:
                 eds_bbox = global_edp_cache[profile_hour].subset_region(
@@ -628,7 +715,8 @@ def process_group(
             # ── Mid-lat: remove farthest outlier, then apply union mask ──────
             while True:
                 lat_min, lat_max, lon_min, lon_max = _group_bounding_box(
-                    clean_parsed, alt_grid, region, margin_deg=_BBOX_MARGIN
+                    clean_parsed, alt_grid, region, margin_deg=_BBOX_MARGIN,
+                    extra_points=roi_extra_points,
                 )
                 eds_bbox = global_edp_cache[profile_hour].subset_region(
                     lat_min, lat_max, lon_min, lon_max
@@ -876,6 +964,7 @@ def process_group(
             obs_operator    = H_joint.astype(np.float32),
             relaxation      = relaxation,
             measurement_err = measurement_err,
+            use_info_form   = True,
         )
 
         # ── 11. Posterior TEC ─────────────────────────────────────────────────
@@ -938,7 +1027,15 @@ def process_group(
         # uses the complete TEC arc rather than the validity-filtered subset.
         from Abel_Inverter import run_abel_inversion
         abel_list = []
+        n_ground_skipped = 0
         for i, data in enumerate(clean_parsed):
+            if "TEC_podTc2" not in data:
+                # Ground-station (IGS) arcs have no LEO-GNSS TEC-vs-tangent-
+                # altitude profile -- Abel inversion is an RO-only technique,
+                # so skip rather than hit run_abel_inversion's KeyError path.
+                abel_list.append(None)
+                n_ground_skipped += 1
+                continue
             try:
                 abel = run_abel_inversion(data)
                 if abel is None or len(abel.get("Ne", [])) == 0:
@@ -950,6 +1047,9 @@ def process_group(
             if abel is not None:
                 abel_nm, abel_hm = extract_robust_f2_peak(abel["Ne"], abel["alt_km"])
                 print(f"    [Abel] {clean_labels[i]}: NmF2={abel_nm:.2e} m⁻³  hmF2={abel_hm:.1f} km")
+        if n_ground_skipped:
+            print(f"    [Abel] Skipped {n_ground_skipped} ground-station arc(s) "
+                  f"(RO-only technique)")
 
         # Store for plotting
         result["tec_slices"]           = tec_slices           # sequential posterior TEC slices
@@ -973,11 +1073,21 @@ def process_group(
         if generate_plots:
             centre_idx_plt = _roi_centre_idx(eds_occ.geolocation, region)
 
+            # filter_label ("" by default) is inserted right after group_key
+            # so filenames stay unchanged for existing callers, while callers
+            # running multiple filter types against the same group_key (e.g.
+            # demo_isr_da_comparison.py) can pass filter_label="kf" to get
+            # "_kf_seq"/"_kf_joint"/"_kf_covariance" filenames instead of the
+            # bare "_seq"/"_joint"/"_covariance" ones.
+            _seq_suffix   = f"_{filter_label}_seq"   if filter_label else "_seq"
+            _joint_suffix = f"_{filter_label}_joint" if filter_label else "_joint"
+
             # ── Sequential summary figure (only when sequential was run) ─────
             if run_sequential:
                 result["plot_path"] = _plot_group(
                     result, save_dir=save_dir, group_key=group_key,
-                    suffix="_seq", mode_label="Sequential KF",
+                    suffix=_seq_suffix, mode_label="Sequential KF",
+                    igs_entries=extra_clean_list,
                 )
 
             # ── Joint summary figure ─────────────────────────────────────────
@@ -987,22 +1097,24 @@ def process_group(
             result_jnt["post_tec_rmse"] = result["joint_post_tec_rmse"]
             result["joint_plot_path"] = _plot_group(
                 result_jnt, save_dir=save_dir, group_key=group_key,
-                suffix="_joint", mode_label="Joint KF",
+                suffix=_joint_suffix, mode_label="Joint KF",
+                igs_entries=extra_clean_list,
             )
 
             # ── Altitude-slice ΔNe grid (joint posterior) ────────────────────
             try:
                 result["alt_slice_plot_path"] = _plot_altitude_slices(
                     result_jnt, save_dir=save_dir, group_key=group_key,
-                    suffix="_joint",
+                    suffix=_joint_suffix,
                 )
             except Exception as _exc_alt:
                 print(f"  [warn] Altitude-slice plot failed: {_exc_alt}")
 
             # ── Prior / posterior covariance panels ───────────────────────────
             try:
-                result["cov_plot_path"] = _plot_covariance_panels(
+                result["cov_plot_path"] = _plot_covariance_panels_tagged(
                     result_jnt, save_dir=save_dir, group_key=group_key,
+                    tag=filter_label,
                 )
             except Exception as _exc_cov:
                 print(f"  [warn] Covariance plot failed: {_exc_cov}")
@@ -1131,7 +1243,6 @@ def _draw_terminator(ax, dt: pd.Timestamp, zorder: int = 3) -> None:
     naive_dt = _dt.datetime(dt.year, dt.month, dt.day,
                             dt.hour, dt.minute, dt.second)
     ax.add_feature(Nightshade(naive_dt, alpha=0.30), zorder=zorder)
-    print(f"[terminator] Nightshade plotted for {naive_dt} on ax={ax}")
 
 
 def _draw_leo_path(ax, clean_list: list, occ_colours: list,
@@ -1161,57 +1272,6 @@ def _draw_leo_path(ax, clean_list: list, occ_colours: list,
         #         transform=ccrs.Geodetic(),
         #         marker="^", ms=7, color=col,
         #         mec="black", mew=0.6, zorder=zorder + 1)
-
-
-def _draw_roi_boundary(ax, region_key: str) -> None:
-    """
-    Draw the geographic region of interest on a cartopy axes.
-
-    Mid-latitude bins  : rectangle formed by four PlateCarree line segments.
-    Polar caps         : latitude boundary circle at ±POLAR_LAT_THRESHOLD.
-    """
-    kw = dict(transform=ccrs.PlateCarree(),
-              color="lime", lw=2.0, ls="-", zorder=3, alpha=0.9)
-
-    if region_key == "POLAR_N":
-        lons = np.linspace(-180, 180, 361)
-        ax.plot(lons, [POLAR_LAT_THRESHOLD] * 361, **kw,
-                label=f"ROI: North polar cap (>{POLAR_LAT_THRESHOLD:.0f}°N)")
-    elif region_key == "POLAR_S":
-        lons = np.linspace(-180, 180, 361)
-        ax.plot(lons, [-POLAR_LAT_THRESHOLD] * 361, **kw,
-                label=f"ROI: South polar cap (<{-POLAR_LAT_THRESHOLD:.0f}°N)")
-    else:
-        lat0, lat1, lon0, lon1 = region_bounding_box(region_key)
-        n_pts = 60
-        lats_lr = np.linspace(lat0, lat1, n_pts)
-        lons_tb = np.linspace(lon0, lon1, n_pts)
-        ax.plot(lons_tb,      [lat0] * n_pts, **kw)            # south edge
-        ax.plot(lons_tb,      [lat1] * n_pts, **kw)            # north edge
-        ax.plot([lon0] * n_pts, lats_lr,      **kw)            # west edge
-        ax.plot([lon1] * n_pts, lats_lr,      **kw,            # east edge + label
-                label=f"ROI: {lat0:.0f}–{lat1:.0f}°N  {lon0:.0f}–{lon1:.0f}°E")
-
-
-def _roi_centre_idx(verts_geo: np.ndarray, region_key: str) -> int:
-    """
-    Return the index of the EDP mesh vertex closest to the geographic
-    centre of the official region-of-interest bounding box.
-
-    ``verts_geo`` has shape (n_geo, 2) with col-0 = longitude, col-1 = latitude.
-    The ROI centre is the midpoint of ``region_bounding_box(region_key)``.
-    Distance is measured in plain lat/lon degrees (adequate for a small patch).
-    """
-    lat_min, lat_max, lon_min, lon_max = region_bounding_box(region_key)
-    roi_clat = (lat_min + lat_max) / 2.0
-    roi_clon = (lon_min + lon_max) / 2.0
-    dlat = verts_geo[:, 1] - roi_clat
-    dlon = verts_geo[:, 0] - roi_clon
-    # if region_key == "POLAR_N":
-        
-    # if region_key == "POLAR_S":    
-        
-    return int(np.argmin(dlat ** 2 + dlon ** 2))
 
 
 def _plot_trim_diagnostic(
@@ -1467,6 +1527,7 @@ def _plot_sequential_centre(
     ax_edp.xaxis.set_major_formatter(ne_formatter)
     ax_edp.grid(True, alpha=0.3, ls=":")
     ax_edp.legend(fontsize=8, loc="upper right", framealpha=0.85)
+    ax_edp.set_ylim(bottom=0)
 
     # Colour bar alongside the EDP panel to show step number
     sm_edp = plt.cm.ScalarMappable(
@@ -1537,278 +1598,6 @@ def _plot_sequential_centre(
     return plot_path
 
 
-def _plot_altitude_slices(
-    result: dict,
-    save_dir: str,
-    group_key: str,
-    *,
-    suffix: str = "",
-    altitudes_km: list[float] | None = None,
-) -> str:
-    """
-    3×3 grid of globe plots showing ΔNe (posterior − prior) at fixed altitude
-    slices across the EDP mesh.  Each panel is an orthographic globe centred on
-    the group ROI, coloured with a diverging coolwarm map.
-
-    Parameters
-    ----------
-    altitudes_km : list of 9 altitude values (km).  Defaults to 100:50:500.
-    """
-    if altitudes_km is None:
-        altitudes_km = list(range(100, 501, 50))   # 9 values: 100…500 km
-
-    alt_grid  = result["alt_grid"]
-    prior_edp = result["prior_edp_3d"]
-    post_edp  = result["post_edp_3d"]
-    eds_occ   = result["eds_occ"]
-    region    = result["region"]
-
-    verts_geo = eds_occ.geolocation    # (n_geo, 2): col0=lon, col1=lat
-    tris_geo  = eds_occ.mesh
-
-    lats_c = result["lats"]
-    lons_c = result["lons"]
-    clon   = float(np.nanmean(lons_c)) if lons_c else 0.0
-    clat   = float(np.nanmean(lats_c)) if lats_c else 0.0
-    proj   = ccrs.Orthographic(central_longitude=clon, central_latitude=clat)
-
-    n_rows, n_cols = 3, 3
-    fig, axes = plt.subplots(
-        n_rows, n_cols,
-        figsize=(18, 14),
-        subplot_kw={"projection": proj},
-    )
-    fig.suptitle(
-        f"ΔNe (posterior − prior) at altitude slices — {result['time_window']}  |  {region}",
-        fontsize=13,
-    )
-
-    # Pre-compute mean time for terminator — parse the time_window string directly
-    try:
-        mean_ts_sl = _parse_time_window(result["time_window"])
-    except Exception:
-        mean_ts_sl = None
-
-    # Compute a symmetric colour limit shared across all panels for comparability.
-    all_deltas = []
-    for alt_km in altitudes_km:
-        alt_idx = int(np.argmin(np.abs(alt_grid - alt_km)))
-        all_deltas.append(post_edp[alt_idx, :] - prior_edp[alt_idx, :])
-    global_max = float(np.nanpercentile(np.abs(np.concatenate(all_deltas)), 95))
-    if global_max == 0:
-        global_max = 1.0
-
-    for panel_idx, (ax, alt_km) in enumerate(zip(axes.flat, altitudes_km)):
-        alt_idx   = int(np.argmin(np.abs(alt_grid - alt_km)))
-        true_alt  = float(alt_grid[alt_idx])
-        delta     = post_edp[alt_idx, :] - prior_edp[alt_idx, :]
-
-        ax.set_global()
-        ax.add_feature(cfeature.LAND,      facecolor="whitesmoke", zorder=0)
-        ax.add_feature(cfeature.OCEAN,     facecolor="aliceblue",  zorder=0)
-        ax.add_feature(cfeature.COASTLINE.with_scale("110m"), lw=0.4, edgecolor="gray")
-        ax.gridlines(lw=0.2, alpha=0.3)
-
-        try:
-            tc = ax.tripcolor(
-                verts_geo[:, 0], verts_geo[:, 1], tris_geo,
-                delta,
-                transform=ccrs.Geodetic(),
-                cmap="coolwarm", shading="flat",
-                vmin=-global_max, vmax=global_max,
-                zorder=1,
-            )
-            cbar = fig.colorbar(tc, ax=ax, orientation="horizontal",
-                                shrink=0.7, pad=0.03, fraction=0.04)
-            cbar.set_label("ΔNe [m⁻³]", fontsize=7)
-            cbar.formatter.set_powerlimits((-2, 2))
-            cbar.update_ticks()
-        except Exception:
-            pass
-
-        if mean_ts_sl is not None:
-            try:
-                _draw_terminator(ax, mean_ts_sl, zorder=5)
-            except Exception:
-                pass
-        _draw_roi_boundary(ax, region)
-        ax.set_title(f"{true_alt:.0f} km", fontsize=10)
-
-    os.makedirs(save_dir, exist_ok=True)
-    safe_key  = group_key.replace("/", "_").replace(" ", "_")
-    plot_path = os.path.join(save_dir, f"group_{safe_key}{_NOISE_SUFFIX}_alt_slices{suffix}.png")
-    fig.savefig(plot_path, dpi=100, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved altitude-slice plot → {plot_path}")
-    return plot_path
-
-
-def _plot_covariance_panels(
-    result: dict,
-    save_dir: str,
-    group_key: str,
-    *,
-    hmF2_ref_km: float | None = None,
-) -> str:
-    """
-    Four-panel figure showing the EDP prior and posterior covariance structure.
-
-    Layout (2 rows × 2 cols):
-      Row 0 — Prior:     Alt-Alt correlation  |  Horizontal correlation at hmF2
-      Row 1 — Posterior: Alt-Alt correlation  |  Horizontal correlation at hmF2
-
-    The altitude-altitude panels average the grid block of P over all geo-point
-    pairs and normalise to a Pearson correlation matrix.
-
-    The horizontal panels fix one reference vertex (centre of the ROI) at the
-    altitude nearest to hmF2 (or the supplied hmF2_ref_km) and plot the
-    correlation of that state element with every other geo vertex at the same
-    altitude, mapped onto an orthographic globe.
-
-    Parameters
-    ----------
-    hmF2_ref_km : float or None
-        Altitude (km) for the horizontal panel.  Defaults to the prior F2-peak
-        altitude at the centre vertex.
-    """
-    import warnings
-
-    alt_grid  = result["alt_grid"]
-    prior_P   = result["prior_P"]
-    post_P    = result["post_P"]
-    eds_occ   = result["eds_occ"]
-    region    = result["region"]
-    prior_edp = result["prior_edp_3d"]
-
-    n_height  = len(alt_grid)
-    verts_geo = eds_occ.geolocation      # (n_geo, 2): col0=lon, col1=lat
-    n_geo     = verts_geo.shape[0]
-    n_sv      = n_height * n_geo
-
-    # Centre vertex for the horizontal slice reference
-    centre_idx = _roi_centre_idx(verts_geo, region)
-
-    # Choose hmF2 reference altitude
-    if hmF2_ref_km is None:
-        _, hmF2_ref_km = extract_robust_f2_peak(prior_edp[:, centre_idx], alt_grid)
-        if np.isnan(hmF2_ref_km):
-            hmF2_ref_km = float(alt_grid[n_height // 2])
-    alt_ref_idx = int(np.argmin(np.abs(alt_grid - hmF2_ref_km)))
-    true_alt_ref = float(alt_grid[alt_ref_idx])
-
-    # ── Helper: altitude-altitude Pearson correlation from augmented P ────────
-    def _alt_corr(P_aug):
-        P_grid = P_aug[:n_sv, :n_sv]
-        P_4d   = P_grid.reshape(n_height, n_geo, n_height, n_geo)
-        cov    = P_4d.mean(axis=(1, 3))                   # (n_height, n_height)
-        std    = np.sqrt(np.maximum(np.diag(cov), 0.0))
-        outer  = np.outer(std, std)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            return cov / np.where(outer == 0, 1e-10, outer)
-
-    # ── Helper: horizontal correlation at alt_ref_idx for centre vertex ───────
-    def _horiz_corr(P_aug):
-        P_grid  = P_aug[:n_sv, :n_sv]
-        P_4d    = P_grid.reshape(n_height, n_geo, n_height, n_geo)
-        # Covariance between (alt_ref, centre) and (alt_ref, every geo vertex)
-        cov_row = P_4d[alt_ref_idx, centre_idx, alt_ref_idx, :]  # (n_geo,)
-        var_ctr = float(P_4d[alt_ref_idx, centre_idx, alt_ref_idx, centre_idx])
-        var_all = P_4d[alt_ref_idx, :, alt_ref_idx, :]            # (n_geo, n_geo)
-        std_all = np.sqrt(np.maximum(np.diag(var_all), 0.0))
-        std_ctr = float(np.sqrt(max(var_ctr, 0.0)))
-        denom   = std_ctr * std_all
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            return cov_row / np.where(denom == 0, 1e-10, denom)
-
-    prior_alt_corr  = _alt_corr(prior_P)
-    post_alt_corr   = _alt_corr(post_P)
-    prior_horiz     = _horiz_corr(prior_P)
-    post_horiz      = _horiz_corr(post_P)
-
-    # ── Globe projection centred on the group ─────────────────────────────────
-    lats_c = result["lats"]
-    lons_c = result["lons"]
-    clon   = float(np.nanmean(lons_c)) if lons_c else 0.0
-    clat   = float(np.nanmean(lats_c)) if lats_c else 0.0
-    proj   = ccrs.Orthographic(central_longitude=clon, central_latitude=clat)
-
-    alt_extent = [float(alt_grid[0]), float(alt_grid[-1]),
-                  float(alt_grid[0]), float(alt_grid[-1])]
-
-    fig = plt.figure(figsize=(18, 10))
-    fig.suptitle(
-        f"EDP Covariance Structure — {result['time_window']}  |  {region}\n"
-        f"Horizontal slice at {true_alt_ref:.0f} km  ·  ★ = centre vertex",
-        fontsize=12,
-    )
-    gs = GridSpec(2, 2, figure=fig,
-                  left=0.06, right=0.97, top=0.90, bottom=0.07,
-                  wspace=0.30, hspace=0.35)
-
-    row_labels = ["Prior", "Posterior"]
-    corr_pairs = [(prior_alt_corr, prior_horiz), (post_alt_corr, post_horiz)]
-
-    for row, (row_lbl, (alt_corr, horiz_corr)) in enumerate(
-        zip(row_labels, corr_pairs)
-    ):
-        # ── Left: altitude-altitude correlation ──────────────────────────────
-        ax_aa = fig.add_subplot(gs[row, 0])
-        pcm = ax_aa.imshow(
-            alt_corr, cmap="coolwarm", vmin=-1, vmax=1,
-            extent=alt_extent, origin="lower", aspect="auto",
-        )
-        ax_aa.axhline(true_alt_ref, color="gold", lw=1.0, ls="--", alpha=0.8)
-        ax_aa.axvline(true_alt_ref, color="gold", lw=1.0, ls="--", alpha=0.8)
-        ax_aa.set_xlabel("Altitude (km)", fontsize=9)
-        ax_aa.set_ylabel("Altitude (km)", fontsize=9)
-        ax_aa.set_title(f"{row_lbl} — Alt-Alt Correlation", fontsize=10)
-        fig.colorbar(pcm, ax=ax_aa, label="Pearson r", fraction=0.046, pad=0.04)
-
-        # ── Right: horizontal correlation globe ───────────────────────────────
-        ax_gl = fig.add_subplot(gs[row, 1], projection=proj)
-        ax_gl.set_global()
-        ax_gl.add_feature(cfeature.LAND,      facecolor="whitesmoke", zorder=0)
-        ax_gl.add_feature(cfeature.OCEAN,     facecolor="aliceblue",  zorder=0)
-        ax_gl.add_feature(cfeature.COASTLINE.with_scale("110m"),
-                          lw=0.4, edgecolor="gray")
-        ax_gl.gridlines(lw=0.2, alpha=0.3)
-
-        try:
-            tc = ax_gl.tripcolor(
-                verts_geo[:, 0], verts_geo[:, 1], eds_occ.mesh,
-                horiz_corr,
-                transform=ccrs.Geodetic(),
-                cmap="coolwarm", shading="flat",
-                vmin=-1, vmax=1, zorder=1,
-            )
-            cb = fig.colorbar(tc, ax=ax_gl, orientation="horizontal",
-                              shrink=0.75, pad=0.04, fraction=0.04)
-            cb.set_label("Pearson r", fontsize=8)
-        except Exception:
-            pass
-
-        # Mark the centre (reference) vertex
-        ctr_lon = float(verts_geo[centre_idx, 0])
-        ctr_lat = float(verts_geo[centre_idx, 1])
-        ax_gl.plot(ctr_lon, ctr_lat, transform=ccrs.Geodetic(),
-                   marker="*", color="gold", ms=12, mec="black", mew=0.8, zorder=8)
-        _draw_roi_boundary(ax_gl, region)
-        ax_gl.set_title(
-            f"{row_lbl} — Horizontal Correlation at {true_alt_ref:.0f} km",
-            fontsize=10,
-        )
-
-    os.makedirs(save_dir, exist_ok=True)
-    safe_key  = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
-    plot_path = os.path.join(save_dir, f"group_{safe_key}{_NOISE_SUFFIX}_covariance.png")
-    fig.savefig(plot_path, dpi=100, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved covariance plot → {plot_path}")
-    return plot_path
-
-
 def _isr_limb_tec(
     isr_profile: dict,
     tangent_km: np.ndarray,
@@ -1872,7 +1661,7 @@ def _isr_limb_tec(
         denom = np.where(denom < 1e-6, 1e-6, denom)
         integrand = nn * R_h / denom  # m⁻³ * (dimensionless)
         # Trapezoid in km → convert to m (*1000) for TECU (/1e16), factor 2 for both sides
-        tec_profile[k] = 2.0 * float(np.trapz(integrand, hh)) * 1000.0 / 1e16
+        tec_profile[k] = 2.0 * float(_trapz(integrand, hh)) * 1000.0 / 1e16
     return tec_profile
 
 
@@ -1928,7 +1717,12 @@ def _plot_igs_stec_section(
                 _slice_map[_key] = _i
     R = row_start   # shorthand
 
-    # ── 2×2 sTEC panels — one per GNSS constellation ─────────────────────────
+    # ── 2×2 TEC-vs-elevation bar panels — one per GNSS constellation ─────────
+    # Each IGS arc contributes one clustered triplet of bars (measured / prior /
+    # posterior, arc-mean over its valid epochs) positioned at its mean
+    # elevation angle, rather than a continuous sTEC-vs-time curve — this
+    # reads better now that the elevation cutoff was lowered to 10° and more
+    # (lower-elevation) arcs pass the filter.
     _CONST_POS_IGS = {"G": (R, 0), "R": (R+1, 0), "E": (R, 1), "C": (R+1, 1)}
 
     ax_igs = {}
@@ -1939,91 +1733,66 @@ def _plot_igs_stec_section(
             f"IGS sTEC — {cfg['name']}",
             fontsize=9, color=cfg["title_color"], fontweight="bold",
         )
-        ax.set_xlabel("Time from arc start (min)", fontsize=8)
+        ax.set_xlabel("Elevation angle (deg)", fontsize=8)
         ax.set_ylabel("sTEC (TECU)", fontsize=8)
-        ax.grid(True, alpha=0.3, ls=":")
+        ax.grid(True, alpha=0.3, ls=":", axis="y")
         ax_igs[const] = ax
 
-    # ── Colour assignment for IGS arcs (shade by arc index per constellation) ─
-    # Count arcs per constellation first.
-    _igs_const_counts: dict[str, int] = defaultdict(int)
-    for ce in igs_entries:
-        prn = ce.get("prn_id", "")
-        _igs_const_counts[prn[0].upper() if prn else "?"] += 1
-
-    _igs_const_counter: dict[str, int] = defaultdict(int)
-
-    # Legend entries accumulated per panel.
-    _igs_legend: dict[str, list] = defaultdict(list)
+    _bar_w       = 0.6   # degrees
+    _bar_offset  = {"measured": -0.7, "prior": 0.0, "post": 0.7}
+    _bar_color   = {"measured": "dimgray", "prior": "tab:blue", "post": "tab:orange"}
+    _bar_label   = {"measured": "Measured sTEC", "prior": "Prior sTEC (KF)",
+                     "post": "Posterior sTEC (KF)"}
+    _has_bars: dict[str, bool] = defaultdict(bool)
 
     for ce in igs_entries:
         prn   = ce.get("prn_id", "")
         const = prn[0].upper() if prn else "?"
-        cfg   = CONSTELLATION_CONFIG.get(const, {})
-        cmap  = mpl.colormaps.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))
-        n_in  = _igs_const_counts[const]
-        idx_in= _igs_const_counter[const]
-        t     = (0.40 + 0.50 * (idx_in / max(n_in - 1, 1))) if n_in > 1 else 0.70
-        col   = cmap(t)
-        _igs_const_counter[const] += 1
+        ax_t  = ax_igs.get(const) or ax_igs.get("G") or next(iter(ax_igs.values()))
 
-        tec       = ce.get("tec", np.array([]))
-        arc_t_sec = ce.get("arc_time_sec", np.arange(len(tec), dtype=float))
-        arc_t_min = arc_t_sec / 60.0
+        elev = np.asarray(ce.get("elev_deg", []), dtype=float)
+        tec  = np.asarray(ce.get("tec", []), dtype=float)
+        valid = np.isfinite(elev) & np.isfinite(tec)
+        if valid.sum() == 0:
+            continue
 
-        station   = ce.get("leo_id", "?")
-        arc_date  = ce.get("date")
-        date_str  = arc_date.strftime("%H:%M") if arc_date is not None else ""
-        lbl       = f"{station}/{prn}  ({date_str} UTC)" if date_str else f"{station}/{prn}"
+        elev_mean = float(np.mean(elev[valid]))
+        meas_mean = float(np.mean(tec[valid]))
 
-        ax_t = ax_igs.get(const) or ax_igs.get("G") or next(iter(ax_igs.values()))
-
-        # Measured sTEC (solid)
-        ax_t.plot(arc_t_min, tec, color=col, lw=1.8, label=lbl)
-
-        # Prior and KF posterior from tec_slices when available
         _ce_key = (
             str(ce.get("leo_id", "")),
             str(ce.get("prn_id", "")),
             str(ce.get("date", "")),
         )
         _sl = tec_slices[_slice_map[_ce_key]] if _ce_key in _slice_map else None
+        prior_mean = post_mean = np.nan
         if _sl is not None:
-            _sl_t = arc_t_min  # same length as tec (same clean entry)
-            prior_arr = np.asarray(_sl.get("prior_tec", []))
-            post_arr  = np.asarray(_sl.get("post_tec",  []))
+            prior_arr = np.asarray(_sl.get("prior_tec", []), dtype=float)
+            post_arr  = np.asarray(_sl.get("post_tec",  []), dtype=float)
             if len(prior_arr) == len(tec):
-                ax_t.plot(_sl_t, prior_arr, color=col, lw=1.0, ls="--",
-                          alpha=0.65, zorder=3)
+                prior_mean = float(np.mean(prior_arr[valid]))
             if len(post_arr) == len(tec):
-                ax_t.plot(_sl_t, post_arr, color=col, lw=1.3, ls=":",
-                          alpha=0.90, zorder=4)
+                post_mean = float(np.mean(post_arr[valid]))
 
-        _igs_legend[const].append(
-            Line2D([0], [0], color=col, lw=1.8, label=lbl)
-        )
+        ax_t.bar(elev_mean + _bar_offset["measured"], meas_mean,
+                 width=_bar_w, color=_bar_color["measured"], zorder=3)
+        _has_bars[const] = True
+        if np.isfinite(prior_mean):
+            ax_t.bar(elev_mean + _bar_offset["prior"], prior_mean,
+                     width=_bar_w, color=_bar_color["prior"], alpha=0.85, zorder=3)
+        if np.isfinite(post_mean):
+            ax_t.bar(elev_mean + _bar_offset["post"], post_mean,
+                     width=_bar_w, color=_bar_color["post"], alpha=0.85, zorder=3)
 
-    # Style legend entries (placed once per figure, not per arc)
-    _has_prior_post = bool(_slice_map)
     _igs_style_entries = [
-        Line2D([0], [0], color="gray", lw=1.8,          label="Measured sTEC"),
+        Patch(facecolor=_bar_color["measured"], label=_bar_label["measured"]),
+        Patch(facecolor=_bar_color["prior"], alpha=0.85, label=_bar_label["prior"]),
+        Patch(facecolor=_bar_color["post"],  alpha=0.85, label=_bar_label["post"]),
     ]
-    if _has_prior_post:
-        _igs_style_entries += [
-            Line2D([0], [0], color="gray", lw=1.0, ls="--", alpha=0.65,
-                   label="Prior sTEC (KF)"),
-            Line2D([0], [0], color="gray", lw=1.3, ls=":",  alpha=0.90,
-                   label="Posterior sTEC (KF)"),
-        ]
-    _igs_style_placed = False
-
     for const, ax_t in ax_igs.items():
-        entries = _igs_legend.get(const, [])
-        if entries:
-            style = _igs_style_entries if not _igs_style_placed else []
-            ax_t.legend(handles=entries + style, fontsize=6.5,
+        if _has_bars[const]:
+            ax_t.legend(handles=_igs_style_entries, fontsize=6.5,
                         loc="upper right", framealpha=0.85)
-            _igs_style_placed = True
         else:
             ax_t.text(0.5, 0.5, "No data", transform=ax_t.transAxes,
                       ha="center", va="center", color="lightgray",
@@ -2044,42 +1813,53 @@ def _plot_igs_stec_section(
     # Track recorded stations to avoid duplicate station markers in the legend.
     _station_plotted: set[str] = set()
 
-    # Reset colour counter — same shade logic, same colour as the sTEC panels.
-    _igs_const_counter2: dict[str, int] = defaultdict(int)
+    # Shared TEC colour scale across every IPP point drawn on this globe, so
+    # marker colour reads directly as measured sTEC magnitude.
+    _all_tec = (np.concatenate([
+        np.asarray(ce.get("tec", []), dtype=float) for ce in igs_entries
+    ]) if igs_entries else np.array([]))
+    _all_tec = _all_tec[np.isfinite(_all_tec)]
+    _tec_vmin = float(_all_tec.min()) if len(_all_tec) else 0.0
+    _tec_vmax = float(_all_tec.max()) if len(_all_tec) else 1.0
+    if _tec_vmax <= _tec_vmin:
+        _tec_vmax = _tec_vmin + 1.0
+    _ipp_cmap = mpl.colormaps.get_cmap("plasma")
+    _ipp_norm = mcolors.Normalize(vmin=_tec_vmin, vmax=_tec_vmax)
+    _ipp_sm: object = None
 
     for ce in igs_entries:
-        prn   = ce.get("prn_id", "")
-        const = prn[0].upper() if prn else "?"
-        cfg   = CONSTELLATION_CONFIG.get(const, {})
-        cmap  = mpl.colormaps.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))
-        n_in  = _igs_const_counts[const]
-        idx_in= _igs_const_counter2[const]
-        t     = (0.40 + 0.50 * (idx_in / max(n_in - 1, 1))) if n_in > 1 else 0.70
-        col   = cmap(t)
-        _igs_const_counter2[const] += 1
-
         station    = ce.get("leo_id", "?")
         ipp_lat    = ce.get("ipp_lat")
         ipp_lon    = ce.get("ipp_lon")
+        tec        = np.asarray(ce.get("tec", []), dtype=float)
         sta_lat    = ce.get("station_lat", np.nan)
         sta_lon    = ce.get("station_lon", np.nan)
         lat_tmax   = ce.get("lat_tecmax_tangent", np.nan)
         lon_tmax   = ce.get("lon_tecmax_tangent", np.nan)
 
-        # Full IPP ground track (F2-layer pierce-point trace)
+        # Faint ground track for geometry — colour now conveys TEC magnitude.
         if ipp_lat is not None and ipp_lon is not None and len(ipp_lat) > 1:
             ax_ipp.plot(
                 ipp_lon, ipp_lat,
                 transform=ccrs.Geodetic(),
-                color=col, lw=1.5, ls=":", alpha=0.85, zorder=5,
+                color="gray", lw=0.8, ls=":", alpha=0.55, zorder=4,
             )
+            if len(ipp_lat) == len(tec):
+                _ipp_sm = ax_ipp.scatter(
+                    ipp_lon, ipp_lat, c=tec,
+                    transform=ccrs.Geodetic(),
+                    cmap=_ipp_cmap, norm=_ipp_norm,
+                    s=12, edgecolors="none", zorder=5,
+                )
 
-        # Pierce point at TEC max (●)
+        # Pierce point at TEC max (●), colour-coded on the same TEC scale
         if np.isfinite(lat_tmax) and np.isfinite(lon_tmax):
+            _tmax_val = float(np.nanmax(tec)) if len(tec) else np.nan
+            _tmax_col = _ipp_cmap(_ipp_norm(_tmax_val)) if np.isfinite(_tmax_val) else "black"
             ax_ipp.plot(
                 lon_tmax, lat_tmax,
                 transform=ccrs.Geodetic(),
-                marker="o", ms=6, color=col, mec="black", mew=0.6,
+                marker="o", ms=7, color=_tmax_col, mec="black", mew=0.8,
                 zorder=7,
             )
 
@@ -2101,6 +1881,11 @@ def _plot_igs_stec_section(
                 pass
             _station_plotted.add(station)
 
+    if _ipp_sm is not None:
+        cbar_ipp = fig.colorbar(_ipp_sm, ax=ax_ipp, orientation="horizontal",
+                                 shrink=0.75, pad=0.04, fraction=0.04)
+        cbar_ipp.set_label("sTEC (TECU)", fontsize=7)
+
     # ── EDP domain mesh on the lower globe ───────────────────────────────────
     if verts_geo is not None and tris_geo is not None:
         try:
@@ -2113,8 +1898,8 @@ def _plot_igs_stec_section(
             pass
 
     ax_ipp.set_title(
-        "IGS IPP ground tracks + EDP mesh\n"
-        "( : = IPP trace  ● = TEC-max pierce point  ■ = station )",
+        "IGS IPP ground tracks coloured by sTEC\n"
+        "( ● = TEC-max pierce point  ■ = station )",
         fontsize=8,
     )
     if _station_plotted:
@@ -2159,596 +1944,6 @@ def _plot_igs_stec_section(
         ax_leg.text(0.5, 0.5, "No IGS arcs in window",
                     transform=ax_leg.transAxes, ha="center", va="center",
                     fontsize=10, color="lightgray", style="italic")
-
-
-def _plot_group(
-    result: dict,
-    save_dir: str,
-    group_key: str,
-    *,
-    suffix: str = "",
-    mode_label: str = "Sequential KF",
-    isr_profiles: list | None = None,
-    isr_site: tuple[float, float] | None = None,
-    igs_entries: list | None = None,
-) -> str:
-    """
-    Write a summary figure for one geographic group.
-
-    Parameters
-    ----------
-    result      : dict returned / built by process_group.
-    save_dir    : directory where the PNG is written.
-    group_key   : human-readable group identifier (used in the filename).
-    suffix      : appended to the base filename before ".png"  (e.g. "_seq", "_joint").
-    mode_label  : KF mode string shown in the figure suptitle.
-
-    Layout — GridSpec(2, 4) when *igs_entries* is empty / None:
-        Cols 0–1, rows 0–1 : 2×2 TEC profile panels, one per GNSS constellation.
-                             GPS (top-left / Blues), GLONASS (bottom-left / Purples),
-                             Galileo (top-right / Oranges), BeiDou (bottom-right / Greens).
-                             Within each panel the shade deepens with occultation index.
-                             Legend entries use the GNSS PRN code (G03, E22, R13, C36).
-        Col 2, rows 0–1    : Globe — ΔNe coolwarm map at posterior hmF2, ROI boundary,
-                             per-occultation raypaths (top/TEC-max/bottom), centre ★.
-        Col 3, rows 0–1    : EDP — prior/posterior spaghetti, centre-column profiles,
-                             F2-peak markers, Abel Ne profiles in constellation colours.
-
-    When *igs_entries* is provided the GridSpec is extended to (4, 4), adding
-    two extra rows below:
-        Cols 0–1, rows 2–3 : 2×2 constellation grid — ground-station sTEC vs
-                             time (minutes from arc start), one panel per GNSS
-                             constellation.  Each arc is a separate line coloured
-                             by its station/PRN; IRI baseline shown dashed when
-                             available.
-        Col 2, rows 2–3    : Globe — F2-layer ionospheric pierce-point (IPP)
-                             ground tracks for every IGS arc (dotted lines);
-                             station locations (■); pierce point at TEC max (●).
-        Col 3, rows 2–3    : IGS arc legend — station, PRN, arc time, TECU range.
-    """
-    os.makedirs(save_dir, exist_ok=True)
-
-    # ── Unpack result fields ──────────────────────────────────────────────────
-    tec_slices  = result["tec_slices"]
-    file_labels = result["file_labels"]
-    sat_ids     = result.get("sat_ids", [])          # list of (leo_id, prn_id)
-    alt_grid    = result["alt_grid"]
-    prior_edp   = result["prior_edp_3d"]
-    post_edp    = result["post_edp_3d"]
-    eds_occ     = result["eds_occ"]
-    clean_list  = result.get("clean_list", [])
-    abel_list   = result.get("abel_list", [None] * len(tec_slices))
-    region      = result["region"]
-    n_occ       = len(tec_slices)
-
-    # ── Pre-compute centre-column and F2 peaks (needed by Panels 2 & 3) ──────
-    verts_geo  = eds_occ.geolocation               # (n_geo, 2): col0=lon, col1=lat
-    tris_geo   = eds_occ.mesh
-    n_verts    = verts_geo.shape[0]
-    # Centre vertex = mesh point nearest the geographic midpoint of the ROI.
-    centre_idx   = _roi_centre_idx(verts_geo, region)
-    prior_centre = prior_edp[:, centre_idx]
-    post_centre  = post_edp[:,  centre_idx]
-    pr_nm, pr_hm = extract_robust_f2_peak(prior_centre, alt_grid)
-    po_nm, po_hm = extract_robust_f2_peak(post_centre,  alt_grid)
-
-    # ΔNe slice at the prior F2 peak altitude
-    if not np.isnan(po_hm):
-        alt_idx     = int(np.argmin(np.abs(alt_grid - pr_hm)))
-        delta_slice = post_edp[alt_idx, :] - prior_edp[alt_idx, :]
-        hmF2_label  = f"~{alt_grid[alt_idx]:.0f} km"
-    else:
-        delta_slice = np.zeros(n_verts)
-        hmF2_label  = "F2 unavailable"
-
-    # ── Per-occultation constellation & colour assignment ────────────────────
-    # Each GNSS constellation gets its own colour family (Blues / Purples /
-    # Oranges / Greens …).  Within a family the shade deepens by occultation
-    # index, mapped to the range [0.40, 0.90] to avoid too-pale tones.
-    const_counts  = defaultdict(int)   # total occs per constellation letter
-    occ_const     = []                 # constellation letter per occ
-
-    for i in range(n_occ):
-        prn   = sat_ids[i][1] if i < len(sat_ids) else ""
-        const = prn[0].upper() if prn else "?"
-        occ_const.append(const)
-        const_counts[const] += 1
-
-    const_counter = defaultdict(int)   # running index within each constellation
-    occ_colours   = []                 # final RGBA colour per occ
-
-    for const in occ_const:
-        cfg       = CONSTELLATION_CONFIG.get(const, {})
-        cmap_name = cfg.get("cmap", _CONST_FALLBACK_CMAP)
-        cmap      = mpl.colormaps.get_cmap(cmap_name)
-        n_in      = const_counts[const]
-        idx_in    = const_counter[const]
-        # Map index to [0.40, 0.90]; single-occ constellations get shade 0.70
-        t = (0.40 + 0.50 * (idx_in / max(n_in - 1, 1))) if n_in > 1 else 0.70
-        occ_colours.append(cmap(t))
-        const_counter[const] += 1
-
-    # ── Globe centre-point — compute before figure creation for projection ────
-    lats_c = result["lats"]
-    lons_c = result["lons"]
-    clon   = float(np.nanmean(lons_c)) if lons_c else 0.0
-    clat   = float(np.nanmean(lats_c)) if lats_c else 0.0
-    proj   = ccrs.Orthographic(central_longitude=clon, central_latitude=clat)
-
-    # ── Unique receiver codes for the title ───────────────────────────────────
-    unique_leos = list(dict.fromkeys(leo for leo, _ in sat_ids)) if sat_ids else []
-    leo_str     = " / ".join(unique_leos) if unique_leos else "—"
-
-    # ── Build figure with GridSpec ────────────────────────────────────────────
-    #
-    # ┌─ No IGS (2 rows) ──────────────────────────────────────────────────────┐
-    # │  Row 0 │ GPS TEC  │ Galileo TEC │ Globe (rows 0-1) │ EDP  (row 0)    │
-    # │  Row 1 │ GLO TEC  │ BeiDou TEC  │ Globe (rows 0-1) │ Abel (row 1)    │
-    # │        │          │             │                   │ [same height]   │
-    # └────────────────────────────────────────────────────────────────────────┘
-    #
-    # ┌─ With IGS (4 rows) ────────────────────────────────────────────────────┐
-    # │  Row 0 │ GPS TEC  │ Galileo TEC │ Upper Globe  │ EDP (rows 0-1)      │
-    # │  Row 1 │ GLO TEC  │ BeiDou TEC  │ (rows 0-1)   │ EDP (rows 0-1)      │
-    # │  Row 2 │ IGS GPS  │ IGS Galileo │ Lower Globe  │ Abel Ne (row 2)     │
-    # │  Row 3 │ IGS GLO  │ IGS BeiDou  │ (rows 2-3)   │ Arc legend (row 3)  │
-    # └────────────────────────────────────────────────────────────────────────┘
-    _has_igs = bool(igs_entries)
-    _n_rows  = 4 if _has_igs else 2
-    _fig_h   = 17 if _has_igs else 9
-
-    fig = plt.figure(figsize=(26, _fig_h))
-    fig.suptitle(
-        f"Group KF Update ({mode_label}): {result['time_window']}  |  "
-        f"Region: {region}  |  GN: {leo_str}\n"
-        f"{n_occ} occultation(s)  —  "
-        f"Prior RMSE {result['prior_tec_rmse']:.2f} → "
-        f"Post RMSE {result['post_tec_rmse']:.2f} TECU",
-        fontsize=12,
-    )
-    gs = GridSpec(_n_rows, 4, figure=fig,
-                  width_ratios=[1, 1, 1.5, 1.2],
-                  wspace=0.40, hspace=0.45)
-
-    # 2×2 TEC panels — always rows 0–1, cols 0–1
-    _CONST_POS = {"G": (0, 0), "R": (1, 0), "E": (0, 1), "C": (1, 1)}
-    ax_tec      = {}
-    first_tec   = None
-    for const, (row, col) in _CONST_POS.items():
-        cfg = CONSTELLATION_CONFIG.get(const, {"name": const, "title_color": "black"})
-        ax  = fig.add_subplot(gs[row, col],
-                              sharey=first_tec if first_tec is not None else None)
-        ax.set_title(cfg["name"], fontsize=9, color=cfg["title_color"], fontweight="bold")
-        ax.grid(True, alpha=0.3, ls=":")
-        ax_tec[const] = ax
-        if first_tec is None:
-            first_tec = ax
-
-    # Globe (col 2):
-    #   No IGS  → spans both rows (rows 0–1)
-    #   With IGS → upper half only (rows 0–1); lower globe added in _plot_igs_stec_section
-    ax2 = fig.add_subplot(gs[0:2, 2], projection=proj)
-
-    # EDP + Abel (col 3):
-    #   No IGS  → EDP row 0, Abel row 1 (equal heights, both beside the globe)
-    #   With IGS → EDP spans rows 0–1 (same height as 2×2 TEC + upper globe),
-    #              Abel at row 2 (half that height, beside the lower globe)
-    if _has_igs:
-        ax3_kf   = fig.add_subplot(gs[0:2, 3], sharey=first_tec)
-        ax3_abel = fig.add_subplot(gs[2,   3], sharey=first_tec, sharex=ax3_kf)
-    else:
-        ax3_kf   = fig.add_subplot(gs[0, 3], sharey=first_tec)
-        ax3_abel = fig.add_subplot(gs[1, 3], sharey=first_tec, sharex=ax3_kf)
-
-    # ── Separate all-TEC figure (every occultation, 2×2 constellation layout) ──
-    all_alts = np.concatenate([sl["tangent_km"] for sl in tec_slices])
-    alt_ylim = (0, max(float(np.nanmax(all_alts)) + 50, float(alt_grid[-1])))
-
-    fig_tec = plt.figure(figsize=(14, 10))
-    fig_tec.suptitle(
-        f"All TEC Profiles — {result['time_window']}  |  Region: {region}  |  "
-        f"GN: {leo_str}\n{n_occ} occultation(s)",
-        fontsize=11,
-    )
-    gs_tec = GridSpec(2, 2, figure=fig_tec, wspace=0.35, hspace=0.45)
-    _ax_tec_all = {}
-    _first_tec_all = None
-    for const, (row, col) in _CONST_POS.items():
-        cfg = CONSTELLATION_CONFIG.get(const, {"name": const, "title_color": "black"})
-        ax  = fig_tec.add_subplot(
-            gs_tec[row, col],
-            sharey=_first_tec_all if _first_tec_all is not None else None,
-        )
-        ax.set_title(cfg["name"], fontsize=9, color=cfg["title_color"], fontweight="bold")
-        ax.grid(True, alpha=0.3, ls=":")
-        _ax_tec_all[const] = ax
-        if _first_tec_all is None:
-            _first_tec_all = ax
-
-    _all_tec_style = [
-        Line2D([0], [0], color="gray", lw=2.2,          label="Measured TEC"),
-        Line2D([0], [0], color="gray", lw=1.3, ls="--", label="Prior TEC"),
-        Line2D([0], [0], color="gray", lw=1.5, ls=":",  label="KF Posterior"),
-    ]
-    _all_const_legend: dict = defaultdict(list)
-    _all_style_placed = False
-
-    for i, (sl, col) in enumerate(zip(tec_slices, occ_colours)):
-        const = occ_const[i]
-        ax_a  = _ax_tec_all.get(const) or _ax_tec_all.get("G") or next(iter(_ax_tec_all.values()))
-        ax_a.plot(sl["measured"],  sl["tangent_km"], color=col, lw=2.2)
-        ax_a.plot(sl["prior_tec"], sl["tangent_km"], color=col, lw=1.3, ls="--", alpha=0.6)
-        ax_a.plot(sl["post_tec"],  sl["tangent_km"], color=col, lw=1.5, ls=":",  alpha=0.9)
-        prn_code = sat_ids[i][1] if i < len(sat_ids) else f"Occ {i + 1}"
-        time_str = file_labels[i].split()[-1] if i < len(file_labels) else ""
-        lbl      = f"{prn_code}  ({time_str})" if time_str else prn_code
-        _all_const_legend[const].append(Line2D([0], [0], color=col, lw=2.2, label=lbl))
-
-    for const, ax_a in _ax_tec_all.items():
-        entries = _all_const_legend.get(const, [])
-        if entries:
-            leg_h = entries + (_all_tec_style if not _all_style_placed else [])
-            ax_a.legend(handles=leg_h, fontsize=7, loc="upper right", framealpha=0.85)
-            _all_style_placed = True
-        else:
-            ax_a.text(0.5, 0.5, "No data", transform=ax_a.transAxes,
-                      ha="center", va="center", color="lightgray", fontsize=11,
-                      style="italic")
-        ax_a.set_ylim(*alt_ylim)
-        if const in ("G", "R"):
-            ax_a.set_ylabel("Tangent Altitude (km)")
-        else:
-            ax_a.tick_params(labelleft=False)
-        if const in ("R", "C"):
-            ax_a.set_xlabel("TEC (TECU)")
-
-    safe_key_tec  = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
-    all_tec_path  = os.path.join(save_dir, f"group_{safe_key_tec}{_NOISE_SUFFIX}{suffix}_all_tec.png")
-    fig_tec.savefig(all_tec_path, dpi=100, bbox_inches="tight")
-    plt.close(fig_tec)
-    print(f"  Saved all-TEC plot → {all_tec_path}")
-
-    # ── Identify max/min TECU-error occultations for the main constellation panels ─
-    # Only consider podTc2 (absolute TEC) occultations; conPhs arcs are excluded.
-    # Error metric: mean absolute residual (measured − posterior) per occultation.
-    # Selection is per constellation so up to 2 × len(constellations) = 8 are shown.
-    occ_errors = np.array([
-        float(np.mean(np.abs(sl["measured"] - sl["post_tec"])))
-        for sl in tec_slices
-    ])
-
-    highlight_idxs: dict[int, str] = {}   # idx → "max" | "min"
-    # Group podTc indices by constellation
-    const_podtc_idxs: dict[str, list[int]] = defaultdict(list)
-    for i in range(n_occ):
-        tec_type = clean_list[i].get("tec_type", "absolute") if i < len(clean_list) else "absolute"
-        if tec_type != "absolute":
-            continue
-        const = occ_const[i]
-        const_podtc_idxs[const].append(i)
-
-    for const, idxs in const_podtc_idxs.items():
-        if not idxs:
-            continue
-        errs = occ_errors[idxs]
-        i_max = idxs[int(np.argmax(errs))]
-        i_min = idxs[int(np.argmin(errs))]
-        highlight_idxs[i_max] = "max"
-        if i_min != i_max:
-            highlight_idxs[i_min] = "min"
-
-    # ISR-based TEC profile (limb integral from a single representative ISR sweep)
-    isr_tec_cache: dict = {}  # occultation index → predicted TEC array
-    if isr_profiles:
-        # Pick the single profile whose hour_utc is closest to the median of all
-        # profiles — this avoids smearing over profiles from different ionospheric
-        # conditions while still selecting a representative sweep.
-        _hours    = np.array([p["hour_utc"] for p in isr_profiles])
-        _med_hour = float(np.median(_hours))
-        _best_idx = int(np.argmin(np.abs(_hours - _med_hour)))
-        _isr_ref_prof = isr_profiles[_best_idx]
-        for idx in highlight_idxs:
-            isr_tec_cache[idx] = _isr_limb_tec(
-                _isr_ref_prof, tec_slices[idx]["tangent_km"]
-            )
-
-    # ── TEC panel drawing (main figure — only max/min error PRNs) ────────────
-    style_entries = [
-        Line2D([0], [0], color="gray", lw=2.2,          label="Measured TEC"),
-        Line2D([0], [0], color="gray", lw=1.3, ls="--", label="Prior TEC"),
-        Line2D([0], [0], color="gray", lw=1.5, ls=":",  label="KF Posterior"),
-    ]
-    if isr_profiles:
-        style_entries.append(
-            Line2D([0], [0], color="limegreen", lw=1.8, ls=(0, (3, 1, 1, 1)),
-                   label="ISR-based TEC")
-        )
-
-    const_legend = defaultdict(list)
-
-    for i, (sl, col) in enumerate(zip(tec_slices, occ_colours)):
-        if i not in highlight_idxs:
-            continue
-        err_tag = highlight_idxs[i]
-        const = occ_const[i]
-        ax_t  = ax_tec.get(const) or ax_tec.get("G") or next(iter(ax_tec.values()))
-
-        ax_t.plot(sl["measured"],  sl["tangent_km"], color=col, lw=2.2)
-        ax_t.plot(sl["prior_tec"], sl["tangent_km"], color=col, lw=1.3,
-                  ls="--", alpha=0.6)
-        ax_t.plot(sl["post_tec"],  sl["tangent_km"], color=col, lw=1.5,
-                  ls=":",  alpha=0.9)
-
-        if i in isr_tec_cache:
-            ax_t.plot(isr_tec_cache[i], sl["tangent_km"],
-                      color="limegreen", lw=1.8, ls=(0, (3, 1, 1, 1)), alpha=0.9)
-
-        prn_code = sat_ids[i][1] if i < len(sat_ids) else f"Occ {i + 1}"
-        time_str = file_labels[i].split()[-1] if i < len(file_labels) else ""
-        err_label = f"  [{err_tag} err: {occ_errors[i]:.2f} TECU]"
-        lbl = f"{prn_code}  ({time_str}){err_label}" if time_str else f"{prn_code}{err_label}"
-        const_legend[const].append(Line2D([0], [0], color=col, lw=2.2, label=lbl))
-
-    style_placed = False
-
-    for const, ax_t in ax_tec.items():
-        entries = const_legend.get(const, [])
-
-        if entries:
-            leg_handles = entries + (style_entries if not style_placed else [])
-            ax_t.legend(handles=leg_handles, fontsize=7, loc="upper right",
-                        framealpha=0.85)
-            style_placed = True
-        else:
-            ax_t.text(0.5, 0.5, "No data", transform=ax_t.transAxes,
-                      ha="center", va="center", color="lightgray", fontsize=11,
-                      style="italic")
-
-        ax_t.set_ylim(*alt_ylim)
-        if const in ("G", "R"):
-            ax_t.set_ylabel("Tangent Altitude (km)")
-        else:
-            ax_t.tick_params(labelleft=False)
-        if const in ("R", "C"):
-            ax_t.set_xlabel("TEC (TECU)")
-
-    # ── Panel 2: Globe map — ΔNe at F2 peak + raypaths + ROI ────────────────
-    ax2.set_global()
-    ax2.add_feature(cfeature.LAND,      facecolor="whitesmoke", zorder=0)
-    ax2.add_feature(cfeature.OCEAN,     facecolor="aliceblue",  zorder=0)
-    ax2.add_feature(cfeature.COASTLINE.with_scale("110m"), lw=0.5, edgecolor="gray")
-    ax2.add_feature(cfeature.BORDERS.with_scale("110m"),   lw=0.3, edgecolor="lightgray")
-    ax2.gridlines(lw=0.3, alpha=0.4)
-
-    # ΔNe = posterior − prior at posterior hmF2.  Diverging coolwarm centred at 0.
-    try:
-        max_delta = float(np.nanmax(np.abs(delta_slice)))
-        if max_delta > 0:
-            tc = ax2.tripcolor(
-                verts_geo[:, 0], verts_geo[:, 1], tris_geo,
-                delta_slice,
-                transform=ccrs.Geodetic(),
-                cmap="coolwarm", shading="flat",
-                vmin=-max_delta, vmax=max_delta,
-                zorder=1,
-            )
-            cbar = fig.colorbar(tc, ax=ax2, orientation="horizontal",
-                                shrink=0.75, pad=0.04, fraction=0.04)
-            cbar.set_label(f"ΔNe at hmF2 ({hmF2_label}) [m⁻³]", fontsize=8)
-            cbar.formatter.set_powerlimits((-2, 2))
-            cbar.update_ticks()
-    except Exception:
-        pass
-
-    # ── Terminator + night-side shade (drawn early so foreground is on top) ─
-    try:
-        mean_ts = _parse_time_window(result["time_window"])
-        _draw_terminator(ax2, mean_ts, zorder=5)
-    except Exception:
-        pass
-
-    # ── LEO ground-tracks ────────────────────────────────────────────────────
-    _draw_leo_path(ax2, clean_list, occ_colours, zorder=5)
-
-    # Yellow star at the centre EDP vertex
-    ctr_lon = float(verts_geo[centre_idx, 0])
-    ctr_lat = float(verts_geo[centre_idx, 1])
-    ax2.plot(ctr_lon, ctr_lat, transform=ccrs.Geodetic(),
-             marker="*", color="yellow", ms=14, mec="black", mew=0.8,
-             zorder=8, label="Centre EDP vertex")
-
-    # Region-of-interest boundary (lime rectangle or polar latitude circle)
-    _draw_roi_boundary(ax2, region)
-
-    # Per-occultation raypaths: top (solid), TEC-max (dashed), bottom (dotted).
-    # Raypath labels appear only on the first occultation for a clean legend.
-    ray_defs = [
-        ("top",     "solid",  2.0),
-        ("tec-max", "dashed", 1.8),
-        ("bottom",  "dotted", 1.5),
-    ]
-    for i, (cl, col) in enumerate(zip(clean_list, occ_colours)):
-        LEO  = cl["LEO"]
-        GNSS = cl["GNSS"]
-        tec  = cl["tec"]
-        tang = cl["tangent_km"]
-
-        idx_top    = int(np.argmax(tang))
-        idx_bottom = int(np.argmin(tang))
-        idx_tecmax = int(np.argmax(tec))
-
-        prn_code = sat_ids[i][1] if i < len(sat_ids) else f"Occ {i + 1}"
-        ray_col  = col if i in highlight_idxs else (0.65, 0.65, 0.65, 0.55)
-
-        for (rtype, ls, lw), ridx in zip(
-            ray_defs, [idx_top, idx_tecmax, idx_bottom]
-        ):
-            lbl = f"{rtype}" if i == 0 else None
-            _draw_raypath(ax2, LEO, GNSS, ridx,
-                          color=ray_col, ls=ls, lw=lw, label=lbl, zorder=6,
-                          TP=(ridx == idx_tecmax))
-
-    ax2.set_title(
-        f"ΔNe at hmF2 ({hmF2_label}) + Raypaths + ROI\n"
-        "(solid=top, dashed=TEC-max, dotted=bottom  ★=centre)"
-    )
-    ax2.legend(loc="lower left", fontsize=7, framealpha=0.75)
-
-    # ── Panel 3 (top): KF prior / posterior EDPs ─────────────────────────────
-    formatter = ScalarFormatter(useMathText=True)
-    formatter.set_powerlimits((-2, 2))
-
-    # Faint spaghetti — all grid columns
-    ax3_kf.plot(prior_edp, alt_grid, color="tab:red",  alpha=0.07, lw=0.8)
-    ax3_kf.plot(post_edp,  alt_grid, color="tab:blue", alpha=0.07, lw=0.8)
-
-    # Bold centre-column profiles
-    ax3_kf.plot(prior_centre, alt_grid, color="darkred",  lw=2.0, ls="--",
-                label="Prior (centre)")
-    ax3_kf.plot(post_centre,  alt_grid, color="darkblue", lw=2.0,
-                label="Posterior (centre)")
-
-    # F2 peak markers — circles on KF centre column
-    if not np.isnan(pr_nm):
-        ax3_kf.plot(pr_nm, pr_hm, marker="o", ms=8, color="darkred",
-                    mec="black", zorder=5)
-    if not np.isnan(po_nm):
-        ax3_kf.plot(po_nm, po_hm, marker="o", ms=8, color="darkblue",
-                    mec="black", zorder=5)
-
-    kf_legend_lines = [
-        Line2D([0], [0], color="tab:red",  lw=1.5, alpha=0.4, label="Prior (all cols)"),
-        Line2D([0], [0], color="tab:blue", lw=1.5, alpha=0.4, label="Post (all cols)"),
-        Line2D([0], [0], color="darkred",  lw=2.0, ls="--",   label="Prior (centre)"),
-        Line2D([0], [0], color="darkblue", lw=2.0,            label="Post (centre)"),
-        Line2D([0], [0], marker="o", color="w", mfc="gray", mec="black", ms=8,
-               label="F2 Peak (KF)"),
-    ]
-
-    # ── ISR truth overlay on EDP panel ───────────────────────────────────────
-    if isr_profiles:
-        _isr_cmap = mpl.colormaps.get_cmap("viridis")
-        _isr_norm = mpl.colors.Normalize(vmin=0, vmax=24)
-        for _prof in isr_profiles:
-            _col = _isr_cmap(_isr_norm(_prof["hour_utc"]))
-            ax3_kf.plot(_prof["ne"], _prof["alt_km"],
-                        color="limegreen", lw=1.2, alpha=0.9, zorder=3)
-        # Mean ISR F2 peak marker
-        _isr_nms = [p["nm_f2"] for p in isr_profiles if not np.isnan(p.get("nm_f2", np.nan))]
-        _isr_hms = [p["hm_f2"] for p in isr_profiles if not np.isnan(p.get("hm_f2", np.nan))]
-        if _isr_nms:
-            _isr_nm_mean = float(np.nanmean(_isr_nms))
-            _isr_hm_mean = float(np.nanmean(_isr_hms))
-            ax3_kf.plot(_isr_nm_mean, _isr_hm_mean,
-                        marker="^", ms=11, color="limegreen",
-                        mec="black", mew=1.0, zorder=8,
-                        label="ISR NmF2 (mean)")
-        kf_legend_lines += [
-            Line2D([0], [0], color="limegreen", lw=1.5, alpha=0.7,
-                   label=f"ISR truth ({len(isr_profiles)} sweeps)"),
-            Line2D([0], [0], marker="^", color="w", mfc="limegreen",
-                   mec="black", ms=9, label="ISR NmF2 (mean)"),
-        ]
-
-        # ISR site marker on the globe
-        if isr_site is not None:
-            _isr_lon, _isr_lat = isr_site
-            ax2.plot(_isr_lon, _isr_lat,
-                     transform=ccrs.Geodetic(),
-                     marker="^", ms=12, color="limegreen",
-                     mec="black", mew=1.0, zorder=9,
-                     label="Millstone Hill ISR")
-
-    ax3_kf.legend(handles=kf_legend_lines, fontsize=7, loc="upper right")
-    ax3_kf.set_title("EDP — Prior / Posterior\n(★ = centre vertex, ▲ = ISR truth)"
-                     if isr_profiles else
-                     "EDP — Prior / Posterior\n(★ = centre vertex)")
-    ax3_kf.xaxis.set_major_formatter(formatter)
-    ax3_kf.tick_params(labelbottom=False)
-    ax3_kf.grid(True, alpha=0.3, ls=":")
-
-    # ── Panel 3 (bottom): Abel Ne profiles ───────────────────────────────────
-    max_edp_candidates = []
-    idx_f2_mask = alt_grid < 450
-    valid_post  = post_edp[idx_f2_mask].copy()
-    valid_post[valid_post < 0] = np.nan
-    if not np.all(np.isnan(valid_post)):
-        max_edp_candidates.append(np.nanmax(valid_post))
-
-    abel_legend_lines = []
-    for i, (col, abel) in enumerate(zip(occ_colours, abel_list)):
-        if abel is None or len(abel.get("Ne", [])) == 0:
-            continue
-        prn_code = sat_ids[i][1] if i < len(sat_ids) else f"Occ {i + 1}"
-        abel_col = col if i in highlight_idxs else (0.65, 0.65, 0.65, 0.55)
-        ax3_abel.plot(abel["Ne"], abel["alt_km"], color=abel_col, lw=1.8, ls="-.",
-                      alpha=0.9)
-        # abel_legend_lines.append(
-        #     Line2D([0], [0], color=col, lw=1.8, ls="-.", label=f"Abel {prn_code}")
-        # )
-        abel_nm, abel_hm = extract_robust_f2_peak(abel["Ne"], abel["alt_km"])
-        if not np.isnan(abel_nm):
-            ax3_abel.plot(abel_nm, abel_hm, marker="^", ms=7,
-                          color=abel_col, mec="black", mew=0.6, zorder=5)
-            max_edp_candidates.append(abel_nm)
-
-    # abel_legend_lines.append(
-    #     Line2D([0], [0], marker="^", color="w", mfc="gray", mec="black", ms=7,
-    #            label="F2 Peak (Abel)")
-    # )
-
-    # ISR truth overlay on Abel panel (same colour coding as EDP panel)
-    if isr_profiles:
-        _isr_cmap2 = mpl.colormaps.get_cmap("viridis")
-        _isr_norm2 = mpl.colors.Normalize(vmin=0, vmax=24)
-        for _prof in isr_profiles:
-            _col2 = _isr_cmap2(_isr_norm2(_prof["hour_utc"]))
-            ax3_abel.plot(_prof["ne"], _prof["alt_km"],
-                          color="limegreen", lw=1.2, alpha=0.65, zorder=3)
-            _isr_nm2, _isr_hm2 = extract_robust_f2_peak(_prof["ne"], _prof["alt_km"])
-            if not np.isnan(_isr_nm2):
-                ax3_abel.plot(_isr_nm2, _isr_hm2,
-                              marker="^", ms=6, color=_col2,
-                              mec="black", mew=0.6, zorder=6)
-                max_edp_candidates.append(_isr_nm2)
-        abel_legend_lines += [
-            Line2D([0], [0], color="limegreen", lw=1.5, alpha=0.7,
-                   label=f"ISR truth ({len(isr_profiles)} sweeps)"),
-        ]
-
-    ax3_abel.legend(handles=abel_legend_lines, fontsize=7, loc="upper right")
-    ax3_abel.set_xlabel("Electron Density (m⁻³)")
-    ax3_abel.set_title("Abel Ne Profiles  (▲ = ISR truth)" if isr_profiles
-                       else "Abel Ne Profiles")
-    ax3_abel.xaxis.set_major_formatter(formatter)
-    ax3_abel.grid(True, alpha=0.3, ls=":")
-
-    # Shared x-limit (propagates to ax3_kf via sharex)
-    if max_edp_candidates:
-        ax3_abel.set_xlim(left=0, right=max(max_edp_candidates) * 1.2)
-
-    # ── IGS ground-station sTEC section (rows 2–3) ───────────────────────────
-    if _has_igs:
-        _plot_igs_stec_section(
-            fig        = fig,
-            gs         = gs,
-            igs_entries= igs_entries,
-            region     = region,
-            proj       = proj,
-            row_start  = 2,
-            tec_slices = result.get("tec_slices"),
-            clean_list = result.get("clean_list"),
-            verts_geo  = verts_geo,
-            tris_geo   = tris_geo,
-        )
-
-    safe_key  = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
-    _igs_tag  = "_igs" if _has_igs else ""
-    plot_path = os.path.join(save_dir, f"group_{safe_key}{_NOISE_SUFFIX}{suffix}{_igs_tag}.png")
-    fig.savefig(plot_path, dpi=100, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved group plot ({mode_label}) → {plot_path}")
-    return plot_path
 
 
 def _plot_comparison(result: dict, save_dir: str, group_key: str) -> str:
@@ -2864,6 +2059,7 @@ def _plot_comparison(result: dict, save_dir: str, group_key: str) -> str:
     ax_edp.set_title("Centre-Vertex EDP  (● = F2 peak)")
     ax_edp.xaxis.set_major_formatter(formatter)
     ax_edp.grid(True, alpha=0.3, ls=":")
+    ax_edp.set_ylim(bottom=0)
 
     # ── (0,1): Centre-vertex EDP update (post − prior) ───────────────────────
     ax_delta.axvline(0, color="black", lw=0.8, ls="--", alpha=0.5)

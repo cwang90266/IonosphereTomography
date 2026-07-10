@@ -7,7 +7,7 @@ Maps a parametric IonosphericState ensemble (8 params per grid point) into
 simulated slant TEC (sTEC) observations by:
 
   1. Evaluating Ne(h) at every altitude sample along each GNSS ray path using
-     the IRI-based Epstein/bottomside formulations.
+     the IRI-based Epstein/bottomside/Chapman formulations.
   2. Integrating Ne along the ray with scipy.integrate.trapezoid.
 
 All broadcasting is over the ensemble-member dimension — no Python loops over
@@ -26,24 +26,30 @@ Pure F2 bottomside (h_ST <= h < hmF2):
     x_bs  = (hmF2 - h) / B0
     Ne    = NmF2 * exp(-x_bs^B1) / cosh(x_bs)
 
-Intermediate connection region (hmE <= h < h_ST):
+Intermediate connection region (hmE <= h < h_ST), smoothstep blend of a
+direct and a mirrored bottomside branch:
 
     h_ST is the altitude where the pure-F2 bottomside equals NmE:
         solve  NmF2 * exp(-x^B1) / cosh(x) = NmE  for x  (bisection)
         h_ST  = hmF2 - x * B0
 
-    HZ = (h_ST + hmE) / 2
-    T  = (HZ - h_ST)^2 / (h_ST - hmE)
+    Ne_A(h) = NmF2 * exp(-x_A^B1)  / cosh(x_A),   x_A  = (hmF2 - h)      / B0
+    Ne_B(h) = NmF2 * exp(-x_B^B1)  / cosh(x_B),   x_B  = (hmF2 - h_eff)  / B0
+    h_eff   = h_ST + hmE - h                       (mirror image of h about
+                                                     HZ = (h_ST + hmE)/2)
 
-    For h >= HZ:  h_eff = h        (pure bottomside directly)
-    For h <  HZ:  h_eff = 2·HZ − h  (reflection → h_eff(hmE) = h_ST → Ne(hmE) = NmE)
+    t     = clip((h - hmE) / (h_ST - hmE), 0, 1)
+    w     = 3*t^2 - 2*t^3                          (cubic smoothstep)
+    Ne(h) = w * Ne_A(h) + (1 - w) * Ne_B(h)
 
-    Ne(h) = NmF2 * exp(-x_eff^B1) / cosh(x_eff),  x_eff = (hmF2 - h_eff) / B0
+    w(0)=0, w(1)=1, w'(0)=w'(1)=0 preserve Ne=NmE at both endpoints
+    (hmE and h_ST) while removing the derivative cusp that a hard
+    h>=HZ / h<HZ switch would otherwise create at the valley midpoint.
 
-E-layer (h < hmE):
+E-layer (h < hmE), bottomside alpha-Chapman:
 
     ze    = (h - hmE) / H_E,   H_E = 20 km
-    Ne_E  = 4*NmE * exp(ze) / (1 + exp(ze))^2
+    Ne_E  = NmE * exp(0.5 * (1 - ze - exp(-ze)))
 
 Units
 -----
@@ -176,27 +182,27 @@ def _ne_profile_ensemble(
     # Safety: h_ST must lie in [hmE, hmF2]
     h_ST = np.clip(h_ST, hmE, hmF2)    # (n_members,)
 
-    # Midpoint of the valley (used for the Region-3 mirror mapping)
-    HZ = 0.5 * (h_ST + hmE)             # (n_members,)
-
     # ── Region 2: Pure F2 bottomside  (h_ST <= h < hmF2) ─────────────────────
     Ne_pure_bot = _pure_bottomside(hmF2, B0, B1, NmF2, h)   # (n_alt, n_members)
 
-    # ── Region 3: Intermediate connection  (hmE <= h < h_ST) ─────────────────
-    # Mirror h across HZ so that h_eff(h_ST) = h_ST and h_eff(hmE) = h_ST.
-    # Both endpoints then evaluate to Ne = NmE via the pure-bottomside formula,
-    # making the profile continuous with the E-layer at hmE and with the pure
-    # F2 bottomside at h_ST.
-    #
-    # For h >= HZ : h_eff = h         (direct — connects smoothly to Region 2)
-    # For h <  HZ : h_eff = 2·HZ − h  (reflection — ensures h_eff(hmE) = h_ST)
-    h_eff_inter = np.where(h >= HZ, h, 2.0 * HZ - h)             # (n_alt, n_members)
-    Ne_inter    = _pure_bottomside(hmF2, B0, B1, NmF2, h_eff_inter)
+    # ── Region 3: Intermediate connection (hmE <= h < h_ST) — smoothstep blend
+    # Ne_A = direct branch (= Ne_pure_bot, reused); Ne_B = mirror-image branch
+    # evaluated at h_eff = h_ST + hmE - h (equivalent to 2*HZ - h). Both
+    # branches equal NmE at their respective endpoints; blending with a cubic
+    # smoothstep weight (zero slope at t=0,1) preserves those endpoint values
+    # while removing the derivative cusp at the valley midpoint.
+    h_eff_inter = hmE + h_ST - h                                  # (n_alt, n_members)
+    Ne_A_int    = Ne_pure_bot
+    Ne_B_int    = _pure_bottomside(hmF2, B0, B1, NmF2, h_eff_inter)
 
-    # ── Region 4: E-layer (h < hmE) — symmetric Epstein ─────────────────────
-    ze    = (h - hmE) / _H_E_KM
-    exp_e = np.exp(np.clip(ze, -80, 80))
-    Ne_E  = 4.0 * NmE * exp_e / (1.0 + exp_e) ** 2
+    t_blend = np.clip((h - hmE) / (h_ST - hmE + 1e-9), 0.0, 1.0)  # (n_alt, n_members)
+    w_blend = 3.0 * t_blend ** 2 - 2.0 * t_blend ** 3
+    Ne_inter = w_blend * Ne_A_int + (1.0 - w_blend) * Ne_B_int
+
+    # ── Region 4: E-layer (h < hmE) — bottomside alpha-Chapman ──────────────
+    ze         = np.clip((h - hmE) / _H_E_KM, -80, 80)
+    exp_neg_ze = np.exp(-ze)
+    Ne_E       = NmE * np.exp(0.5 * (1.0 - ze - exp_neg_ze))
 
     # ── Composite profile ─────────────────────────────────────────────────────
     Ne = np.where(
@@ -244,6 +250,7 @@ class ObservationOperator:
         ensemble: np.ndarray | None = None,
         grid_point_indices: np.ndarray | None = None,
         grid_point_weights: np.ndarray | None = None,
+        n_workers: int = 1,
     ) -> np.ndarray:
         """
         Forward-model sTEC for every ray and every ensemble member.
@@ -265,6 +272,10 @@ class ObservationOperator:
             from all grid points with non-zero weight.  Rows need not sum to 1;
             they are normalised internally.  When supplied, grid_point_indices
             is ignored.
+        n_workers : int, optional
+            Number of threads for parallel ray processing (default 1 = serial).
+            Each ray is independent, so threading scales well when n_members is
+            large (as in the vectorised EKF Jacobian call).
 
         Returns
         -------
@@ -287,11 +298,21 @@ class ObservationOperator:
         Y_f = np.empty((n_rays, n_members), dtype=float)
 
         if grid_point_weights is not None:
-            # IDW blending path — smooth across cell boundaries
-            for i, ray in enumerate(ray_trajectories):
-                Y_f[i] = self._integrate_ray_idw(
-                    ray, params_lin, grid_point_weights[i]
-                )
+            if n_workers > 1:
+                from concurrent.futures import ThreadPoolExecutor
+
+                def _proc(i):
+                    Y_f[i] = self._integrate_ray_idw(
+                        ray_trajectories[i], params_lin, grid_point_weights[i]
+                    )
+
+                with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                    list(pool.map(_proc, range(n_rays)))
+            else:
+                for i, ray in enumerate(ray_trajectories):
+                    Y_f[i] = self._integrate_ray_idw(
+                        ray, params_lin, grid_point_weights[i]
+                    )
         else:
             if grid_point_indices is None:
                 if n_grid == 1:
@@ -301,11 +322,23 @@ class ObservationOperator:
                         "Provide grid_point_indices or grid_point_weights "
                         "for multi-column domains."
                     )
-            for i, ray in enumerate(ray_trajectories):
-                gp = grid_point_indices[i]
-                Y_f[i] = self._integrate_ray(
-                    ray, params_lin[:, gp, :]   # (N_STATE, n_members)
-                )
+            if n_workers > 1:
+                from concurrent.futures import ThreadPoolExecutor
+
+                def _proc_nn(i):
+                    gp = grid_point_indices[i]
+                    Y_f[i] = self._integrate_ray(
+                        ray_trajectories[i], params_lin[:, gp, :]
+                    )
+
+                with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                    list(pool.map(_proc_nn, range(n_rays)))
+            else:
+                for i, ray in enumerate(ray_trajectories):
+                    gp = grid_point_indices[i]
+                    Y_f[i] = self._integrate_ray(
+                        ray, params_lin[:, gp, :]   # (N_STATE, n_members)
+                    )
 
         return Y_f
 

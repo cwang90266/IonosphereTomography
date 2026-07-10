@@ -71,6 +71,7 @@ from EDPSamples.edp_samples import get_IRI2020_EDP
 from IRI_Sample_Inputs.IRI_Sample_inputs import IRI_Sample_Inputs
 from Ionosphere_Tomography_Inverter.enkf_update import _haversine_km
 from Ionosphere_Tomography_Inverter.srif_batch_update import SRIFBatchUpdate
+from Ionosphere_Tomography_Inverter.info_batch_update import InfoBatchUpdate
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -390,6 +391,19 @@ def build_grid(poi_lat: float, poi_lon: float,
     lat_max = poi_lat + radius_deg + pad_deg
     lon_min = poi_lon - radius_deg - pad_deg
     lon_max = poi_lon + radius_deg + pad_deg
+    lats = np.arange(lat_min, lat_max + dlat * 0.5, dlat)
+    lons = np.arange(lon_min, lon_max + dlon * 0.5, dlon)
+    lon_g, lat_g = np.meshgrid(lons, lats)
+    return lat_g.ravel(), lon_g.ravel()
+
+
+def build_grid_from_bounds(lat_min: float, lat_max: float,
+                            lon_min: float, lon_max: float,
+                            dlat: float, dlon: float) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Regular lat/lon grid covering explicit bounds.
+    Returns (grid_lats, grid_lons), each shape (n_grid,).
+    """
     lats = np.arange(lat_min, lat_max + dlat * 0.5, dlat)
     lons = np.arange(lon_min, lon_max + dlon * 0.5, dlon)
     lon_g, lat_g = np.meshgrid(lons, lats)
@@ -1059,11 +1073,12 @@ def run_srif_window(
 
     Memory profile
     --------------
-    • Prior covariance  P_f :  n_state² × 8 bytes  ≈ 40 MB  (n_state = 2254)
-    • Kronecker buffer   :  same as above (kron(C_v, C_s))
-    • SRIF state  (R̄, z) :  n_state² + n_state  ≈ 40 MB
+    • Prior covariance P_f is never densified: the SRIF is initialised via
+      :meth:`SRIFBatchUpdate.from_kron_prior`, which factorises only the small
+      C_v (n_alt × n_alt) and C_s (n_grid × n_grid) blocks in closed form.
+    • SRIF state  (R̄, z) :  n_state² + n_state  ≈ 40 MB  (n_state = 2254)
     • Per-arc H chunk    :  MAX_RAYS_PER_ARC × n_state × 8 ≈ 0.9 MB
-    • Full H never assembled — peak RAM dominated by the 40 MB buffers above.
+    • Full H never assembled — peak RAM dominated by the R̄ buffer above.
 
     For comparison, the standard form assembles H at once:
     14 524 obs × 2 254 state × 8 bytes ≈ 261 MB, before any further algebra.
@@ -1097,22 +1112,24 @@ def run_srif_window(
     # ── 1. Prior state vector ─────────────────────────────────────────────────
     x_f = ne_prior.ravel().copy()        # (n_state,)
 
-    # ── 2. Background covariance P_f ─────────────────────────────────────────
+    # ── 2. Background covariance (Kronecker-structured, never densified) ────
     sigma_abs = (sigma_v[:, None] * ne_prior).ravel()        # (n_state,)
-    K_corr    = np.kron(C_v, C_s)                            # (n_state, n_state)
-    P_f       = sigma_abs[:, None] * K_corr * sigma_abs[None, :]
-    del K_corr   # free immediately — no longer needed
 
     # ── 3. Initialise SRIF from the prior ────────────────────────────────────
+    # Uses the closed-form Kronecker fast path: factorises only the small
+    # C_v (n_alt × n_alt) and C_s (n_grid × n_grid) blocks, so the O(n_state³)
+    # dense Cholesky/inversion that previously caused RAM/swap thrashing for
+    # large n_state is never performed.
     print(f"    [SRIF] Initialising information square root "
           f"(n_state={n_state}) …", flush=True)
-    srif = SRIFBatchUpdate(
+    srif = SRIFBatchUpdate.from_kron_prior(
         x_prior    = x_f,
-        P_prior    = P_f,
+        sigma_abs  = sigma_abs,
+        C_v        = C_v,
+        C_s        = C_s,
         obs_sigma  = sigma_obs,
         chunk_size = srif_chunk_size,
     )
-    del P_f   # free — R̄ now encodes all prior information
 
     # ── 4. Build rays arc-by-arc and stream into SRIF ─────────────────────────
     # We never assemble the full H matrix; each arc is processed and discarded.
@@ -1262,6 +1279,217 @@ def run_srif_window(
         "srif_n_obs":       srif.n_obs,
         "srif_weighted_rss": srif.weighted_rss,
         "srif_R_cond":      diag_info["condition_number_estimate"],
+    }
+
+
+def run_info_window(
+    clean_window:     list,
+    t_centre:         pd.Timestamp,
+    grid_lats:        np.ndarray,
+    grid_lons:        np.ndarray,
+    alt_grid:         np.ndarray,
+    ne_prior:         np.ndarray,   # (n_alt, n_grid)  IRI prior Ne in m⁻³
+    sigma_v:          np.ndarray,   # (n_alt,)          fractional uncertainty per alt
+    C_v:              np.ndarray,   # (n_alt, n_alt)    vertical correlation
+    C_s:              np.ndarray,   # (n_grid, n_grid)  horizontal correlation
+    sigma_obs:        float = SIGMA_OBS_TECU,
+    max_rays_per_arc: int   = MAX_RAYS_PER_ARC,
+) -> dict | None:
+    """
+    Plain information-form (normal-equations) batch update for one 90-minute
+    window.
+
+    Identical external interface and return dict to :func:`run_srif_window`,
+    but replaces the Householder-QR SRIF accumulation with the simpler
+    recursion:
+
+        Λ = P_f^{-1} + H^T W H
+        N = P_f^{-1} x_f + H^T W y
+
+    accumulated per-arc as plain BLAS matrix products (``H^T H``, ``H^T y``)
+    rather than a QR re-triangularisation of the full n_state × n_state
+    factor on every arc. Mathematically equivalent to the SRIF/covariance-form
+    updates for isotropic R, but noticeably faster per arc since it avoids
+    Householder reflections over the full state dimension — at the cost of
+    squaring H's condition number relative to the square-root (SRIF) form,
+    the standard information-filter tradeoff. Use this when SRIF's per-arc
+    QR cost is the bottleneck; fall back to :func:`run_srif_window` if
+    conditioning becomes a concern (see ``Lam_cond`` diagnostic below).
+
+    See :mod:`Ionosphere_Tomography_Inverter.info_batch_update` for details.
+    """
+    if not clean_window:
+        return None
+
+    n_geo   = len(grid_lats)
+    n_alt   = len(alt_grid)
+    n_state = n_alt * n_geo
+
+    # ── 1. Prior state vector ─────────────────────────────────────────────────
+    x_f = ne_prior.ravel().copy()        # (n_state,)
+
+    # ── 2. Background covariance (Kronecker-structured, never densified) ────
+    sigma_abs = (sigma_v[:, None] * ne_prior).ravel()        # (n_state,)
+
+    # ── 3. Initialise the information accumulator from the prior ────────────
+    print(f"    [Info] Initialising information matrix "
+          f"(n_state={n_state}) …", flush=True)
+    info = InfoBatchUpdate.from_kron_prior(
+        x_prior   = x_f,
+        sigma_abs = sigma_abs,
+        C_v       = C_v,
+        C_s       = C_s,
+        obs_sigma = sigma_obs,
+    )
+
+    # ── 4. Build rays arc-by-arc and stream into the accumulator ─────────────
+    # We never assemble the full H matrix; each arc is processed and discarded.
+    all_rays:    list[np.ndarray] = []
+    all_tp_lats: list[float]      = []
+    all_tp_lons: list[float]      = []
+    all_tec_obs: list[float]      = []
+    arc_sizes:   list[int]        = []
+
+    for ce in clean_window:
+        gnss     = ce["GNSS"]
+        leo      = ce["LEO"]
+        tec_arc  = ce["tec"]
+        n_s      = gnss.shape[1]
+        ipp_lats = ce.get("ipp_lat", np.full(n_s, np.nan))
+        ipp_lons = ce.get("ipp_lon", np.full(n_s, np.nan))
+
+        stride = max(1, int(np.ceil(n_s / max_rays_per_arc)))
+        idx    = np.arange(0, n_s, stride)
+
+        arc_rays: list[np.ndarray] = []
+        arc_lats: list[float]      = []
+        arc_lons: list[float]      = []
+        arc_tec:  list[float]      = []
+
+        for j in idx:
+            traj = _build_ground_ray(gnss[:, j], leo[:, j])
+            ilat = float(ipp_lats[j]) if j < len(ipp_lats) else np.nan
+            ilon = float(ipp_lons[j]) if j < len(ipp_lons) else np.nan
+            if not (np.isfinite(ilat) and np.isfinite(ilon)):
+                ilat, ilon = _ipp_latlon(gnss[:, j], leo[:, j])
+            arc_rays.append(traj)
+            arc_lats.append(ilat)
+            arc_lons.append(ilon)
+            arc_tec.append(float(tec_arc[j]))
+
+        ns = len(arc_rays)
+        arc_sizes.append(ns)
+        if ns == 0:
+            continue
+
+        all_rays.extend(arc_rays)
+        all_tp_lats.extend(arc_lats)
+        all_tp_lons.extend(arc_lons)
+        all_tec_obs.extend(arc_tec)
+
+        # Build H for this arc only  (ns × n_state) — then discard
+        y_arc = np.array(arc_tec, dtype=float)
+        fin   = np.isfinite(y_arc)
+        if fin.sum() == 0:
+            continue
+
+        H_arc = _build_H_matrix(arc_rays, alt_grid, grid_lats, grid_lons)
+        # Feed finite rows into the accumulator; H_arc is discarded after this call
+        info.update(H_arc[fin], y_arc[fin])
+
+    n_total = len(all_rays)
+    if n_total == 0 or info.n_obs == 0:
+        return None
+
+    all_tp_lats_arr = np.array(all_tp_lats)
+    all_tp_lons_arr = np.array(all_tp_lons)
+    y_obs_all       = np.array(all_tec_obs)
+    valid_obs       = np.isfinite(y_obs_all)
+    n_obs           = int(valid_obs.sum())
+
+    diag_info = info.innovation_stats()
+    print(f"    [Info] arcs ingested = {info.n_arcs}/{len(clean_window)}  |  "
+          f"obs rows = {info.n_obs}  |  "
+          f"Λ cond ≈ {diag_info['condition_number_estimate']:.2e}", flush=True)
+
+    # ── 5. Solve for posterior ────────────────────────────────────────────────
+    print(f"    [Info] Solving …", flush=True)
+    x_a_raw, post_var = info.solve()
+    x_a = np.maximum(x_a_raw, 1.0)   # clip to physical Ne floor
+
+    # ── 6. Prior and posterior simulated observations ─────────────────────────
+    # Build the full H only for diagnostics / plotting — but do it in arc chunks
+    # so we still avoid the full n_obs × n_state allocation at once.
+    y_f_all = np.empty(n_total)
+    y_a_all = np.empty(n_total)
+    ray_offset = 0
+    for ce_i, ce in enumerate(clean_window):
+        ns = arc_sizes[ce_i]
+        if ns == 0:
+            continue
+        rays_slice = all_rays[ray_offset: ray_offset + ns]
+        H_chunk    = _build_H_matrix(rays_slice, alt_grid, grid_lats, grid_lons)
+        sl         = slice(ray_offset, ray_offset + ns)
+        y_f_all[sl] = H_chunk @ x_f
+        y_a_all[sl] = H_chunk @ x_a
+        ray_offset  += ns
+
+    # Residual statistics
+    fin_all         = valid_obs
+    prior_innov     = (y_obs_all - y_f_all)[fin_all]
+    post_innov      = (y_obs_all - y_a_all)[fin_all]
+    prior_rmse      = float(np.sqrt(np.nanmean((y_obs_all - y_f_all)[fin_all] ** 2)))
+    post_rmse       = float(np.sqrt(np.nanmean((y_obs_all - y_a_all)[fin_all] ** 2)))
+
+    print(f"    [Prior] innovation  mean={prior_innov.mean():.2f}  "
+          f"std={prior_innov.std():.2f}  n_obs={n_obs}", flush=True)
+    print(f"    [Post ] innovation  mean={post_innov.mean():.2f}  "
+          f"std={post_innov.std():.2f}", flush=True)
+    print(f"    RMSE:  prior={prior_rmse:.3f} TECU  →  post={post_rmse:.3f} TECU")
+
+    # Subsets for finite observations (parallel to rays_v in run_kf_window)
+    rays_v    = [all_rays[i] for i in range(n_total) if valid_obs[i]]
+    tp_lats_v = all_tp_lats_arr[valid_obs]
+    tp_lons_v = all_tp_lons_arr[valid_obs]
+    y_obs_v   = y_obs_all[valid_obs]
+    y_f_v     = y_f_all[valid_obs]
+    y_a_v     = y_a_all[valid_obs]
+
+    # ── 7. Reshape to (n_alt, n_grid) grids ──────────────────────────────────
+    prior_edp   = ne_prior
+    post_edp    = x_a.reshape(n_alt, n_geo)
+    prior_sigma = sigma_abs.reshape(n_alt, n_geo)
+    post_sigma  = np.sqrt(np.maximum(post_var, 0.0)).reshape(n_alt, n_geo)
+
+    return {
+        "t_centre":         t_centre,
+        "clean_window":     clean_window,
+        "n_obs":            n_obs,
+        "all_rays":         all_rays,
+        "all_tp_lats":      all_tp_lats_arr,
+        "all_tp_lons":      all_tp_lons_arr,
+        "y_obs_all":        y_obs_all,
+        "Y_all_prior_mean": y_f_all,
+        "Y_all_post_mean":  y_a_all,
+        "y_obs_v":          y_obs_v,
+        "rep_tp_lats":      tp_lats_v,
+        "rep_tp_lons":      tp_lons_v,
+        "Y_prior_mean":     y_f_v,
+        "Y_post_mean":      y_a_v,
+        "prior_innov":      prior_innov,
+        "post_innov":       post_innov,
+        "prior_rmse":       prior_rmse,
+        "post_rmse":        post_rmse,
+        "prior_edp":        prior_edp,
+        "post_edp":         post_edp,
+        "prior_sigma":      prior_sigma,
+        "post_sigma":       post_sigma,
+        "arc_sizes":        arc_sizes,
+        # Info-form-specific diagnostics
+        "info_n_arcs":      info.n_arcs,
+        "info_n_obs":       info.n_obs,
+        "info_weighted_rss": info.weighted_rss,
+        "info_Lam_cond":    diag_info["condition_number_estimate"],
     }
 
 
@@ -2377,6 +2605,8 @@ def plot_edp_profiles(results: list[dict],
         ax_del.tick_params(labelsize=6)
         ax_del.grid(True, alpha=0.3, ls=":")
         ax_del.legend(fontsize=6, loc="upper right")
+
+    ax_mat[0][0].set_ylim(bottom=0)   # shared y-axis: applies to every panel
 
     plt.tight_layout(rect=[0, 0, 1, 0.97])
     fpath = os.path.join(save_dir, "edp_profiles.png")

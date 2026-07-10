@@ -100,6 +100,14 @@ from demo_verification import (
     _isr_profiles_for_patch,
 )
 
+# Plotting functions consolidated into plotIonosphereTomography.py. Imported
+# back here (top-level, not deferred) so the internal call sites in this
+# module keep working as normal module-level references.
+from plotIonosphereTomography import (
+    _plot_arc_innovation_diagnostic, _plot_covariance_panels_labeled,
+    _plot_ekf_param_covariance_panels, plot_kf_enkf_comparison,
+)
+
 from Ionosphere_Tomography_Inverter.ionospheric_state import (
     IonosphericState, N_STATE, PARAM_NAMES,
     I_LOG_NMF2, I_HMF2, I_H0, I_GAMMA, I_B0, I_B1, I_LOG_NME, I_HME,
@@ -1180,7 +1188,7 @@ def plot_iri_param_fit_diagnostics(
     )
 
     # ── Shared y-axis limits ──────────────────────────────────────────────────
-    ax_prof.set_ylim(float(alt_grid[0]) - 10, float(alt_grid[-1]) + 20)
+    ax_prof.set_ylim(0, float(alt_grid[-1]) + 20)
 
     plt.tight_layout(rect=[0, 0, 1, 0.97])
     plot_path = os.path.join(save_dir, f"iri_fit_diag_{safe_key}.png")
@@ -1377,351 +1385,6 @@ def _default_background_covariance() -> np.ndarray:
 # ─────────────────────────────────────────────────────────────────────────────
 # §B2  Per-arc innovation diagnostic plot  (shared by KF and EnKF)
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _plot_arc_innovation_diagnostic(
-    arc_labels:         list,           # (n_arcs,)  PRN strings, e.g. "G15", "E03"
-    arc_prior_mean:     np.ndarray,     # (n_arcs,)  mean (obs−model) prior per arc
-    arc_post_mean:      np.ndarray,     # (n_arcs,)  mean (obs−model) post  per arc
-    arc_prior_rmse:     np.ndarray,     # (n_arcs,)  RMSE prior per arc
-    arc_post_rmse:      np.ndarray,     # (n_arcs,)  RMSE post  per arc
-    arc_lats:           np.ndarray,     # (n_arcs,)  tangent-pt centroid lat
-    arc_lons:           np.ndarray,     # (n_arcs,)  tangent-pt centroid lon
-    all_prior:          np.ndarray,     # (n_total,) flat prior residuals → histogram
-    all_post_main:      np.ndarray,     # (n_total,) flat post  residuals → histogram
-    group_key:          str,
-    save_dir:           str,
-    filter_name:        str,            # "KF" or "EnKF" — used in titles and filename
-    prior_rmse:         float,          # global prior RMSE (for title)
-    post_rmse:          float,          # global post  RMSE (for title)
-    all_post_raw:       np.ndarray | None = None,  # optional 2nd post (histogram only)
-    post_raw_label:     str = "Post (raw)",
-    mda_arc_means_list: list | None = None,  # per-step (n_arcs,) arrays (Panel A)
-    mda_flat_list:      list | None = None,  # per-step flat innovation arrays (Panel D)
-) -> None:
-    """
-    Four-panel figure summarising per-arc TEC residual statistics.
-
-    Shared by both the voxel KF and the parametric EnKF.
-
-    Panel A (left, tall)
-        Horizontal dual-bar chart of signed mean residual (obs − model).
-        Arcs sorted by |prior mean|.  Blue = prior; green = improved post
-        (|post mean| < |prior mean|); red = degraded.
-
-    Panel B (top-right)
-        Prior RMSE vs posterior RMSE scatter.  Points below the y = x
-        diagonal improved.  Colour = ΔRMSE = post − prior.  PRN labels.
-
-    Panel C (middle-right)
-        Geographic map showing *both* prior and posterior at each arc's
-        tangent-point centroid.  A hollow circle (sized by prior RMSE,
-        grey edge) represents the prior state; a filled circle (sized by
-        post RMSE) is green where the posterior improved and red where it
-        degraded.  PRN code annotated once per arc.
-
-    Panel D (bottom-right)
-        KDE + histogram of all sample residuals before and after the update.
-    """
-    import matplotlib.pyplot as _plt
-    import matplotlib.patches as _mpatch
-    from matplotlib.colors import Normalize as _Norm
-    from matplotlib.cm import ScalarMappable as _SM
-    from scipy.stats import gaussian_kde as _kde
-
-    n_arcs = len(arc_labels)
-
-    # Improvement based on |mean residual| (for bar) and RMSE (for map/scatter)
-    imp_mean = np.abs(arc_post_mean) < np.abs(arc_prior_mean)
-    imp_rmse = arc_post_rmse         < arc_prior_rmse
-
-    # Sort bar chart by |prior mean| descending (largest bias at top)
-    sort_idx = np.argsort(np.abs(arc_prior_mean))[::-1]
-
-    # ── figure layout ──────────────────────────────────────────────────────────
-    fig = _plt.figure(figsize=(18, max(10, 0.38 * n_arcs + 2)))
-    gs  = fig.add_gridspec(
-        3, 2,
-        width_ratios  = [1.5, 1],
-        height_ratios = [1, 1, 1],
-        hspace=0.52, wspace=0.42,
-    )
-    ax_bar  = fig.add_subplot(gs[:, 0])   # left column, all 3 rows
-    ax_scat = fig.add_subplot(gs[0, 1])   # top-right
-    ax_map  = fig.add_subplot(gs[1, 1])   # middle-right
-    ax_hist = fig.add_subplot(gs[2, 1])   # bottom-right
-
-    # ── Panel A: signed mean residual bar chart ────────────────────────────────
-    bh    = 0.28
-    y_pos = np.arange(n_arcs, dtype=float)
-
-    _has_mda = mda_arc_means_list is not None and len(mda_arc_means_list) > 1
-
-    if _has_mda:
-        # Overlapping bars: prior → MDA steps → final posterior
-        # All drawn at the same y position with partial alpha.
-        # Color gradient: dark blue (prior) → light blue/teal (steps) → green/red (final).
-        _n_steps   = len(mda_arc_means_list)
-        _bar_h     = bh * 2.6
-        # Blues palette for prior + intermediate steps
-        _step_cols = _plt.cm.Blues_r(np.linspace(0.15, 0.65, _n_steps))
-
-        for k, si in enumerate(sort_idx):
-            y   = y_pos[k]
-            imp = bool(imp_mean[si])
-
-            # Draw MDA steps from bottom (prior) to top — earlier steps show through
-            for _si, (_smeans, _scol) in enumerate(
-                    zip(mda_arc_means_list, _step_cols)):
-                _alpha = 0.38 + 0.18 * (_si / max(_n_steps - 1, 1))
-                _lbl = ("Initial (prior)" if _si == 0
-                        else f"MDA step {_si}")
-                ax_bar.barh(y, _smeans[si], height=_bar_h,
-                            color=_scol, alpha=_alpha, zorder=_si + 2,
-                            label=_lbl if k == 0 else "")
-
-            # Final posterior bar (top layer, narrower so earlier bars bleed through)
-            _post_col = "#1a9641" if imp else "#d7191c"
-            ax_bar.barh(y, arc_post_mean[si], height=_bar_h * 0.55,
-                        color=_post_col, alpha=0.88, zorder=_n_steps + 3,
-                        label=("Final (post ↓)" if (k == 0 and imp)
-                               else ("Final (post ↑)" if (k == 0 and not imp)
-                                     else "")))
-    else:
-        # Original two-bar layout (no MDA data)
-        for k, si in enumerate(sort_idx):
-            y   = y_pos[k]
-            imp = bool(imp_mean[si])
-
-            ax_bar.barh(y + bh, arc_prior_mean[si], height=bh * 1.85,
-                        color="#2166ac", alpha=0.88,
-                        label="Prior  mean(obs−model)" if k == 0 else "")
-
-            bar_col = "#1a9641" if imp else "#d7191c"
-            ax_bar.barh(y - bh, arc_post_mean[si], height=bh * 1.85,
-                        color=bar_col, alpha=0.84,
-                        label=("Post  ↓ improved" if (k == 0 and imp)
-                               else ("Post  ↑ degraded" if (k == 0 and not imp)
-                                     else "")))
-
-    ax_bar.axvline(0, color="k", lw=0.9)
-    ax_bar.set_yticks(y_pos)
-    ax_bar.set_yticklabels(
-        [arc_labels[sort_idx[k]] for k in range(n_arcs)],
-        fontsize=8, fontfamily="monospace",
-    )
-    ax_bar.set_xlabel("Mean residual  obs − model  (TECU)", fontsize=9)
-    ax_bar.set_title(
-        f"Per-occultation mean TEC error — {filter_name}  ·  group {group_key}\n"
-        f"Global RMSE: Prior {prior_rmse:.2f} TECU  →  Post {post_rmse:.2f} TECU",
-        fontsize=9, fontweight="bold",
-    )
-    if _has_mda:
-        _n_steps = len(mda_arc_means_list)
-        _step_cols_leg = _plt.cm.Blues_r(np.linspace(0.15, 0.65, _n_steps))
-        handles = (
-            [_mpatch.Patch(color=_step_cols_leg[0], alpha=0.56,
-                           label="Initial (prior)")]
-            + [_mpatch.Patch(color=_step_cols_leg[_si],
-                             alpha=0.38 + 0.18 * (_si / max(_n_steps - 1, 1)),
-                             label=f"MDA step {_si}")
-               for _si in range(1, _n_steps)]
-            + [_mpatch.Patch(color="#1a9641", alpha=0.88, label="Final (post ↓ improved)"),
-               _mpatch.Patch(color="#d7191c", alpha=0.88, label="Final (post ↑ degraded)")]
-        )
-    else:
-        handles = [
-            _mpatch.Patch(color="#2166ac", alpha=0.88, label="Prior  mean(obs−model)"),
-            _mpatch.Patch(color="#1a9641", alpha=0.84, label="Post  ↓ |bias| reduced"),
-            _mpatch.Patch(color="#d7191c", alpha=0.84, label="Post  ↑ |bias| increased"),
-        ]
-    ax_bar.legend(handles=handles, fontsize=8, loc="lower right")
-    ax_bar.grid(axis="x", lw=0.4, alpha=0.5)
-
-    # ── Panel B: prior RMSE vs posterior RMSE scatter ─────────────────────────
-    delta_rmse = arc_post_rmse - arc_prior_rmse    # <0 = improved
-    v_sc   = max(np.percentile(np.abs(delta_rmse), 95), 2.0)
-    norm_sc = _Norm(-v_sc, v_sc)
-
-    sc = ax_scat.scatter(arc_prior_rmse, arc_post_rmse,
-                         c=delta_rmse, cmap="RdYlGn_r", norm=norm_sc,
-                         s=60, edgecolors="k", linewidths=0.4, zorder=4)
-    lim = max(np.concatenate([arc_prior_rmse, arc_post_rmse]).max() * 1.08, 5.0)
-    ax_scat.plot([0, lim], [0, lim], "--", color="0.5", lw=0.9, label="no change")
-    ax_scat.set_xlim(0, lim); ax_scat.set_ylim(0, lim)
-    ax_scat.set_xlabel("Prior RMSE (TECU)", fontsize=8)
-    ax_scat.set_ylabel("Post RMSE (TECU)",  fontsize=8)
-    ax_scat.set_title(f"{filter_name}  Prior → Posterior RMSE per arc", fontsize=8)
-    ax_scat.legend(fontsize=7)
-    cb_sc = fig.colorbar(sc, ax=ax_scat, fraction=0.05, pad=0.02)
-    cb_sc.set_label("ΔRMSE  post−prior (TECU)", fontsize=7)
-    for k in range(n_arcs):
-        ax_scat.annotate(arc_labels[k], (arc_prior_rmse[k], arc_post_rmse[k]),
-                         fontsize=5, ha="center", va="bottom",
-                         xytext=(0, 3), textcoords="offset points",
-                         color="k", zorder=5)
-
-    # ── Panel C: geographic map — prior (ring) + posterior (filled + colorbar) ──
-    # Marker sizes scale with RMSE so ring vs dot diameters are comparable.
-    _sz_scale = 5.0
-    sz_prior = 20 + _sz_scale * arc_prior_rmse   # hollow ring
-    sz_post  = 20 + _sz_scale * arc_post_rmse    # filled dot
-
-    # ΔRMSE drives the diverging colormap (green = improved, red = degraded).
-    # Symmetric limits: clip at 95th percentile of |ΔRMSE| so a few large
-    # outliers don't wash out the colour range for the rest.
-    delta_rmse_map = arc_post_rmse - arc_prior_rmse        # (n_arcs,)
-    v_map = max(float(np.percentile(np.abs(delta_rmse_map), 95)), 2.0)
-    norm_map = _Norm(-v_map, v_map)
-    cmap_map = _plt.get_cmap("RdYlGn_r")   # red = worse, green = better
-
-    # Prior: hollow grey ring (no fill) — size encodes prior RMSE
-    ax_map.scatter(arc_lons, arc_lats,
-                   s=sz_prior, facecolors="none",
-                   edgecolors="#555555", linewidths=1.6,
-                   zorder=3)
-
-    # Posterior: filled dot coloured by ΔRMSE, sized by post RMSE
-    sc_map = ax_map.scatter(arc_lons, arc_lats,
-                             s=sz_post,
-                             c=delta_rmse_map, cmap=cmap_map, norm=norm_map,
-                             alpha=0.82, edgecolors="k", linewidths=0.35,
-                             zorder=4)
-
-    # PRN labels above each arc marker
-    for k in range(n_arcs):
-        ax_map.annotate(arc_labels[k], (arc_lons[k], arc_lats[k]),
-                        fontsize=5, ha="center", va="bottom",
-                        xytext=(0, 4), textcoords="offset points",
-                        color="k", zorder=5)
-
-    # Colorbar for ΔRMSE
-    cb_map = fig.colorbar(sc_map, ax=ax_map, fraction=0.05, pad=0.02)
-    cb_map.set_label("ΔRMSE  post − prior (TECU)\n← improved   degraded →",
-                     fontsize=7)
-
-    # Small legend to explain the ring vs dot encoding
-    map_handles = [
-        _mpatch.Patch(facecolor="none", edgecolor="#555555",
-                      linewidth=1.6, label="Prior RMSE (ring size)"),
-        _mpatch.Patch(facecolor="grey", edgecolor="k",
-                      linewidth=0.5, label="Post RMSE (dot size, coloured by ΔRMSE)"),
-    ]
-    ax_map.legend(handles=map_handles, fontsize=6, loc="best")
-    ax_map.set_xlabel("Longitude (°E)", fontsize=8)
-    ax_map.set_ylabel("Latitude (°N)",  fontsize=8)
-    ax_map.set_title(
-        f"{filter_name}  Prior ○ vs Posterior ● RMSE per arc\n"
-        f"Dot colour: ΔRMSE (green = improved, red = degraded)",
-        fontsize=8,
-    )
-    ax_map.grid(lw=0.3, alpha=0.4)
-
-    # ── Panel D: residual histograms ──────────────────────────────────────────
-    _has_mda_flat = mda_flat_list is not None and len(mda_flat_list) > 1
-
-    all_arrs = [all_prior, all_post_main]
-    if all_post_raw is not None:
-        all_arrs.append(all_post_raw)
-    if _has_mda_flat:
-        all_arrs += [f[np.isfinite(f)] for f in mda_flat_list]
-    finite_vals = np.concatenate([a[np.isfinite(a)] for a in all_arrs])
-    lo = np.percentile(finite_vals,  1) - 5
-    hi = np.percentile(finite_vals, 99) + 5
-    bins = np.linspace(lo, hi, 45)
-    x_k  = np.linspace(bins[0], bins[-1], 300)
-
-    if _has_mda_flat:
-        # Prior: filled histogram + KDE (reference anchor)
-        _arr_pr = all_prior[np.isfinite(all_prior)]
-        ax_hist.hist(_arr_pr, bins=bins, density=True, alpha=0.30,
-                     color="#2166ac",
-                     label=f"Prior  μ={np.nanmean(all_prior):+.1f}  σ={np.nanstd(all_prior):.1f}")
-        try:
-            ax_hist.plot(x_k, _kde(_arr_pr)(x_k), color="#2166ac", lw=2.0)
-        except Exception:
-            pass
-
-        # MDA intermediate steps: KDE curves only (avoid filled-histogram clutter)
-        _n_flat = len(mda_flat_list)
-        _flat_cols = _plt.cm.Blues_r(np.linspace(0.15, 0.65, _n_flat))
-        for _fi, (_farr, _fcol) in enumerate(zip(mda_flat_list, _flat_cols)):
-            _a = _farr[np.isfinite(_farr)]
-            _mu, _sg = float(np.nanmean(_farr)), float(np.nanstd(_farr))
-            _lbl = (f"Initial (prior, rep)  μ={_mu:+.1f} σ={_sg:.1f}"
-                    if _fi == 0
-                    else f"MDA step {_fi}  μ={_mu:+.1f} σ={_sg:.1f}")
-            # Light-fill histogram + curve
-            ax_hist.hist(_a, bins=bins, density=True,
-                         alpha=0.18 + 0.06 * (_fi / max(_n_flat - 1, 1)),
-                         color=_fcol, label=_lbl)
-            try:
-                ax_hist.plot(x_k, _kde(_a)(x_k), color=_fcol,
-                             lw=1.3 + 0.4 * (_fi / max(_n_flat - 1, 1)),
-                             alpha=0.75 + 0.20 * (_fi / max(_n_flat - 1, 1)))
-            except Exception:
-                pass
-
-        # Final posterior: filled + KDE (prominent anchor)
-        _arr_po = all_post_main[np.isfinite(all_post_main)]
-        ax_hist.hist(_arr_po, bins=bins, density=True, alpha=0.35,
-                     color="#1a9641",
-                     label=f"Final post  μ={np.nanmean(all_post_main):+.1f}  σ={np.nanstd(all_post_main):.1f}")
-        try:
-            ax_hist.plot(x_k, _kde(_arr_po)(x_k), color="#1a9641", lw=2.2)
-        except Exception:
-            pass
-
-        if all_post_raw is not None:
-            _arr_rw = all_post_raw[np.isfinite(all_post_raw)]
-            ax_hist.hist(_arr_rw, bins=bins, density=True, alpha=0.28,
-                         color="#fdae61",
-                         label=f"{post_raw_label}  μ={np.nanmean(all_post_raw):+.1f}  σ={np.nanstd(all_post_raw):.1f}")
-            try:
-                ax_hist.plot(x_k, _kde(_arr_rw)(x_k), color="#fdae61", lw=1.6)
-            except Exception:
-                pass
-
-        ax_hist.set_title(
-            f"{filter_name}  residual distribution per MDA iteration", fontsize=8)
-    else:
-        hist_series = [
-            (all_prior,     "#2166ac",
-             f"Prior      μ={np.nanmean(all_prior):+.1f}  σ={np.nanstd(all_prior):.1f}"),
-            (all_post_main, "#1a9641",
-             f"Post {filter_name}   μ={np.nanmean(all_post_main):+.1f}  σ={np.nanstd(all_post_main):.1f}"),
-        ]
-        if all_post_raw is not None:
-            hist_series.append(
-                (all_post_raw, "#fdae61",
-                 f"{post_raw_label}  μ={np.nanmean(all_post_raw):+.1f}  σ={np.nanstd(all_post_raw):.1f}")
-            )
-
-        for arr, col, lbl in hist_series:
-            ax_hist.hist(arr[np.isfinite(arr)], bins=bins,
-                         density=True, alpha=0.42, color=col, label=lbl)
-            try:
-                kde_fn = _kde(arr[np.isfinite(arr)])
-                ax_hist.plot(x_k, kde_fn(x_k), color=col, lw=1.6)
-            except Exception:
-                pass
-
-        ax_hist.set_title(
-            f"{filter_name}  residual distribution (all samples)", fontsize=8)
-
-    ax_hist.axvline(0, color="k", lw=0.8, linestyle="--")
-    ax_hist.set_xlabel("Residual  obs − model  (TECU)", fontsize=8)
-    ax_hist.set_ylabel("Density", fontsize=8)
-    ax_hist.legend(fontsize=7)
-    ax_hist.grid(lw=0.3, alpha=0.4)
-
-    # ── save ──────────────────────────────────────────────────────────────────
-    os.makedirs(save_dir, exist_ok=True)
-    tag      = filter_name.lower().replace(" ", "_")
-    out_path = os.path.join(save_dir, f"{tag}_arc_innovations_{group_key}.png")
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    _plt.close(fig)
-    print(f"  [{filter_name}] Arc innovation diagnostic saved → {out_path}")
-
 
 def _arc_stats_from_tec_slices(
     tec_slices: list,
@@ -2356,6 +2019,8 @@ def _run_parametric_enkf(
     res_enkf["post_P"]               = enkf_post_P
     res_enkf["enkf_state"]           = state      # keep for diagnostics
     res_enkf["enkf_diag"]            = diag
+    res_enkf["prior_mean_state"]     = mean_state              # (N_STATE, n_geo)
+    res_enkf["post_mean_state"]      = state.ensemble.mean(axis=2)  # (N_STATE, n_geo)
 
     return res_enkf
 
@@ -2385,6 +2050,45 @@ _OPT_METHOD_STYLES: dict[str, tuple[str, str, str]] = {
     "SLSQP":       ("tab:cyan",    "--",  ">"),
     "trust-constr":("tab:olive",   "-.",  "P"),
 }
+
+
+def _draw_param_boxes(
+    ax, entries: list[tuple[str, str, np.ndarray]],
+    loc: str = "lower left", fontsize: float = 6.5, dy: float = 0.15,
+) -> None:
+    """
+    Annotate a parameterized-EDP axes with one colour-coded parameter readout
+    per filter/method, stacked vertically.
+
+    entries : list of (label, colour, state_vector), where state_vector is the
+              8-element Chapman/Epstein state (log10-density convention,
+              ordered per PARAM_NAMES: [log10(NmF2), hmF2, H0, gamma, B0, B1,
+              log10(NmE), hmE]).
+    """
+    if not entries:
+        return
+    anchors = {
+        "upper left":  (0.02, 0.98, "left",  "top"),
+        "lower left":  (0.02, 0.02, "left",  "bottom"),
+        "upper right": (0.98, 0.98, "right", "top"),
+        "lower right": (0.98, 0.02, "right", "bottom"),
+    }
+    x0, y0, ha, va = anchors.get(loc, anchors["lower left"])
+    step = -dy if va == "top" else dy
+    y = y0
+    for label, col, pvec in entries:
+        nmf2 = 10.0 ** pvec[I_LOG_NMF2]
+        nme  = 10.0 ** pvec[I_LOG_NME]
+        txt = (f"{label}\n"
+               f"NmF2={nmf2:.2e}  hmF2={pvec[I_HMF2]:.0f} km\n"
+               f"H0={pvec[I_H0]:.1f}  γ={pvec[I_GAMMA]:.2f}  "
+               f"B0={pvec[I_B0]:.1f}  B1={pvec[I_B1]:.2f}\n"
+               f"NmE={nme:.2e}  hmE={pvec[I_HME]:.0f} km")
+        ax.text(x0, y, txt, transform=ax.transAxes, fontsize=fontsize,
+                color=col, ha=ha, va=va,
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=col,
+                          lw=1.2, alpha=0.88))
+        y += step
 
 
 # ── Ray-integration precomputation ────────────────────────────────────────────
@@ -2483,6 +2187,7 @@ def _optimize_grid_point(args: tuple) -> dict:
      maxiter_unc, maxiter_con, verbose_gp) = args
 
     sigma2 = max(sigma ** 2, 1e-12)
+    n_alt  = Phi.shape[1]
     scipy_bounds = Bounds(lb=bounds_lo, ub=bounds_hi)
 
     def _ne_from_x(x):
@@ -2499,6 +2204,41 @@ def _optimize_grid_point(args: tuple) -> dict:
         TEC_g    = Phi @ Ne                            # (n_rays,)
         delta    = innov + W_g * (TEC0_g - TEC_g)     # (n_rays,)
         return float(np.dot(delta, delta)) / sigma2
+
+    def _J_and_grad_g(x):
+        """Combined objective and gradient for gradient-based scipy methods.
+
+        Computes the Jacobian of the sTEC residual objective via the chain rule:
+
+            J(x)      = ||δ||² / σ²,       δ = innov + W_g ⊙ (TEC0_g − Φ Ne(x))
+            ∂J/∂x_k   = −(2/σ²) (W_g ⊙ δ)ᵀ Φ  ∂Ne/∂x_k
+
+        ∂Ne/∂x_k is approximated by a single forward finite-difference step on
+        the Ne profile (8 profile evaluations total), which is roughly twice as
+        efficient as scipy's "3-point" scheme that finite-differences the full
+        scalar objective (16 objective evaluations per gradient call).
+
+        Returns
+        -------
+        J    : float   objective value
+        grad : (8,)    gradient w.r.t. the 8 IRI parameters
+        """
+        Ne    = _ne_from_x(x)
+        TEC_g = Phi @ Ne                           # (n_rays,)
+        delta = innov + W_g * (TEC0_g - TEC_g)    # (n_rays,)
+        J     = float(np.dot(delta, delta)) / sigma2
+
+        # Effective gradient direction in Ne-space: d_eff = -(2/σ²)(W_g ⊙ δ)ᵀ Φ
+        d_eff = (-2.0 / sigma2) * (W_g * delta) @ Phi   # (n_alt,)
+
+        grad = np.empty(8, dtype=float)
+        for k in range(8):
+            x_p     = x.copy()
+            dx      = max(abs(x[k]) * 1e-5, 1e-8)
+            x_p[k] += dx
+            grad[k] = d_eff @ ((_ne_from_x(x_p) - Ne) / dx)
+
+        return J, grad
 
     prior_J_g = _J_g(x0_g)
 
@@ -2526,24 +2266,25 @@ def _optimize_grid_point(args: tuple) -> dict:
         return _cb_tc if method == "trust-constr" else _cb_std
 
     configs = [
-        # Unconstrained — no bounds object; clip handled inside _J_g
+        # Unconstrained — no bounds object; clip handled inside _J_g / _ne_from_x
+        # jac=True → scipy expects fun to return (f, grad); uses _J_and_grad_g below
         ("BFGS",        {"method": "BFGS",
-                         "jac": "3-point",
+                         "jac": True,
                          "options": {"maxiter": maxiter_unc, "gtol": 1e-5}}),
         ("Nelder-Mead", {"method": "Nelder-Mead",
                          "options": {"maxiter": maxiter_unc * 20,
                                      "xatol": 1e-4, "fatol": 1e-4,
                                      "adaptive": True}}),
         ("Newton-CG",   {"method": "Newton-CG",
-                         "jac": "3-point",
+                         "jac": True,
                          "options": {"maxiter": maxiter_unc, "xtol": 1e-5}}),
         # Constrained
         ("SLSQP",       {"method": "SLSQP",
-                         "jac": "3-point",
+                         "jac": True,
                          "bounds": scipy_bounds,
                          "options": {"maxiter": maxiter_con, "ftol": 1e-9}}),
         ("trust-constr",{"method": "trust-constr",
-                         "jac": "3-point",
+                         "jac": True,
                          "bounds": scipy_bounds,
                          "options": {"maxiter": maxiter_con, "gtol": 1e-6,
                                      "verbose": 0}}),
@@ -2551,11 +2292,14 @@ def _optimize_grid_point(args: tuple) -> dict:
 
     out = {}
     for method_name, kw in configs:
-        cb = _make_cb(method_name, prior_J_g)
+        cb  = _make_cb(method_name, prior_J_g)
+        # Nelder-Mead is gradient-free; all other methods use _J_and_grad_g
+        # which returns (J, grad) together, avoiding double Ne evaluation.
+        fun = _J_g if method_name == "Nelder-Mead" else _J_and_grad_g
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                res = minimize(_J_g, x0_g.copy(), callback=cb, **kw)
+                res = minimize(fun, x0_g.copy(), callback=cb, **kw)
             x_opt  = np.clip(res.x, bounds_lo, bounds_hi)
             J_opt  = float(res.fun)
             ok     = res.success
@@ -2602,10 +2346,12 @@ def _run_parametric_optimization(
        built once so that TEC_g = Φ @ Ne(alt_grid) is a pure matrix-vector
        multiply, replacing the Python loop over ray samples on every call.
 
-    2. *8-parameter sub-problems* — scipy's built-in ``jac='3-point'`` FD
-       only needs 17 evaluations per gradient step (vs. N_STATE × n_geo + 1
-       for the joint problem), and each sub-problem converges in ~20-50 iters
-       rather than 500+ for the joint.
+    2. *8-parameter sub-problems* — an explicit chain-rule Jacobian
+       ``_J_and_grad_g`` computes the gradient in 9 Ne-profile evaluations
+       per step (1 baseline + 8 single-param perturbations), roughly half the
+       cost of scipy's ``"3-point"`` which needed 16 full-objective evaluations.
+       Each sub-problem converges in ~20–50 iters rather than 500+ for the
+       joint problem.
 
     3. *Thread parallelism* — grid-point sub-problems are dispatched to a
        ThreadPoolExecutor; numpy releases the GIL during array operations so
@@ -2930,6 +2676,8 @@ def _run_parametric_optimization(
         res_opt["opt_J_prior"]         = prior_J
         res_opt["opt_J_post"]          = post_J
         res_opt["opt_method"]          = method_name
+        res_opt["prior_mean_state"]    = prior_mean          # (N_STATE, n_geo)
+        res_opt["post_mean_state"]     = post_mean           # (N_STATE, n_geo)
         results[method_name] = res_opt
 
     return results
@@ -3101,6 +2849,17 @@ def plot_optimization_methods_comparison(
     ax.xaxis.set_major_formatter(ne_fmt)
     ax.legend(fontsize=8, loc="upper right", framealpha=0.85)
     ax.grid(True, alpha=0.3, ls=":")
+    ax.set_ylim(bottom=0)
+
+    # Parameter readout — prior is the shared IRI fit (identical for every
+    # method), so show it once per method colour for direct comparison with
+    # the posterior box below.
+    prior_entries = [
+        (f"{mname} prior", style_map[mname][0],
+         res_by_name[mname]["prior_mean_state"][:, idx_mh])
+        for mname in ("KF", "EnKF") if "prior_mean_state" in res_by_name[mname]
+    ]
+    _draw_param_boxes(ax, prior_entries, loc="lower left")
 
     # ── [1,1] Posterior EDP at MH ─────────────────────────────────────────────
     ax = ax_edp_po
@@ -3120,6 +2879,17 @@ def plot_optimization_methods_comparison(
     ax.xaxis.set_major_formatter(ne_fmt)
     ax.legend(fontsize=8, loc="upper right", framealpha=0.85)
     ax.grid(True, alpha=0.3, ls=":")
+    ax.set_ylim(bottom=0)
+
+    # Parameter readout — one colour-coded box per parametric method (the
+    # gridded KF has no Chapman/Epstein state, so it is excluded here).
+    post_entries = [
+        (mname, style_map.get(mname, ("gray",))[0],
+         res_by_name[mname]["post_mean_state"][:, idx_mh])
+        for mname in method_order
+        if mname != "KF" and "post_mean_state" in res_by_name[mname]
+    ]
+    _draw_param_boxes(ax, post_entries, loc="lower left")
 
     # ── [2,0] TEC RMSE bar chart ──────────────────────────────────────────────
     ax    = ax_rmse
@@ -3209,574 +2979,6 @@ def plot_optimization_methods_comparison(
 # §D  Covariance plot (shared by KF and EnKF)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _plot_covariance_panels(
-    result: dict,
-    save_dir: str,
-    group_key: str,
-    label: str,
-    *,
-    hmF2_ref_km: float | None = None,
-) -> str:
-    """
-    Four-panel figure showing the EDP prior and posterior covariance structure.
-
-    Layout (2 rows × 2 cols):
-      Row 0 — Prior:     Alt-Alt correlation  |  Horizontal correlation at hmF2
-      Row 1 — Posterior: Alt-Alt correlation  |  Horizontal correlation at hmF2
-
-    Parameters
-    ----------
-    result      : result dict with keys prior_P, post_P, alt_grid, eds_occ,
-                  region, prior_edp_3d, lats, lons, time_window.
-    label       : short label for the title, e.g. "KF" or "EnKF".
-    hmF2_ref_km : altitude for the horizontal slice; defaults to prior F2 peak.
-    """
-    import warnings
-
-    alt_grid  = result["alt_grid"]
-    prior_P   = result["prior_P"]
-    post_P    = result["post_P"]
-    eds_occ   = result["eds_occ"]
-    region    = result["region"]
-    prior_edp = result["prior_edp_3d"]
-
-    n_height  = len(alt_grid)
-    verts_geo = eds_occ.geolocation      # (n_geo, 2): col0=lon, col1=lat
-    n_geo     = verts_geo.shape[0]
-    n_sv      = n_height * n_geo
-
-    centre_idx = _roi_centre_idx(verts_geo, region)
-
-    if hmF2_ref_km is None:
-        _, hmF2_ref_km = extract_robust_f2_peak(prior_edp[:, centre_idx], alt_grid)
-        if np.isnan(hmF2_ref_km):
-            hmF2_ref_km = float(alt_grid[n_height // 2])
-    alt_ref_idx  = int(np.argmin(np.abs(alt_grid - hmF2_ref_km)))
-    true_alt_ref = float(alt_grid[alt_ref_idx])
-
-    def _alt_corr(P_aug):
-        P_grid = P_aug[:n_sv, :n_sv]
-        P_4d   = P_grid.reshape(n_height, n_geo, n_height, n_geo)
-        cov    = P_4d.mean(axis=(1, 3))
-        std    = np.sqrt(np.maximum(np.diag(cov), 0.0))
-        outer  = np.outer(std, std)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            return cov / np.where(outer == 0, 1e-10, outer)
-
-    def _horiz_corr(P_aug):
-        P_grid  = P_aug[:n_sv, :n_sv]
-        P_4d    = P_grid.reshape(n_height, n_geo, n_height, n_geo)
-        cov_row = P_4d[alt_ref_idx, centre_idx, alt_ref_idx, :]
-        var_ctr = float(P_4d[alt_ref_idx, centre_idx, alt_ref_idx, centre_idx])
-        var_all = P_4d[alt_ref_idx, :, alt_ref_idx, :]
-        std_all = np.sqrt(np.maximum(np.diag(var_all), 0.0))
-        std_ctr = float(np.sqrt(max(var_ctr, 0.0)))
-        denom   = std_ctr * std_all
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            return cov_row / np.where(denom == 0, 1e-10, denom)
-
-    prior_alt_corr = _alt_corr(prior_P)
-    post_alt_corr  = _alt_corr(post_P)
-    prior_horiz    = _horiz_corr(prior_P)
-    post_horiz     = _horiz_corr(post_P)
-
-    lats_c = result["lats"]
-    lons_c = result["lons"]
-    clon   = float(np.nanmean(lons_c)) if lons_c else 0.0
-    clat   = float(np.nanmean(lats_c)) if lats_c else 0.0
-    proj   = ccrs.Orthographic(central_longitude=clon, central_latitude=clat)
-
-    alt_extent = [float(alt_grid[0]), float(alt_grid[-1]),
-                  float(alt_grid[0]), float(alt_grid[-1])]
-
-    fig = plt.figure(figsize=(18, 10))
-    fig.suptitle(
-        f"{label} — EDP Covariance Structure\n"
-        f"{result.get('time_window', group_key)}  |  {region}\n"
-        f"Horizontal slice at {true_alt_ref:.0f} km  ·  ★ = centre vertex",
-        fontsize=12,
-    )
-    gs = gridspec.GridSpec(2, 2, figure=fig,
-                           left=0.06, right=0.97, top=0.88, bottom=0.07,
-                           wspace=0.30, hspace=0.35)
-
-    row_labels = ["Prior", "Posterior"]
-    corr_pairs = [(prior_alt_corr, prior_horiz), (post_alt_corr, post_horiz)]
-
-    for row, (row_lbl, (alt_corr, horiz_corr)) in enumerate(
-        zip(row_labels, corr_pairs)
-    ):
-        ax_aa = fig.add_subplot(gs[row, 0])
-        pcm = ax_aa.imshow(
-            alt_corr, cmap="coolwarm", vmin=-1, vmax=1,
-            extent=alt_extent, origin="lower", aspect="auto",
-        )
-        ax_aa.axhline(true_alt_ref, color="gold", lw=1.0, ls="--", alpha=0.8)
-        ax_aa.axvline(true_alt_ref, color="gold", lw=1.0, ls="--", alpha=0.8)
-        ax_aa.set_xlabel("Altitude (km)", fontsize=9)
-        ax_aa.set_ylabel("Altitude (km)", fontsize=9)
-        ax_aa.set_title(f"{row_lbl} — Alt-Alt Correlation", fontsize=10)
-        fig.colorbar(pcm, ax=ax_aa, label="Pearson r", fraction=0.046, pad=0.04)
-
-        ax_gl = fig.add_subplot(gs[row, 1], projection=proj)
-        ax_gl.set_global()
-        ax_gl.add_feature(cfeature.LAND,  facecolor="whitesmoke", zorder=0)
-        ax_gl.add_feature(cfeature.OCEAN, facecolor="aliceblue",  zorder=0)
-        ax_gl.add_feature(cfeature.COASTLINE.with_scale("110m"),
-                          lw=0.4, edgecolor="gray")
-        ax_gl.gridlines(lw=0.2, alpha=0.3)
-
-        try:
-            tc = ax_gl.tripcolor(
-                verts_geo[:, 0], verts_geo[:, 1], eds_occ.mesh,
-                horiz_corr,
-                transform=ccrs.Geodetic(),
-                cmap="coolwarm", shading="flat",
-                vmin=-1, vmax=1, zorder=1,
-            )
-            cb = fig.colorbar(tc, ax=ax_gl, orientation="horizontal",
-                              shrink=0.75, pad=0.04, fraction=0.04)
-            cb.set_label("Pearson r", fontsize=8)
-        except Exception:
-            pass
-
-        ctr_lon = float(verts_geo[centre_idx, 0])
-        ctr_lat = float(verts_geo[centre_idx, 1])
-        ax_gl.plot(ctr_lon, ctr_lat, transform=ccrs.Geodetic(),
-                   marker="*", color="gold", ms=12, mec="black", mew=0.8, zorder=8)
-        _draw_roi_boundary(ax_gl, region)
-        ax_gl.set_title(
-            f"{row_lbl} — Horizontal Correlation at {true_alt_ref:.0f} km",
-            fontsize=10,
-        )
-
-    os.makedirs(save_dir, exist_ok=True)
-    safe_key  = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
-    safe_label = label.lower().replace(" ", "_")
-    plot_path = os.path.join(save_dir, f"compare_{safe_key}_{safe_label}_covariance.png")
-    fig.savefig(plot_path, dpi=100, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Covariance plot ({label}) saved → {plot_path}")
-    return plot_path
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# §E  3×2 comparison plot
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _render_globe_ax(
-    ax,
-    fig,
-    res: dict,
-    alt_grid: np.ndarray,
-    label: str,
-    isr_site: tuple[float, float] | None = None,
-    n_occ_shown: int = 3,
-    shown_indices: list[int] | None = None,
-    occ_colours_override: list | None = None,
-) -> None:
-    """
-    Render a globe panel (ΔNe map + raypaths + ROI) onto an existing cartopy axes.
-
-    Parameters
-    ----------
-    ax                   : cartopy GeoAxes to draw on.
-    fig                  : parent Figure (for colorbar).
-    res                  : result dict (from process_group or _run_parametric_enkf).
-    alt_grid             : altitude grid in km.
-    label                : title label string (e.g. "KF" or "EnKF").
-    isr_site             : (lon_deg, lat_deg) of the ISR site, or None.
-    n_occ_shown          : maximum number of occultation raypaths to draw (used
-                           only when shown_indices is None).
-    shown_indices        : explicit list of occultation indices to draw.  When
-                           provided, overrides n_occ_shown so the globe shows
-                           exactly the same occultations as the top panels.
-    occ_colours_override : per-occultation colours aligned with the full
-                           occultation list.  When provided, the colours on the
-                           globe match the top-row TEC / EDP panels exactly.
-    """
-    from collections import defaultdict
-
-    eds_occ    = res["eds_occ"]
-    clean_list = res.get("clean_list", [])
-    prior_edp  = res["prior_edp_3d"]
-    _jnt = res.get("joint_post_edp_3d")
-    post_edp   = _jnt if _jnt is not None else res["post_edp_3d"]
-    sat_ids    = res.get("sat_ids", [])
-    region     = res["region"]
-
-    verts_geo = eds_occ.geolocation
-    tris_geo  = eds_occ.mesh
-    n_geo     = verts_geo.shape[0]
-
-    centre_idx = _roi_centre_idx(verts_geo, region)
-    prior_centre = prior_edp[:, centre_idx]
-    post_centre  = post_edp[:, centre_idx]
-    pr_nm, pr_hm = extract_robust_f2_peak(prior_centre, alt_grid)
-    po_nm, po_hm = extract_robust_f2_peak(post_centre, alt_grid)
-
-    if not np.isnan(pr_hm):
-        alt_idx     = int(np.argmin(np.abs(alt_grid - pr_hm)))
-        delta_slice = post_edp[alt_idx, :] - prior_edp[alt_idx, :]
-        hmF2_label  = f"~{alt_grid[alt_idx]:.0f} km"
-    else:
-        delta_slice = np.zeros(n_geo)
-        hmF2_label  = "F2 unavailable"
-
-    # Per-occultation colours — prefer the override so globe matches top panels
-    n_occ = len(clean_list)
-    if occ_colours_override is not None:
-        occ_colours = list(occ_colours_override)
-    else:
-        # Fallback: build per-constellation colours independently
-        const_counts = defaultdict(int)
-        occ_const    = []
-        for i in range(n_occ):
-            prn   = sat_ids[i][1] if i < len(sat_ids) else ""
-            const = prn[0].upper() if prn else "?"
-            occ_const.append(const)
-            const_counts[const] += 1
-
-        const_counter = defaultdict(int)
-        occ_colours   = []
-        for const in occ_const:
-            cfg       = CONSTELLATION_CONFIG.get(const, {})
-            cmap_name = cfg.get("cmap", _CONST_FALLBACK_CMAP)
-            cmap_c    = mpl.colormaps.get_cmap(cmap_name)
-            n_in      = const_counts[const]
-            idx_in    = const_counter[const]
-            t = (0.40 + 0.50 * (idx_in / max(n_in - 1, 1))) if n_in > 1 else 0.70
-            occ_colours.append(cmap_c(t))
-            const_counter[const] += 1
-
-    ax.set_global()
-    ax.add_feature(cfeature.LAND,      facecolor="whitesmoke", zorder=0)
-    ax.add_feature(cfeature.OCEAN,     facecolor="aliceblue",  zorder=0)
-    ax.add_feature(cfeature.COASTLINE.with_scale("110m"), lw=0.5, edgecolor="gray")
-    ax.add_feature(cfeature.BORDERS.with_scale("110m"),   lw=0.3, edgecolor="lightgray")
-    ax.gridlines(lw=0.3, alpha=0.4)
-
-    try:
-        max_delta = float(np.nanmax(np.abs(delta_slice)))
-        if max_delta > 0:
-            tc = ax.tripcolor(
-                verts_geo[:, 0], verts_geo[:, 1], tris_geo,
-                delta_slice,
-                transform=ccrs.Geodetic(),
-                cmap="coolwarm", shading="flat",
-                vmin=-max_delta, vmax=max_delta,
-                zorder=1,
-            )
-            cbar = fig.colorbar(tc, ax=ax, orientation="horizontal",
-                                shrink=0.75, pad=0.04, fraction=0.04)
-            cbar.set_label(f"ΔNe at hmF2 ({hmF2_label}) [m⁻³]", fontsize=7)
-            cbar.formatter.set_powerlimits((-2, 2))
-            cbar.update_ticks()
-    except Exception:
-        pass
-
-    try:
-        mean_ts = _parse_time_window(res["time_window"])
-        _draw_terminator(ax, mean_ts, zorder=5)
-    except Exception:
-        pass
-
-    # Show only a subset of occultations to keep the plot readable.
-    # Use the caller-supplied indices when available so the globe shows exactly
-    # the same occultations (same colours) as the top TEC / EDP panels.
-    if shown_indices is None:
-        shown_indices = list(range(min(n_occ_shown, n_occ)))
-    shown_clean   = [clean_list[i] for i in shown_indices if i < len(clean_list)]
-    shown_colours = [occ_colours[i] for i in shown_indices if i < len(occ_colours)]
-    _draw_leo_path(ax, shown_clean, shown_colours, zorder=5)
-
-    ctr_lon = float(verts_geo[centre_idx, 0])
-    ctr_lat = float(verts_geo[centre_idx, 1])
-    ax.plot(ctr_lon, ctr_lat, transform=ccrs.Geodetic(),
-            marker="*", color="yellow", ms=12, mec="black", mew=0.8,
-            zorder=8, label="Centre EDP vertex")
-
-    _draw_roi_boundary(ax, region)
-
-    ray_defs = [
-        ("top",     "solid",  2.0),
-        ("tec-max", "dashed", 1.8),
-        ("bottom",  "dotted", 1.5),
-    ]
-    for i, (cl, col) in enumerate(zip(shown_clean, shown_colours)):
-        LEO  = cl["LEO"]
-        GNSS = cl["GNSS"]
-        tec  = cl["tec"]
-        tang = cl["tangent_km"]
-        idx_top    = int(np.argmax(tang))
-        idx_bottom = int(np.argmin(tang))
-        idx_tecmax = int(np.argmax(tec))
-        for (rtype, ls, lw), ridx in zip(
-            ray_defs, [idx_top, idx_tecmax, idx_bottom]
-        ):
-            lbl = rtype if i == 0 else None
-            _draw_raypath(ax, LEO, GNSS, ridx,
-                          color=col, ls=ls, lw=lw, label=lbl, zorder=6,
-                          TP=(ridx == idx_tecmax))
-
-    if isr_site is not None:
-        ax.plot(isr_site[0], isr_site[1], transform=ccrs.Geodetic(),
-                marker="^", ms=10, color="limegreen",
-                mec="black", mew=1.0, zorder=9, label="MH ISR")
-
-    ax.set_title(
-        f"{label} Globe — ΔNe at hmF2 ({hmF2_label})\n"
-        f"RMSE {res['prior_tec_rmse']:.2f}→{res['post_tec_rmse']:.2f} TECU",
-        fontsize=9,
-    )
-    ax.legend(loc="lower left", fontsize=6, framealpha=0.75)
-
-
-def plot_kf_enkf_comparison(
-    res_kf:       dict,
-    res_enkf:     dict,
-    isr_profiles: list[dict],
-    alt_grid:     np.ndarray,
-    group_key:    str,
-    save_dir:     str,
-    n_tec_shown:  int = 3,
-) -> str:
-    """
-    3×2 direct comparison figure.
-
-    ┌──────────────────────┬──────────────────────┐
-    │  [0,0] Prior TEC     │  [0,1] Posterior TEC  │
-    │  measured, KF, EnKF  │  measured, KF, EnKF   │
-    ├──────────────────────┼──────────────────────┤
-    │  [1,0] Prior EDP     │  [1,1] Posterior EDP  │
-    │  KF, EnKF, ISR       │  KF, EnKF, ISR        │
-    ├──────────────────────┼──────────────────────┤
-    │  [2,0] KF Globe      │  [2,1] EnKF Globe     │
-    │  ΔNe + raypaths      │  ΔNe + raypaths       │
-    └──────────────────────┴──────────────────────┘
-
-    TEC panels show only `n_tec_shown` occultations (default 3).
-
-    Parameters
-    ----------
-    res_kf, res_enkf  : result dicts from process_group / _run_parametric_enkf.
-    isr_profiles      : ISR sweeps (may be empty list).
-    alt_grid          : shared altitude grid (km).
-    group_key         : used for figure title and filename.
-    save_dir          : output directory.
-    n_tec_shown       : number of occultations to show in TEC panels.
-
-    Returns
-    -------
-    str : path to the saved PNG.
-    """
-    os.makedirs(save_dir, exist_ok=True)
-
-    ne_fmt = ScalarFormatter(useMathText=True)
-    ne_fmt.set_powerlimits((-2, 2))
-
-    verts_geo = res_kf["eds_occ"].geolocation
-    n_geo     = verts_geo.shape[0]
-    n_alt     = len(alt_grid)
-    idx_mh    = millstone_vertex_idx(verts_geo)
-
-    # ── Extract EDP at MH vertex ──────────────────────────────────────────────
-    kf_prior_mh  = np.asarray(res_kf["prior_edp_3d"]).reshape(n_alt, n_geo)[:, idx_mh]
-    _kf_jnt      = res_kf.get("joint_post_edp_3d")
-    kf_post_mh   = np.asarray(
-        _kf_jnt if _kf_jnt is not None else res_kf["post_edp_3d"]
-    ).reshape(n_alt, n_geo)[:, idx_mh]
-
-    enkf_prior_mh = np.asarray(res_enkf["prior_edp_3d"]).reshape(n_alt, n_geo)[:, idx_mh]
-    enkf_post_mh  = np.asarray(res_enkf["post_edp_3d"]).reshape(n_alt, n_geo)[:, idx_mh]
-
-    # ── TEC slices — limit to n_tec_shown occultations ────────────────────────
-    kf_slices   = res_kf["tec_slices"]
-    enkf_slices = res_enkf["tec_slices"]
-    n_occ       = len(kf_slices)
-    shown_idx   = list(range(min(n_tec_shown, n_occ)))
-
-    sat_ids  = res_kf.get("sat_ids", [])
-    cmap_occ = mpl.colormaps.get_cmap("tab10")
-    occ_cols = [cmap_occ(i % 10) for i in range(n_occ)]
-
-    # ── Globe projections ─────────────────────────────────────────────────────
-    lats_c = res_kf["lats"]
-    lons_c = res_kf["lons"]
-    clon   = float(np.nanmean(lons_c)) if lons_c else 0.0
-    clat   = float(np.nanmean(lats_c)) if lats_c else 0.0
-    proj_kf   = ccrs.Orthographic(central_longitude=clon, central_latitude=clat)
-    proj_enkf = ccrs.Orthographic(central_longitude=clon, central_latitude=clat)
-
-    # ── Build figure ──────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(18, 21))
-    fig.suptitle(
-        f"KF vs. Parametric EnKF Comparison\n{group_key}",
-        fontsize=13, y=0.99,
-    )
-    gs = gridspec.GridSpec(3, 2, figure=fig, wspace=0.35, hspace=0.45,
-                           height_ratios=[1, 1, 1.4])
-
-    ax_tec_pr = fig.add_subplot(gs[0, 0])
-    ax_tec_po = fig.add_subplot(gs[0, 1], sharey=ax_tec_pr, sharex=ax_tec_pr)
-    ax_edp_pr = fig.add_subplot(gs[1, 0])
-    ax_edp_po = fig.add_subplot(gs[1, 1], sharey=ax_edp_pr, sharex=ax_edp_pr)
-    ax_globe_kf   = fig.add_subplot(gs[2, 0], projection=proj_kf)
-    ax_globe_enkf = fig.add_subplot(gs[2, 1], projection=proj_enkf)
-
-    # ── [0,0] Prior TEC (n_tec_shown occultations) ────────────────────────────
-    ax = ax_tec_pr
-    for i in shown_idx:
-        sl_kf = kf_slices[i]
-        sl_en = enkf_slices[i]
-        col   = occ_cols[i]
-        prn   = sat_ids[i][1] if i < len(sat_ids) else f"Occ {i+1}"
-        ax.plot(sl_kf["measured"],  sl_kf["tangent_km"],
-                color=col, lw=2.0, label=prn)
-        ax.plot(sl_kf["prior_tec"], sl_kf["tangent_km"],
-                color=col, lw=1.4, ls="--", alpha=0.8)
-        ax.plot(sl_en["prior_tec"], sl_en["tangent_km"],
-                color=col, lw=1.4, ls=":",  alpha=0.8)
-
-    _style_legend = [
-        Line2D([0], [0], color="gray", lw=2.0,          label="Measured TEC"),
-        Line2D([0], [0], color="gray", lw=1.4, ls="--", label="KF prior"),
-        Line2D([0], [0], color="gray", lw=1.4, ls=":",  label="EnKF prior"),
-    ] + [Line2D([0], [0], color=occ_cols[i], lw=2.0,
-                label=sat_ids[i][1] if i < len(sat_ids) else f"Occ {i+1}")
-         for i in shown_idx]
-    ax.legend(handles=_style_legend, fontsize=8, loc="upper right", framealpha=0.85)
-    ax.set_xlabel("TEC (TECU)", fontsize=10)
-    ax.set_ylabel("Tangent Altitude (km)", fontsize=10)
-    ax.set_title(
-        f"Prior TEC — KF RMSE {res_kf['prior_tec_rmse']:.2f} TECU"
-        f" | EnKF {res_enkf['prior_tec_rmse']:.2f} TECU",
-        fontsize=10,
-    )
-    ax.grid(True, alpha=0.3, ls=":")
-
-    # ── [0,1] Posterior TEC ───────────────────────────────────────────────────
-    ax = ax_tec_po
-    for i in shown_idx:
-        sl_kf = kf_slices[i]
-        sl_en = enkf_slices[i]
-        col   = occ_cols[i]
-        ax.plot(sl_kf["measured"],  sl_kf["tangent_km"], color=col, lw=2.0)
-        ax.plot(sl_kf["post_tec"],  sl_kf["tangent_km"], color=col, lw=1.4, ls="--", alpha=0.8)
-        ax.plot(sl_en["post_tec"],  sl_en["tangent_km"], color=col, lw=1.4, ls=":",  alpha=0.9)
-
-    _style_legend_po = [
-        Line2D([0], [0], color="gray", lw=2.0,          label="Measured TEC"),
-        Line2D([0], [0], color="gray", lw=1.4, ls="--", label="KF posterior"),
-        Line2D([0], [0], color="gray", lw=1.4, ls=":",  label="EnKF posterior"),
-    ]
-    ax.legend(handles=_style_legend_po, fontsize=8, loc="upper right", framealpha=0.85)
-    ax.set_xlabel("TEC (TECU)", fontsize=10)
-    ax.set_title(
-        f"Posterior TEC — KF RMSE {res_kf['post_tec_rmse']:.2f} TECU"
-        f" | EnKF {res_enkf['post_tec_rmse']:.2f} TECU",
-        fontsize=10,
-    )
-    ax.grid(True, alpha=0.3, ls=":")
-
-    # ── [1,0] Prior EDP at MH ─────────────────────────────────────────────────
-    ISR_COLOR = "mediumseagreen"
-    ax = ax_edp_pr
-
-    for prof in isr_profiles:
-        ax.plot(prof["ne"], prof["alt_km"],
-                color=ISR_COLOR, lw=1.0, alpha=0.7,
-                label="ISR truth" if prof is isr_profiles[0] else "_")
-
-    ax.plot(kf_prior_mh,   alt_grid, color="royalblue",  lw=2.2, ls="--",
-            label="KF prior (IRI)")
-    ax.plot(enkf_prior_mh, alt_grid, color="darkorange",  lw=2.2, ls="-.",
-            label="EnKF prior (parametric)")
-
-    for (nm, hm), col, mrk in [
-        (extract_robust_f2_peak(kf_prior_mh,   alt_grid), "royalblue",  "D"),
-        (extract_robust_f2_peak(enkf_prior_mh, alt_grid), "darkorange", "s"),
-    ]:
-        if not np.isnan(nm):
-            ax.plot(nm, hm, marker=mrk, ms=9, color=col, mec="black", zorder=7)
-
-    ax.set_xlabel("Electron Density (m⁻³)", fontsize=10)
-    ax.set_ylabel("Altitude (km)", fontsize=10)
-    ax.set_title("Prior EDP at Millstone Hill vertex", fontsize=10)
-    ax.xaxis.set_major_formatter(ne_fmt)
-    ax.legend(fontsize=8, loc="upper right", framealpha=0.85)
-    ax.grid(True, alpha=0.3, ls=":")
-
-    # ── [1,1] Posterior EDP at MH ─────────────────────────────────────────────
-    ax = ax_edp_po
-
-    for prof in isr_profiles:
-        ax.plot(prof["ne"], prof["alt_km"],
-                color=ISR_COLOR, lw=1.0, alpha=0.7,
-                label="ISR truth" if prof is isr_profiles[0] else "_")
-
-    ax.plot(kf_post_mh,   alt_grid, color="royalblue",  lw=2.5, ls="--",
-            label="KF posterior")
-    ax.plot(enkf_post_mh, alt_grid, color="darkorange",  lw=2.5, ls="-.",
-            label="EnKF posterior")
-
-    for (nm, hm), col, mrk in [
-        (extract_robust_f2_peak(kf_post_mh,   alt_grid), "royalblue",  "D"),
-        (extract_robust_f2_peak(enkf_post_mh, alt_grid), "darkorange", "s"),
-    ]:
-        if not np.isnan(nm):
-            ax.plot(nm, hm, marker=mrk, ms=9, color=col, mec="black", zorder=7)
-
-    if isr_profiles:
-        isr_nm_mean = np.nanmean([p["nm_f2"] for p in isr_profiles])
-        isr_hm_mean = np.nanmean([p["hm_f2"] for p in isr_profiles])
-        nm_kf,  hm_kf  = extract_robust_f2_peak(kf_post_mh,   alt_grid)
-        nm_en,  hm_en  = extract_robust_f2_peak(enkf_post_mh, alt_grid)
-        bias_nm_kf  = nm_kf  - isr_nm_mean if not np.isnan(nm_kf)  else np.nan
-        bias_nm_en  = nm_en  - isr_nm_mean if not np.isnan(nm_en)  else np.nan
-        bias_hm_kf  = hm_kf  - isr_hm_mean if not np.isnan(hm_kf)  else np.nan
-        bias_hm_en  = hm_en  - isr_hm_mean if not np.isnan(hm_en)  else np.nan
-        bias_text = (
-            f"NmF2 bias — KF: {bias_nm_kf:.2e}  EnKF: {bias_nm_en:.2e} m⁻³\n"
-            f"hmF2 bias — KF: {bias_hm_kf:.1f}  EnKF: {bias_hm_en:.1f} km"
-        )
-        ax.text(0.03, 0.03, bias_text, transform=ax.transAxes,
-                fontsize=7.5, va="bottom", ha="left",
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.75))
-
-    ax.set_xlabel("Electron Density (m⁻³)", fontsize=10)
-    ax.set_title("Posterior EDP at Millstone Hill vertex", fontsize=10)
-    ax.xaxis.set_major_formatter(ne_fmt)
-    ax.legend(fontsize=8, loc="upper right", framealpha=0.85)
-    ax.grid(True, alpha=0.3, ls=":")
-
-    # ── [2,0] KF Globe ────────────────────────────────────────────────────────
-    isr_site_arg = (ISR_LON_W, ISR_LAT) if isr_profiles else None
-    _render_globe_ax(ax_globe_kf,   fig, res_kf,   alt_grid, "KF",
-                     isr_site=isr_site_arg, n_occ_shown=n_tec_shown,
-                     shown_indices=shown_idx, occ_colours_override=occ_cols)
-
-    # ── [2,1] EnKF Globe ──────────────────────────────────────────────────────
-    _render_globe_ax(ax_globe_enkf, fig, res_enkf, alt_grid, "EnKF",
-                     isr_site=isr_site_arg, n_occ_shown=n_tec_shown,
-                     shown_indices=shown_idx, occ_colours_override=occ_cols)
-
-    plt.tight_layout(rect=[0, 0, 1, 0.98])
-    safe_key  = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
-    plot_path = os.path.join(save_dir, f"compare_{safe_key}_3x2.png")
-    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Comparison 3×2 plot saved → {plot_path}")
-
-    # ── Separate covariance plots for KF and EnKF ─────────────────────────────
-    if "prior_P" in res_kf and "post_P" in res_kf:
-        _plot_covariance_panels(res_kf,   save_dir, group_key, "KF")
-    if "prior_P" in res_enkf and "post_P" in res_enkf:
-        _plot_covariance_panels(res_enkf, save_dir, group_key, "EnKF")
-
-    return plot_path
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4412,6 +3614,7 @@ def compare_iri_vs_parametric(
     ax.set_title("Linear scale")
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
+    ax.set_ylim(bottom=0)
 
     # Right panel — log scale
     ax = axes[1]
@@ -4422,6 +3625,11 @@ def compare_iri_vs_parametric(
     ax.set_title(f"Log  RMSE top={rmse_top:.3f}  bot={rmse_bot:.3f}")
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3, which="both")
+    ax.set_ylim(bottom=0)
+
+    # Colour-coded parameter readout for the fitted parametric state.
+    _draw_param_boxes(ax, [("parametric", kw_param["color"], params_log)],
+                       loc="lower right")
 
     plt.tight_layout()
 

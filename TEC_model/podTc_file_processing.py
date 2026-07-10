@@ -176,7 +176,6 @@ def parse_podTc2_nc_file(file_path):
                 podTc2_data['time'] = np.flip(time_masked)
                 podTc2_data['tangent_alt_km'] = np.flip(tangent_alt_masked)
                 podTc2_data['occ_type'] = 'setting'
-                print(f"Data Flipped: {podTc2_data['conid']}{podTc2_data['prn_id']} is setting")
             else:
                 # Reassign back into dictionary, straight pass
                 podTc2_data['TEC_podTc2'] = tec_masked
@@ -185,7 +184,6 @@ def parse_podTc2_nc_file(file_path):
                 podTc2_data['time'] = time_masked
                 podTc2_data['tangent_alt_km'] = tangent_alt_masked
                 podTc2_data['occ_type'] = 'rising'
-                print(f"{podTc2_data['conid']}{podTc2_data['prn_id']} is rising")
 
     return podTc2_data
 #
@@ -364,10 +362,8 @@ def process_podtc_retrieval(filepath_podTc: str, file: str, subfolder: str, gene
         time_input = np.flip(time_input)
         tangent_alt = np.flip(tangent_alt)
         occ_type = 'setting'
-        print(f"Data Flipped: {podTc2_data['conid']}{podTc2_data['prn_id']} is setting")
     else:
         occ_type = 'rising'
-        print(f"{podTc2_data['conid']}{podTc2_data['prn_id']} is rising")
 
     # Final Mask to limit to < 600km altitude
     mask_600 = tangent_alt < 600

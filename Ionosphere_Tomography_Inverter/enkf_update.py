@@ -193,26 +193,46 @@ def enkf_update(
     n_state, n_members = X_f.shape
     n_obs = Y_f.shape[0]
 
-    # ── 1. Ensemble anomalies (with multiplicative inflation) ─────────────────
-    X_mean = X_f.mean(axis=1, keepdims=True)   # (n_state, 1)
-    Y_mean = Y_f.mean(axis=1, keepdims=True)   # (n_obs, 1)
+    # ── 1. Drop members whose forward-model output is non-finite ─────────────
+    # Non-finite TEC predictions (from e.g. negative gamma or overflow in the
+    # Chapman profile) corrupt P_yy and cause la.solve to crash.  Exclude those
+    # members from covariance estimation; they still receive the update computed
+    # from the valid subset, which is the least-bad option without re-running
+    # the forward model.
+    valid = np.all(np.isfinite(Y_f), axis=0)   # (N,) boolean
+    n_valid = int(valid.sum())
+    if n_valid < n_members:
+        print(f"    [enkf_update] WARNING: {n_members - n_valid}/{n_members} members "
+              f"have non-finite TEC predictions — excluded from covariance estimation.")
+    if n_valid < 2:
+        raise ValueError(
+            f"enkf_update: only {n_valid} finite member(s) — cannot form a covariance. "
+            "Check the forward model for NaN/Inf (likely negative gamma or overflow)."
+        )
 
+    # ── 2. Ensemble anomalies (with multiplicative inflation) ─────────────────
+    # Means and anomalies are computed from the valid subset only.
+    X_mean = X_f[:, valid].mean(axis=1, keepdims=True)    # (n_state, 1)
+    Y_mean = Y_f[:, valid].mean(axis=1, keepdims=True)    # (n_obs, 1)
+
+    # Anomalies for ALL members (so every member gets updated), but the
+    # covariance factors below use only valid members.
     X_prime = (X_f - X_mean) * inflation       # (n_state, N)
     Y_prime = Y_f - Y_mean                     # (n_obs, N)
-    
+
     # Safely reconstruct the inflated prior state
     X_inflated = X_mean + X_prime
 
-    # ── 2. Ensemble square-root factors ──────────────────────────────────────
-    sq      = np.sqrt(1.0 / (n_members - 1))
-    L_tilde = X_prime * sq   # (n_state, N)
-    H_tilde = Y_prime * sq   # (n_obs, N)
+    # ── 3. Ensemble square-root factors (valid members only) ─────────────────
+    sq      = np.sqrt(1.0 / (n_valid - 1))
+    L_tilde = X_prime[:, valid] * sq   # (n_state, n_valid)
+    H_tilde = Y_prime[:, valid] * sq   # (n_obs,   n_valid)
 
-    # ── 3. Forecast covariances ───────────────────────────────────────────────
+    # ── 4. Forecast covariances ───────────────────────────────────────────────
     P_yy     = H_tilde @ H_tilde.T    # (n_obs, n_obs)
     P_xy_raw = L_tilde @ H_tilde.T    # (n_state, n_obs)
 
-    # ── 4. Localisation ───────────────────────────────────────────────────────
+    # ── 5. Localisation ───────────────────────────────────────────────────────
     if localisation_weights is not None:
         n_grid   = localisation_weights.shape[1]
         n_params = n_state // n_grid
@@ -221,7 +241,7 @@ def enkf_update(
     else:
         P_xy = P_xy_raw
 
-    # ── 5. Innovation covariance and localised Kalman gain ────────────────────
+    # ── 6. Innovation covariance and localised Kalman gain ────────────────────
     import scipy.linalg as la
     D = P_yy + R    # (n_obs, n_obs)
     try:
@@ -242,13 +262,16 @@ def enkf_update(
         except la.LinAlgError:
             D_inv_H = la.pinv(D) @ H_tilde
 
-        A     = np.eye(n_members) - H_tilde.T @ D_inv_H    # (N, N)
+        A     = np.eye(n_valid) - H_tilde.T @ D_inv_H      # (n_valid, n_valid)
         evals, evecs = np.linalg.eigh(A)
         evals = np.maximum(evals, 0.0)                     # clip numerical noise
-        W     = (evecs * np.sqrt(evals)) @ evecs.T         # symmetric √A: (N, N)
+        W     = (evecs * np.sqrt(evals)) @ evecs.T         # symmetric √A: (n_valid, n_valid)
 
-        X_prime_a = X_prime @ W                            # (n_state, N)
-        X_a       = x_mean_a[:, np.newaxis] + X_prime_a
+        X_prime_a_valid = X_prime[:, valid] @ W             # (n_state, n_valid)
+        # Broadcast back to all N members: valid members get the EnSRF anomaly,
+        # invalid members collapse to the posterior mean.
+        X_a = np.full((n_state, n_members), x_mean_a[:, np.newaxis])
+        X_a[:, valid] = x_mean_a[:, np.newaxis] + X_prime_a_valid
 
         diag_innov_mean = innov_mean
         diag_innov_std  = np.zeros(n_obs)

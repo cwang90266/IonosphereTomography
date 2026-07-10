@@ -13,7 +13,7 @@ Pipeline stages
                    observables using *georinex*.
 3. **Ephemeris** – Satellite ECEF positions from broadcast navigation
                    (IS-GPS-200 for GPS/Galileo/BeiDou; RK4 for GLONASS).
-4. **Filter**    – Discard epochs with elevation ≤ 20°.
+4. **Filter**    – Discard epochs with elevation < 10°.
 5. **Select**    – Pick the widest-separation dual-frequency pair with
                    sufficient data per constellation.
 6. **Cycle slips** – Geometry-free combination jump detection; arc splitting
@@ -208,8 +208,8 @@ MIN_ARC_SAMPLES = 20
 ARC_GAP_S = 60.0
 # Geometry-free combination jump threshold for cycle-slip declaration (m)
 GF_SLIP_THRESHOLD_M = 0.10
-# Elevation cut-off (strictly greater than this value)
-ELEV_CUT_DEG = 20.0
+# Elevation cut-off (epochs at or above this value are kept)
+ELEV_CUT_DEG = 10.0
 # CDDIS root URL
 CDDIS_BASE = "https://cddis.nasa.gov/archive/gnss"
 
@@ -841,13 +841,19 @@ class RinexDownloader:
         url_dir = f"{CDDIS_BASE}/data/daily/{year}/{doy:03d}/{yy:02d}d"
         files   = self._list_cddis_dir(url_dir)
         # Match RINEX-3 long-name pattern for obs files:
-        #   SSSS??XXX_R_YYYYDDD0000_01D_??S_MO.{rnx|crx}.gz
+        #   SSSS??XXX_{R|S|U}_YYYYDDD0000_01D_??S_MO.{rnx|crx}.gz
+        # Data source char: R=Receiver, S=Stream, U=Unknown — all valid.
         # Both uncompressed (.rnx) and Hatanaka-compressed (.crx) variants.
         pattern = re.compile(
-            rf'^{re.escape(sta)}\S{{5}}_R_{year}{doy:03d}\d{{4}}_01D_\d+S_MO\.(rnx|crx)(\.gz)?$',
+            rf'^{re.escape(sta)}\S{{5}}_([A-Z])_{year}{doy:03d}\d{{4}}_01D_\d+S_MO\.(rnx|crx)(\.gz)?$',
             re.IGNORECASE
         )
-        matches = [f.strip() for f in files if pattern.match(f.strip())]
+        matches = []
+        for f in files:
+            f_stripped = f.strip()
+            m = pattern.match(f_stripped)
+            if m:
+                matches.append((f_stripped, m.group(1).upper()))
         if not matches:
             # ── RINEX-3 fallback: try RINEX-2 Hatanaka naming in xxd/ ────────
             for sta_case in (sta.lower(), sta):
@@ -863,9 +869,11 @@ class RinexDownloader:
                 f"No RINEX-3 observation file found in {url_dir} for station {sta}. "
                 f"Available: {files[:10]}"
             )
-        # Prefer 30-second over 1-second data to save bandwidth
-        matches_sorted = sorted(matches, key=lambda f: ('30S' not in f.upper()))
-        fname_gz = matches_sorted[0]
+        # Prefer Stream (_S_) data source, then 30-second over 1-second data
+        matches_sorted = sorted(
+            matches, key=lambda fs: (fs[1] != 'S', '30S' not in fs[0].upper())
+        )
+        fname_gz = matches_sorted[0][0]
         dest     = self.cache_dir / fname_gz
         self._download(f"{url_dir}/{fname_gz}", dest)
         return self._decompress(dest)
@@ -1727,7 +1735,7 @@ def _compute_sv_tec(task: dict) -> list:
             t_sod[all_valid_idx], t_good, sv_xyz_km[row, good]
         )
 
-    elev_mask  = (elevs > ELEV_CUT_DEG)
+    elev_mask  = (elevs >= ELEV_CUT_DEG)
     valid_mask = valid_both & elev_mask & np.all(np.isfinite(sv_xyz_km), axis=0)
 
     if verbose:
@@ -1739,7 +1747,7 @@ def _compute_sv_tec(task: dict) -> list:
         print(f"  [{station}] {sv_str:4s}: "
               f"Kepler×{kepler_calls} (stride={stride})  "
               f"el={el_lo:.0f}–{el_hi:.0f}°  "
-              f"{n_above}/{n_valid} ep above {ELEV_CUT_DEG:.0f}° cut",
+              f"{n_above}/{n_valid} ep >= {ELEV_CUT_DEG:.0f}° cut",
               flush=True)
 
     if not np.any(valid_mask):
@@ -2786,6 +2794,13 @@ def igs_obs_to_clean_entry(obs: dict,
     stamp = obs.get('fileStamp', obs.get('station_id', '?'))
     tang = obs['tangent_alt_km']
 
+    # Elevation angle per epoch — for TEC-vs-elevation bar plots.
+    _elev_arr = obs.get('elevation')
+    if _elev_arr is not None and len(_elev_arr) == len(tec):
+        elev_out = _elev_arr[mask]
+    else:
+        elev_out = np.full(int(mask.sum()), np.nan)
+
     # IPP arrays — preserve for ground-track plotting; fall back to scalar if absent.
     _ipp_lat_arr = obs.get('ipp_lat')
     _ipp_lon_arr = obs.get('ipp_lon')
@@ -2824,6 +2839,7 @@ def igs_obs_to_clean_entry(obs: dict,
         'lon_tecmax_tangent': obs['lon_tecmax_tangent'],
         'date':               obs['date'],
         # Ground-track / plotting extras
+        'elev_deg':           elev_out,
         'ipp_lat':            ipp_lat_out,
         'ipp_lon':            ipp_lon_out,
         'arc_time_sec':       arc_time_out,      # seconds from arc start

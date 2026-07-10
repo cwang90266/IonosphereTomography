@@ -39,6 +39,11 @@ import warnings
 import numpy as np
 import pandas as pd
 from matplotlib.colors import LogNorm, SymLogNorm
+
+# NumPy >=2.0 removed np.trapz (renamed to np.trapezoid); NumPy <2.0 doesn't
+# have np.trapezoid yet. Resolve once at import time so call sites work
+# under either version.
+_trapz = getattr(np, "trapezoid", None) or getattr(np, "trapz")
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
@@ -51,10 +56,12 @@ import cartopy.feature as cfeature
 import pyproj
 import netCDF4
 from scipy.spatial import cKDTree
+from tqdm import tqdm
 
 from TEC_model.podTc_file_processing import parse_podTc2_nc_file
 from Ionosphere_Tomography_Inverter.ionospheric_state import (
     IonosphericState, N_STATE, PARAM_NAMES, LOG_INDICES,
+    I_LOG_NMF2, I_HMF2, I_H0, I_GAMMA, I_B0, I_B1, I_LOG_NME, I_HME,
 )
 from Ionosphere_Tomography_Inverter.observation_operator import ObservationOperator
 from Ionosphere_Tomography_Inverter.enkf_update import (
@@ -67,6 +74,9 @@ from demo_compare_kf_enkf import (
     _parametric_to_edp, _parametric_to_edp_ensemble,
     _precompute_ray_phi, _plot_arc_innovation_diagnostic,
     _idw_weights as _idw_weights_enkf,
+    _OPT_METHOD_STYLES, _OPT_BOUNDS_PER_PARAM,
+    _optimize_grid_point, _run_parametric_optimization,
+    _draw_param_boxes,
 )
 from demo_group import CONSTELLATION_CONFIG, _CONST_FALLBACK_CMAP
 
@@ -74,6 +84,16 @@ from demo_group import CONSTELLATION_CONFIG, _CONST_FALLBACK_CMAP
 # ─────────────────────────────────────────────────────────────────────────────
 # §0  Configuration
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │                        FILTER CONTROL PANEL                             │
+# │  Set each flag to True / False to enable or disable that method.        │
+# │  All methods share the same truth ionosphere, synthetic TEC, and prior. │
+# └─────────────────────────────────────────────────────────────────────────┘
+RUN_KF        = True   # Gridded Ne linear Kalman Filter (Ne-space, single-step)
+RUN_ENKF      = False   # Parametric Ensemble KF / ES-MDA (Chapman-param state)
+RUN_EKF_PARAM = True   # Iterative Extended KF on parametric IRI state
+RUN_SCIPY_OPT = True   # scipy non-linear optimisation (BFGS, NM, Newton-CG, SLSQP, trust-constr)
 
 DOY           = 154
 YYYY          = 2025
@@ -115,26 +135,46 @@ _CONST_POS = {"G": (0, 0), "R": (1, 0), "E": (0, 1), "C": (1, 1)}
 # ── §7  EnKF retrieval experiment ─────────────────────────────────────────────
 # Truth ionosphere is IRI evaluated +TRUTH_HOUR_OFFSET hours after the arc
 # representative time, with F10.7 increased by TRUTH_F107_DELTA solar-flux units.
-TRUTH_HOUR_OFFSET    = 1       # hours added to mean time for truth ionosphere
+TRUTH_HOUR_OFFSET    = 2       # hours added to mean time for truth ionosphere
 # A +10 F10.7 increment is a realistic active-to-moderate solar-activity step
 # that gives ~15–30 TECU innovations — large enough to test the filter but
 # small enough to stay within the stochastic EnKF's linear regime.
-TRUTH_F107_DELTA     = 10.0    # solar flux unit increment for truth conditions
+TRUTH_F107_DELTA     = 15   # solar flux unit increment for truth conditions
 
 ENKF_N_MEMBERS       = 500     # EnKF ensemble size (model prior)
 ENKF_LOC_RADIUS_KM   = 200.0   # Gaspari-Cohn half-support radius (km)
 # sigma_obs must be large enough that R_mda = n_mda * sigma^2 keeps the
 # Kalman gain moderate (members don't saturate physical bounds after step 1).
-ENKF_SIGMA_OBS       = 1.0     # observation noise std-dev (TECU)
+ENKF_SIGMA_OBS       = 15.0     # observation noise std-dev (TECU)
 ENKF_INFLATION       = 1.0     # multiplicative prior-ensemble inflation
-ENKF_N_MDA           = 1       # ES-MDA iterations (1 = standard single-step EnKF)
+ENKF_N_MDA           = 4       # ES-MDA iterations (1 = standard single-step EnKF)
 # Keep update rays << n_members to avoid rank-deficiency in D = P_yy + R.
 # ~10 levels per arc gives ~80 total for 8 arcs, well within the 200-member rank.
-ENKF_MAX_UPDATE_RAYS = 500      # maximum rays per arc used in the EnKF update
+ENKF_MAX_UPDATE_RAYS = 50      # maximum rays per arc used in the EnKF update
 ENKF_MAX_UPDATE_STEP = 1.0     # per-element log-space update clip
+ENKF_APPLY_BOUNDS    = True    # clamp ensemble members to physical bounds after each update
+                               # set False to diagnose whether clamping distorts the posterior
 
 # Altitudes (km) for the 5×2 EDP spatial-error orthographic plots
 ERROR_ALTITUDES      = [100, 200, 300, 400, 500]
+
+# ── §9b  EKF_Param — iterative EKF on the parametric IRI state ───────────────
+EKF_PARAM_ALPHA       = 0.8    # step-size scale (1.0 = full Kalman step; <1 is more conservative)
+EKF_PARAM_TOL         = 5e-4   # convergence: stop when ||ΔP||/||P|| < tol
+EKF_PARAM_MAX_ITER    = 20     # maximum EKF iterations
+EKF_PARAM_SIGMA_OBS   = ENKF_SIGMA_OBS        # observation noise std-dev (TECU)
+EKF_PARAM_UPDATE_RAYS = ENKF_MAX_UPDATE_RAYS   # representative rays per arc
+EKF_PARAM_APPLY_BOUNDS = True  # clamp parameters to physical bounds after each step
+EKF_PARAM_EPS_JAC     = 1e-3   # relative step for finite-difference Jacobian
+EKF_PARAM_N_WORKERS   = 10      # thread-pool size: ray-loop parallelism + vectorised Jacobian
+EKF_PARAM_JAC_ANALYTICAL = True  # True → analytical Jacobian; False → finite-difference
+
+# ── §15  scipy non-linear optimisation ────────────────────────────────────────
+SCIPY_OPT_N_WORKERS   = 4      # thread-pool size for grid-point parallelism
+SCIPY_OPT_MAXITER_UNC = 300    # iteration cap for BFGS / Nelder-Mead / Newton-CG
+SCIPY_OPT_MAXITER_CON = 600    # iteration cap for SLSQP / trust-constr
+SCIPY_OPT_SIGMA_OBS   = ENKF_SIGMA_OBS        # observation noise std-dev (TECU)
+SCIPY_OPT_UPDATE_RAYS = ENKF_MAX_UPDATE_RAYS   # representative rays per arc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -681,9 +721,9 @@ def build_model_ensemble(
     # biases innovations negative and drives the filter in the wrong direction.
     # Subtracting σ²·ln(10)/2 from every log-space member shifts the ensemble
     # mean in log-space so that E[10^θ] = 10^μ exactly.
-    log_var = np.diag(param_cov)[LOG_INDICES]          # variance per log param
-    bias    = log_var * np.log(10) / 2                 # log₁₀ units
-    state.ensemble[LOG_INDICES] -= bias[:, np.newaxis, np.newaxis]
+    # log_var = np.diag(param_cov)[LOG_INDICES]          # variance per log param
+    # bias    = log_var * np.log(10) / 2                 # log₁₀ units
+    # state.ensemble[LOG_INDICES] -= bias[:, np.newaxis, np.newaxis]
 
     # Pin member 0 to the unperturbed IRI baseline so callers can use
     # ensemble[:, :, 0] as a deterministic prior mean.
@@ -1686,6 +1726,7 @@ def main() -> None:
         parsed_list      = parsed_list,
         meta_list        = meta_list,
         mean_5deg        = mean_5deg,
+        iri_ensemble     = model_state.ensemble,
         grid_lats_1deg   = grid_lats_1deg,
         grid_lons_1deg   = grid_lons_1deg,
         grid_lats_5deg   = grid_lats_5deg,
@@ -1841,6 +1882,7 @@ def run_parametric_enkf(
     n_mda: int            = ENKF_N_MDA,
     max_update_step: float = ENKF_MAX_UPDATE_STEP,
     max_update_rays: int  = ENKF_MAX_UPDATE_RAYS,
+    apply_bounds: bool    = True,
 ) -> dict:
     """
     Assimilate truth-generated sTEC observations into the 5-deg model ensemble.
@@ -1991,20 +2033,48 @@ def run_parametric_enkf(
         print(f"  [{label_i}]  "
               f"mean={inno_mda.mean():.2f}  std={inno_mda.std():.2f}  "
               f"max_abs={np.abs(inno_mda).max():.2f} TECU")
-        # Apply bounds every step: prevents overflow when extreme ensemble members
-        # produce NaN/Inf in the forward model on the next iteration.
-        # The positive-feedback loop (clamping → larger innovations → more clamping)
-        # is broken by keeping ENKF_SIGMA_OBS large enough that the Kalman gain is
-        # modest and few members saturate bounds after each step.
-        enkf.assimilate(
+        _, diag = enkf.assimilate(
             Y_f                 = Y_mda_ens,
             y_obs               = y_obs_arc,
             R                   = R_mda,
             localisation_matrix = L_ray,
             max_update_step     = max_update_step,
             deterministic       = False,
-            apply_bounds        = True,
+            apply_bounds        = apply_bounds,
         )
+
+        # ── Update diagnostics ────────────────────────────────────────────────
+        K    = diag["kalman_gain"]   # (n_state_flat, n_obs)
+        P_yy = diag["P_yy"]         # (n_obs, n_obs)
+        R_val = (sigma_obs ** 2) * n_mda
+
+        # Condition number estimate from the diagonal of D = P_yy + R
+        # (cheap; full cond() on a 1292×1292 matrix would be slow)
+        d_diag    = np.diag(P_yy) + R_val
+        cond_est  = float(d_diag.max() / max(d_diag.min(), 1e-30))
+        k_max_abs = float(np.abs(K).max())
+        print(f"    D diag [{d_diag.min():.3g}, {d_diag.max():.3g}]  "
+              f"cond(D) ≈ {cond_est:.2e}  |K|_max = {k_max_abs:.3g}")
+
+        ens = model_state.ensemble   # (N_STATE, n_geo, n_members)
+        n_nan_inf = int(np.sum(~np.isfinite(ens)))
+        if n_nan_inf > 0:
+            print(f"    *** {n_nan_inf} NaN/Inf entries in ensemble after update ***")
+
+        print(f"    {'Parameter':<20s}  {'mean':>10s}  {'std':>10s}  "
+              f"{'min':>10s}  {'max':>10s}  {'out-of-bounds':>14s}")
+        for k_p, pname in enumerate(PARAM_NAMES):
+            lo, hi   = IonosphericState.PARAM_BOUNDS[k_p]
+            slab     = ens[k_p]   # (n_geo, n_members)
+            n_oob    = int(np.sum((slab < lo) | (slab > hi)))
+            finite   = slab[np.isfinite(slab)]
+            mean_v   = float(finite.mean()) if finite.size else float("nan")
+            std_v    = float(finite.std())  if finite.size else float("nan")
+            min_v    = float(finite.min())  if finite.size else float("nan")
+            max_v    = float(finite.max())  if finite.size else float("nan")
+            oob_str  = f"{n_oob}/{n_geo * n_members}"
+            print(f"    {pname:<20s}  {mean_v:>10.4g}  {std_v:>10.4g}  "
+                  f"{min_v:>10.4g}  {max_v:>10.4g}  {oob_str:>14s}")
 
     # ── Posterior forward model ───────────────────────────────────────────────
     Y_all_post_ens  = op.compute_stec_ensemble(
@@ -2103,6 +2173,781 @@ def run_parametric_enkf(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# §9b  EKF_Param — Iterative Extended Kalman Filter on parametric IRI state
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ekf_param_jacobian(
+    mean_state_2d: np.ndarray,
+    ray_list: list,
+    idw_weights: np.ndarray,
+    alt_grid: np.ndarray,
+    n_grid: int,
+    eps_rel: float = 1e-4,
+    n_workers: int = 1,
+) -> tuple:
+    """
+    Vectorised finite-difference Jacobian of the sTEC forward model.
+
+    All N_STATE*n_grid perturbations are batched into a single forward-model
+    call rather than computed serially.  The ensemble has n_state+1 members:
+    member 0 is the unperturbed baseline; member j+1 has state element j
+    increased by dv[j].  A single call to compute_stec_ensemble then returns
+    all predicted sTEC values in one vectorised sweep, eliminating the
+    O(N_STATE * n_grid) Python loop that previously dominated each EKF iteration.
+
+    Thread-level parallelism over rays is forwarded to compute_stec_ensemble
+    via n_workers when > 1.
+
+    Parameters
+    ----------
+    mean_state_2d : (N_STATE, n_grid)   current EKF iterate.
+    ray_list      : list of (n_pts, 3) arrays  [lat, lon, alt_km] per ray.
+    idw_weights   : (n_rays, n_grid)   normalised IDW weights per ray.
+    alt_grid      : (n_alt,)
+    n_grid        : int
+    eps_rel       : float   relative perturbation size.
+    n_workers     : int     threads for the ray loop inside compute_stec_ensemble.
+
+    Returns
+    -------
+    J  : ndarray, shape (n_rays, N_STATE * n_grid)
+    y0 : ndarray, shape (n_rays,)   baseline sTEC predictions.
+    """
+    N_S     = mean_state_2d.shape[0]        # == N_STATE
+    n_state = N_S * n_grid
+
+    flat = mean_state_2d.ravel()            # (n_state,)  C-order
+    dv   = np.maximum(np.abs(flat) * eps_rel, 1e-8)   # (n_state,)
+
+    # Build the perturbed ensemble in one allocation.
+    # Shape: (N_STATE, n_grid, n_state + 1)
+    # Member 0 = baseline; member j+1 has element j of the flat state += dv[j].
+    ens = np.tile(mean_state_2d[:, :, np.newaxis], (1, 1, n_state + 1))
+
+    # A C-contiguous (N_STATE, n_grid, n_state+1) array reshapes to
+    # (N_STATE*n_grid, n_state+1) = (n_state, n_state+1) as a *view*.
+    # ens_flat[j, k] == ens[j // n_grid, j % n_grid, k]
+    ens_flat = ens.reshape(n_state, n_state + 1)
+    ens_flat[np.arange(n_state), np.arange(1, n_state + 1)] += dv
+
+    tmp_state = IonosphericState(n_grid, n_members=n_state + 1)
+    tmp_state.ensemble = ens
+    tmp_op = ObservationOperator(tmp_state, alt_grid)
+
+    Y = tmp_op.compute_stec_ensemble(
+        ray_list,
+        grid_point_weights=idw_weights,
+        n_workers=n_workers,
+    )                                       # (n_rays, n_state + 1)
+
+    y0 = Y[:, 0]                            # (n_rays,)
+    J  = (Y[:, 1:] - y0[:, np.newaxis]) / dv[np.newaxis, :]   # (n_rays, n_state)
+
+    return J, y0
+
+
+def _ne_profile_derivatives(
+    alts_km: np.ndarray,
+    params_lin: np.ndarray,
+) -> tuple:
+    """
+    Analytical ∂Ne(h)/∂P_k for each altitude and each state parameter.
+
+    Treats h_ST (the F2/E-layer transition altitude from bisection) as a
+    fixed boundary when computing region derivatives — the standard
+    piecewise-smooth approximation: boundaries have measure zero and don't
+    affect integral derivatives.
+
+    Parameters are in LINEAR density space (NmF2, NmE in m⁻³).  The
+    returned derivatives are w.r.t. the stored log10 parameters at indices
+    I_LOG_NMF2 and I_LOG_NME, with the ln(10)·Nm chain-rule factor applied.
+
+    Parameters
+    ----------
+    alts_km    : (n_alt,)  altitude sample points in km
+    params_lin : (N_STATE,)  parameters in linear density space
+
+    Returns
+    -------
+    Ne      : (n_alt,)          electron density profile (m⁻³)
+    dNe_dP  : (N_STATE, n_alt)  ∂Ne/∂P_k at every altitude
+    """
+    from Ionosphere_Tomography_Inverter.observation_operator import (
+        _R_TOPSIDE, _H_E_KM, _find_hst_bisection,
+    )
+    from Ionosphere_Tomography_Inverter.ionospheric_state import (
+        I_LOG_NMF2, I_HMF2, I_H0, I_GAMMA, I_B0, I_B1, I_LOG_NME, I_HME,
+    )
+
+    NmF2  = float(params_lin[I_LOG_NMF2])
+    hmF2  = float(params_lin[I_HMF2])
+    H0    = float(params_lin[I_H0])
+    gamma = float(params_lin[I_GAMMA])
+    B0    = float(params_lin[I_B0])
+    B1    = float(params_lin[I_B1])
+    NmE   = float(params_lin[I_LOG_NME])
+    hmE   = float(params_lin[I_HME])
+
+    h     = alts_km                          # (n_alt,)
+    n_alt = len(h)
+    dNe_dP = np.zeros((N_STATE, n_alt), dtype=float)
+
+    # ── Region boundaries ─────────────────────────────────────────────────────
+    h_ST = float(np.clip(
+        _find_hst_bisection(
+            np.array([NmF2]), np.array([hmF2]),
+            np.array([B0]),   np.array([B1]),   np.array([NmE]),
+        )[0],
+        hmE, hmF2,
+    ))
+
+    mask_top = h >= hmF2
+    mask_bot = (h >= h_ST) & ~mask_top
+    mask_int = (h >= hmE)  & (h < h_ST)
+    mask_e   =  h <  hmE
+
+    # ── Helper: bottomside Ne and log-derivative quantities at h_eff ──────────
+    def _bs_quantities(h_eff_arr):
+        """Return (Ne_bs, log_df, x, x_pow, log_x) for given effective altitudes."""
+        x = np.maximum((hmF2 - h_eff_arr) / (B0 + 1e-9), 0.0)
+        x_pow  = np.where(x > 1e-30, x, 1e-30)
+        cosh_x = np.cosh(np.clip(x, 0.0, 700.0))
+        tanh_x = np.tanh(np.clip(x, 0.0, 700.0))
+        Ne_bs  = NmF2 * np.exp(-(x_pow ** B1)) / cosh_x
+        # d/dx[log f(x)], f(x) = exp(-x^B1)/cosh(x)
+        log_df = np.where(x > 1e-30, -B1 * x_pow ** (B1 - 1.0) - tanh_x, -tanh_x)
+        log_x  = np.log(x_pow)
+        return Ne_bs, log_df, x, x_pow, log_x
+
+    # ── Build composite Ne profile ────────────────────────────────────────────
+    r = _R_TOPSIDE
+    # Topside
+    dh_all  = h - hmF2
+    D_all   = r * H0 + gamma * dh_all + 1e-9
+    H_all   = H0 * (1.0 + r * gamma * dh_all / D_all)
+    z_all   = dh_all / (H_all + 1e-9)
+    exp_z   = np.exp(np.clip(z_all, -80, 80))
+    Ne_top_v = 4.0 * NmF2 * exp_z / (1.0 + exp_z) ** 2
+
+    # Bottomside: direct branch (also used for pure bottomside region) and
+    # mirrored branch (h_eff = h_ST + hmE - h), blended in Region 3 below.
+    h_eff_all = hmE + h_ST - h
+    Ne_bs_bot, _, _, _, _ = _bs_quantities(h)
+    Ne_bs_mir, _, _, _, _ = _bs_quantities(h_eff_all)
+
+    # Region 3 (intermediate connection) smoothstep blend:
+    #   t = clip((h-hmE)/(h_ST-hmE), 0, 1),  w = 3t^2 - 2t^3
+    #   Ne_bs_int = w*Ne_bs_bot + (1-w)*Ne_bs_mir
+    t_all = np.clip((h - hmE) / (h_ST - hmE + 1e-9), 0.0, 1.0)
+    w_all = 3.0 * t_all ** 2 - 2.0 * t_all ** 3
+    Ne_bs_int = w_all * Ne_bs_bot + (1.0 - w_all) * Ne_bs_mir
+
+    # E-layer — bottomside alpha-Chapman
+    ze_all     = np.clip((h - hmE) / _H_E_KM, -80, 80)
+    exp_neg_ze = np.exp(-ze_all)
+    Ne_E_v     = NmE * np.exp(0.5 * (1.0 - ze_all - exp_neg_ze))
+
+    Ne = np.where(
+        mask_top, Ne_top_v,
+        np.where(mask_bot, Ne_bs_bot,
+        np.where(mask_int, Ne_bs_int, Ne_E_v)),
+    )
+    Ne = np.maximum(Ne, 0.0)
+
+    # ── Topside derivatives (h >= hmF2) ───────────────────────────────────────
+    if mask_top.any():
+        dh_t  = dh_all[mask_top]
+        D_t   = D_all[mask_top]
+        N_num = r * H0 + gamma * (1.0 + r) * dh_t  # numerator factor of H_top/H0
+        H_t   = H_all[mask_top]
+        sig_t = exp_z[mask_top] / (1.0 + exp_z[mask_top]) ** 2  # = Ne_top / (4*NmF2)
+        dsig_t = sig_t * (1.0 - exp_z[mask_top]) / (1.0 + exp_z[mask_top])
+
+        Ne_t = Ne_top_v[mask_top]
+
+        dNe_dP[I_LOG_NMF2, mask_top] = Ne_t * np.log(10.0)
+
+        # ∂/∂hmF2: 4·NmF2·dsig·dz/dhmF2
+        # dz/dhmF2 = (−H_t + dh_t·r²γH0²/D_t²) / H_t²
+        dHt_ddh  = r ** 2 * gamma * H0 ** 2 / D_t ** 2
+        dz_hmF2  = (-H_t + dh_t * dHt_ddh) / (H_t + 1e-9) ** 2
+        dNe_dP[I_HMF2, mask_top] = 4.0 * NmF2 * dsig_t * dz_hmF2
+
+        # ∂/∂H0: 4·NmF2·dsig·dz/dH0
+        # ∂H_t/∂H0 = N_num/D_t − r²·H0·γ·dh_t/D_t²
+        dHt_H0 = N_num / D_t - r ** 2 * H0 * gamma * dh_t / D_t ** 2
+        dz_H0  = -dh_t * dHt_H0 / (H_t + 1e-9) ** 2
+        dNe_dP[I_H0, mask_top] = 4.0 * NmF2 * dsig_t * dz_H0
+
+        # ∂/∂gamma: 4·NmF2·dsig·dz/dgamma
+        # ∂H_t/∂γ = r²·H0²·dh_t/D_t²
+        dHt_gam = r ** 2 * H0 ** 2 * dh_t / D_t ** 2
+        dz_gam  = -dh_t * dHt_gam / (H_t + 1e-9) ** 2
+        dNe_dP[I_GAMMA, mask_top] = 4.0 * NmF2 * dsig_t * dz_gam
+
+        # B0, B1, log10(NmE), hmE: 0 in topside → already zero
+
+    # ── Pure bottomside derivatives (h_ST ≤ h < hmF2) ────────────────────────
+    if mask_bot.any():
+        h_b = h[mask_bot]
+        Ne_b, ldf_b, x_b, xp_b, lx_b = _bs_quantities(h_b)
+
+        dNe_dP[I_LOG_NMF2, mask_bot] = Ne_b * np.log(10.0)
+        # ∂x/∂hmF2 = 1/B0
+        dNe_dP[I_HMF2,     mask_bot] = Ne_b * ldf_b / (B0 + 1e-9)
+        # ∂x/∂B0 = −x/B0
+        dNe_dP[I_B0,       mask_bot] = Ne_b * ldf_b * (-x_b / (B0 + 1e-9))
+        # ∂/∂B1: Ne·(−x_pow^B1·ln x_pow)
+        dNe_dP[I_B1,       mask_bot] = Ne_b * (-xp_b ** B1 * lx_b)
+
+    # ── Intermediate connection derivatives (hmE ≤ h < h_ST) ─────────────────
+    #
+    # Ne_inter = w·Ne_A + (1−w)·Ne_B,   w = 3t² − 2t³,  t = (h−hmE)/(h_ST−hmE)
+    #   Ne_A = direct branch  (h_eff = h)        — same form as pure bottomside
+    #   Ne_B = mirrored branch (h_eff = h_ST + hmE − h)
+    #
+    # ∂Ne_inter/∂θ = (∂w/∂θ)·(Ne_A−Ne_B) + w·∂Ne_A/∂θ + (1−w)·∂Ne_B/∂θ
+    #
+    # h_ST = hmF2 − x_ST·B0 where x_ST satisfies the bisection equation
+    #   g(x_ST) = NmF2·exp(−x_ST^B1)/cosh(x_ST) − NmE = 0
+    #
+    # Implicit function theorem gives ∂x_ST/∂θ = −(∂g/∂θ)/(∂g/∂x_ST):
+    #   ∂g/∂x_ST       = NmE · ldf(x_ST)          (ldf < 0)
+    #   ∂g/∂hmF2       = 0  → ∂h_ST/∂hmF2 = 1
+    #   ∂g/∂B0         = 0  → ∂h_ST/∂B0   = −x_ST
+    #   ∂g/∂B1         = NmE·(−x_ST^B1·ln x_ST)
+    #                  → ∂x_ST/∂B1 = x_ST^B1·ln(x_ST) / ldf(x_ST)
+    #                  → ∂h_ST/∂B1 = −B0·∂x_ST/∂B1
+    #   ∂g/∂NmF2       = NmE/NmF2
+    #                  → ∂x_ST/∂NmF2 = −1/(NmF2·ldf(x_ST))
+    #                  → ∂h_ST/∂NmF2 = B0/(NmF2·ldf(x_ST))  (negative)
+    #   ∂g/∂NmE        = −1
+    #                  → ∂x_ST/∂NmE  = 1/(NmE·ldf(x_ST))
+    #                  → ∂h_ST/∂NmE  = −B0/(NmE·ldf(x_ST))  (positive)
+    #   ∂g/∂hmE        = 0  → ∂h_ST/∂hmE = 0
+    #
+    # For Ne_B: x_eff = (hmF2 − h_eff)/B0 = (hmF2 − h_ST − hmE + h)/B0
+    #   ∂x_eff/∂θ = (∂hmF2/∂θ − ∂h_ST/∂θ − ∂hmE/∂θ) / B0 − x_eff · ∂B0/∂θ / B0
+    #
+    # For w: t = (h−hmE)/(h_ST−hmE) = N/D.  For θ affecting h_ST only
+    # (NmF2, B0, B1, NmE): ∂t/∂θ = −t·∂h_ST/∂θ / D.  For θ = hmE (∂h_ST/∂hmE=0
+    # but hmE enters both N and D directly): ∂t/∂hmE = (t−1)/D.
+    if mask_int.any():
+        h_i     = h[mask_int]
+        h_eff_i = h_ST + hmE - h_i    # mirrored altitude (= 2*HZ - h_i)
+
+        # x_ST and its ldf — scalar quantities for this grid point
+        x_ST_v   = float((hmF2 - h_ST) / (B0 + 1e-9))
+        xST_pow  = max(x_ST_v, 1e-30)
+        tanh_xST = float(np.tanh(min(x_ST_v, 700.0)))
+        ldf_xST  = float((-B1 * xST_pow ** (B1 - 1.0) - tanh_xST)
+                         if x_ST_v > 1e-30 else -tanh_xST)
+        # Guard against numerical zero in ldf_xST (should be negative)
+        safe_ldf_xST = ldf_xST if abs(ldf_xST) > 1e-30 else -1e-30
+        log_xST  = float(np.log(max(xST_pow, 1e-30)))
+        hst_b1_coeff = xST_pow ** B1 * log_xST / safe_ldf_xST   # ∂x_ST/∂B1
+
+        # ── Branch A: direct (h_eff = h) — same form as pure bottomside ──────
+        Ne_A, ldf_A, x_A, xp_A, lx_A = _bs_quantities(h_i)
+        dNeA = np.zeros((N_STATE, len(h_i)))
+        dNeA[I_LOG_NMF2] = Ne_A * np.log(10.0)
+        dNeA[I_HMF2]     = Ne_A * ldf_A / (B0 + 1e-9)
+        dNeA[I_B0]       = Ne_A * ldf_A * (-x_A / (B0 + 1e-9))
+        dNeA[I_B1]       = Ne_A * (-xp_A ** B1 * lx_A)
+        # I_LOG_NME, I_HME → 0 (Ne_A doesn't track h_ST or hmE)
+
+        # ── Branch B: mirrored (h_eff = h_ST + hmE − h) — tracks h_ST(θ), hmE ─
+        Ne_B, ldf_B, x_B, xp_B, lx_B = _bs_quantities(h_eff_i)
+        dNeB = np.zeros((N_STATE, len(h_i)))
+        # ∂x_eff/∂hmF2 = (1 − ∂h_ST/∂hmF2)/B0 = (1−1)/B0 = 0 → dNeB[I_HMF2] = 0
+        dNeB[I_LOG_NMF2] = Ne_B * np.log(10.0) * (1.0 - ldf_B / safe_ldf_xST)
+        dNeB[I_B0]       = Ne_B * ldf_B * (x_ST_v - x_B) / (B0 + 1e-9)
+        dNeB[I_B1]       = Ne_B * (ldf_B * hst_b1_coeff - xp_B ** B1 * lx_B)
+        dNeB[I_LOG_NME]  = Ne_B * np.log(10.0) * ldf_B / safe_ldf_xST
+        dNeB[I_HME]      = Ne_B * ldf_B * (-1.0 / (B0 + 1e-9))
+
+        # ── Smoothstep blend weight w(t), t = (h−hmE)/(h_ST−hmE) ─────────────
+        D = h_ST - hmE + 1e-9
+        t = np.clip((h_i - hmE) / D, 0.0, 1.0)
+        w = 3.0 * t ** 2 - 2.0 * t ** 3
+        dw_dt = 6.0 * t * (1.0 - t)
+
+        dhST = np.zeros(N_STATE)
+        dhST[I_HMF2]     = 1.0
+        dhST[I_B0]       = -x_ST_v
+        dhST[I_B1]       = -B0 * hst_b1_coeff
+        dhST[I_LOG_NMF2] =  B0 * np.log(10.0) / safe_ldf_xST
+        dhST[I_LOG_NME]  = -B0 * np.log(10.0) / safe_ldf_xST
+        # dhST[I_HME] = dhST[I_H0] = dhST[I_GAMMA] = 0 (already zero)
+
+        dt_dtheta = np.zeros((N_STATE, len(h_i)))
+        for k in (I_LOG_NMF2, I_HMF2, I_B0, I_B1, I_LOG_NME):
+            dt_dtheta[k] = -t * dhST[k] / D
+        dt_dtheta[I_HME] = (t - 1.0) / D
+        dw_dtheta = dw_dt * dt_dtheta
+
+        # ── Combine: Ne_inter = w·Ne_A + (1−w)·Ne_B ──────────────────────────
+        idx_int = np.where(mask_int)[0]
+        dNe_dP[:, idx_int] = (
+            dw_dtheta * (Ne_A - Ne_B)
+            + w * dNeA
+            + (1.0 - w) * dNeB
+        )
+
+    # ── E-layer derivatives (h < hmE) — bottomside alpha-Chapman ─────────────
+    # Ne_E = NmE * exp(0.5*(1 - ze - exp(-ze))),  ze = (h - hmE)/H_E
+    # d Ne/d(log10 NmE) = Ne * ln(10)                        (NmE enters linearly)
+    # d Ne/d(hmE)        = Ne * 0.5*(1 - exp(-ze)) / H_E      (chain rule via ze)
+    if mask_e.any():
+        exp_neg_ze_e = exp_neg_ze[mask_e]
+        Ne_Ev        = Ne_E_v[mask_e]
+
+        dNe_dP[I_LOG_NME, mask_e]  = Ne_Ev * np.log(10.0)
+        dNe_dP[I_HME,     mask_e] += Ne_Ev * 0.5 * (1.0 - exp_neg_ze_e) / _H_E_KM
+
+    return Ne, dNe_dP
+
+
+def _ekf_param_analytical_jacobian(
+    mean_state_2d: np.ndarray,
+    ray_list: list,
+    idw_weights: np.ndarray,
+    alt_grid: np.ndarray,
+    n_grid: int,
+    n_workers: int = 1,
+) -> tuple:
+    """
+    Analytical Jacobian of the sTEC forward model.
+
+    For each ray i and state element (k, g):
+
+        J[i, k*n_grid + g] = w_{i,g} * ∫ ∂Ne_k(h; params_g) d(path) / TECU
+
+    where ∂Ne_k is the analytical derivative from _ne_profile_derivatives
+    and the path integral uses the trapezoidal rule over the ray's altitude
+    samples.
+
+    Parameters
+    ----------
+    mean_state_2d : (N_STATE, n_grid)  current EKF iterate (log10/km/dimless)
+    ray_list      : list of (n_pts, 3) arrays  [lat, lon, alt_km] per ray
+    idw_weights   : (n_rays, n_grid)   normalised IDW weights per ray
+    alt_grid      : (n_alt,)           unused (altitudes come from the rays)
+    n_grid        : int
+    n_workers     : int  threads for the outer ray loop
+
+    Returns
+    -------
+    J  : (n_rays, N_STATE * n_grid)  analytical Jacobian
+    y0 : (n_rays,)                   baseline sTEC predictions
+    """
+    from Ionosphere_Tomography_Inverter.ionospheric_state import LOG_INDICES
+    from Ionosphere_Tomography_Inverter.observation_operator import (
+        ObservationOperator as _ObsOp, _TECU,
+    )
+
+    n_rays  = len(ray_list)
+    n_state = N_STATE * n_grid
+
+    # Convert log10 densities → linear for all grid points
+    params_lin = mean_state_2d.copy()              # (N_STATE, n_grid)
+    params_lin[LOG_INDICES] = 10.0 ** params_lin[LOG_INDICES]
+
+    J  = np.zeros((n_rays, n_state), dtype=float)
+    y0 = np.zeros(n_rays,           dtype=float)
+
+    def _process_ray(i):
+        ray     = ray_list[i]
+        alts_km = ray[:, 2]
+        path_km = _ObsOp._arc_length_km(ray)      # (n_pts,) cumulative arc-length
+
+        w      = idw_weights[i]
+        active = np.where(w > 0.0)[0]
+        w_norm = w[active] / (w[active].sum() + 1e-30)
+
+        y0_i   = 0.0
+        dJ_row = np.zeros(n_state, dtype=float)
+
+        for gp, wg in zip(active, w_norm):
+            Ne_gp, dNe_gp = _ne_profile_derivatives(alts_km, params_lin[:, gp])
+            scale = wg * 1.0e3 / _TECU               # km → m, then → TECU
+            y0_i += scale * float(_trapz(Ne_gp, path_km))
+            for k in range(N_STATE):
+                dJ_row[k * n_grid + gp] += scale * float(_trapz(dNe_gp[k], path_km))
+
+        return i, y0_i, dJ_row
+
+    if n_workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        results = []
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            results = list(pool.map(_process_ray, range(n_rays)))
+        for i, y0_i, dJ_row in results:
+            y0[i]    = y0_i
+            J[i, :]  = dJ_row
+    else:
+        for i in range(n_rays):
+            _, y0_i, dJ_row = _process_ray(i)
+            y0[i]   = y0_i
+            J[i, :] = dJ_row
+
+    return J, y0
+
+
+def EKF_Param(
+    arc_truth_list: list,
+    model_state: "IonosphericState",
+    grid_lats: np.ndarray,
+    grid_lons: np.ndarray,
+    alt_grid: np.ndarray,
+    sigma_obs: float     = ENKF_SIGMA_OBS,
+    max_update_rays: int = ENKF_MAX_UPDATE_RAYS,
+    alpha: float         = 0.5,
+    tol: float           = 1e-4,
+    max_iter: int        = 20,
+    apply_bounds: bool   = True,
+    eps_jac: float       = 1e-4,
+    n_workers: int       = 1,
+    jacobian_analytical: bool = False,
+) -> dict:
+    """
+    Iterative Extended Kalman Filter on the parametric IRI state vector.
+
+    State vector P has shape (N_STATE * n_grid,) — the 8 IRI parameters at
+    every horizontal grid point, stored in C order (parameter index varies
+    slowest, grid-point index varies fastest within each parameter block).
+    Density parameters (log10 NmF2, log10 NmE) remain in log10 space
+    throughout, matching the IonosphericState convention.
+
+    Prior covariance Q is factored through the ensemble anomaly matrix so that
+    the full (n_state × n_state) matrix is never formed explicitly:
+
+        Q ≈ X_c X_c^T / (M - 1),   X_c = ensemble anomalies, shape (n_state, M)
+
+    EKF iteration (i = 0, 1, …):
+
+        J_i    = ∂H(P_i)/∂P          (Jacobian, (n_obs, n_state), finite diff.)
+        Ŵ_i    = J_i                  (effective linearised observation matrix)
+        G_i    = α (X_c X_c^T / nm1) Ŵ_i^T (Ŵ_i X_c X_c^T Ŵ_i^T / nm1 + R)^{-1}
+               = α X_c A_i^T / nm1 * solve(A_i A_i^T / nm1 + R)
+               where A_i = Ŵ_i X_c = J_i X_c   (n_obs, M)
+        ΔP_i   = G_i (y_obs − H(P_i))
+        P_{i+1} = P_i + ΔP_i
+
+    Stops when  ||ΔP||₂ / ||P_i||₂ < tol  or after max_iter steps.
+
+    Parameters
+    ----------
+    arc_truth_list  : list of arc dicts (output of generate_truth_tec).
+    model_state     : IonosphericState  prior ensemble; member 0 = IRI baseline.
+    grid_lats/lons  : (n_grid,)  horizontal grid coordinates.
+    alt_grid        : (n_alt,)   altitude integration grid (km).
+    sigma_obs       : observation noise standard deviation (TECU).
+    max_update_rays : maximum representative rays per arc used in the update.
+    alpha           : EKF step-size scale ∈ (0, 1].  alpha < 1 limits the step
+                      analogously to gradient-descent damping.
+    tol             : relative convergence tolerance on the state update norm.
+    max_iter        : maximum EKF iterations.
+    apply_bounds        : clamp P to IonosphericState.PARAM_BOUNDS after each step.
+    eps_jac             : relative perturbation size for finite-difference Jacobian.
+    jacobian_analytical : if True, use the analytical Jacobian from
+                          _ekf_param_analytical_jacobian instead of the
+                          finite-difference version.  The analytical Jacobian
+                          treats h_ST as a fixed boundary (standard
+                          piecewise-smooth approximation) and is exact for all
+                          other parameters.  Faster than finite differences
+                          for large state vectors; eps_jac is ignored.
+
+    Returns
+    -------
+    dict with the same keys as run_parametric_enkf and run_gridded_ne_kf for
+    compatibility with downstream diagnostic plots, plus EKF-specific keys:
+        converged, n_iterations, residual_history, update_norm_history.
+    """
+    from Ionosphere_Tomography_Inverter.enkf_update import flatten_ensemble
+
+    n_geo     = model_state.n_grid_points
+    n_members = model_state.n_members
+    n_occ     = len(arc_truth_list)
+    _idw_k    = min(4, n_geo)
+
+    # ── 1. Decimate update rays (same stride as EnKF / KF) ───────────────────
+    rep_rays:          list = []
+    rep_tp_lats_list:  list = []
+    rep_tp_lons_list:  list = []
+    rep_tec_obs_list:  list = []
+    arc_update_counts: list = []
+    ray_counts:        list = []
+    arc_all_tec:       list = []
+    per_arc_tp_lats:   list = []
+    per_arc_tp_lons:   list = []
+
+    for arc in arc_truth_list:
+        rays    = arc["rays"]
+        tec     = arc["tec_truth"]
+        tp_lats = arc["tp_lats"]
+        tp_lons = arc["tp_lons"]
+        n_s     = len(rays)
+
+        per_arc_tp_lats.append(tp_lats)
+        per_arc_tp_lons.append(tp_lons)
+        ray_counts.append(n_s)
+        arc_all_tec.append(tec)
+
+        if n_s > max_update_rays:
+            stride = int(np.ceil(n_s / max_update_rays))
+            chosen = list(range(0, n_s, stride))
+            if n_s - 1 not in chosen:
+                chosen.append(n_s - 1)
+        else:
+            chosen = list(range(n_s))
+
+        for idx in chosen:
+            rep_rays.append(rays[idx])
+            rep_tp_lats_list.append(float(tp_lats[idx]))
+            rep_tp_lons_list.append(float(tp_lons[idx]))
+            rep_tec_obs_list.append(float(tec[idx]))
+        arc_update_counts.append(len(chosen))
+
+    y_obs_arc = np.array(rep_tec_obs_list)   # (n_obs,)
+    y_obs_all = np.concatenate(arc_all_tec)
+    n_obs     = len(rep_rays)
+
+    all_tp_lats_flat = np.concatenate([a.tolist() for a in per_arc_tp_lats])
+    all_tp_lons_flat = np.concatenate([a.tolist() for a in per_arc_tp_lons])
+    all_sample_rays  = [r for arc in arc_truth_list for r in arc["rays"]]
+
+    print(f"  [EKF] {n_occ} arcs  |  "
+          f"{len(all_sample_rays)} profile rays  |  "
+          f"{n_obs} update rays  |  n_state = {N_STATE * n_geo}")
+
+    # ── 2. IDW weights ────────────────────────────────────────────────────────
+    rep_W = _idw_weights_enkf(
+        np.array(rep_tp_lats_list), np.array(rep_tp_lons_list),
+        grid_lats, grid_lons, k=_idw_k,
+    )
+    all_sample_W = _idw_weights_enkf(
+        all_tp_lats_flat, all_tp_lons_flat,
+        grid_lats, grid_lons, k=_idw_k,
+    )
+
+    # ── 3. Prior ensemble anomaly X_c and initial state P_0 ──────────────────
+    # Use member 0 (unperturbed IRI baseline) as the starting iterate P_0.
+    # X_c captures the prior uncertainty for the covariance factor.
+    X_f = flatten_ensemble(model_state.ensemble)         # (n_state, M)
+    mu  = X_f.mean(axis=1)                               # (n_state,) ensemble mean
+    X_c = X_f - mu[:, np.newaxis]                        # (n_state, M) anomalies
+    nm1 = max(n_members - 1, 1)
+
+    P_i = X_f[:, 0].copy()                               # (n_state,) P_0 = member 0
+
+    # ── 4. Prior diagnostics (all sample rays) ────────────────────────────────
+    prior_state_snap = IonosphericState(n_geo, n_members=1)
+    prior_state_snap.ensemble = P_i.reshape(N_STATE, n_geo)[:, :, np.newaxis].copy()
+    prior_op  = ObservationOperator(prior_state_snap, alt_grid)
+
+    y_prior_all  = prior_op.compute_stec_ensemble(
+        all_sample_rays, grid_point_weights=all_sample_W, n_workers=n_workers,
+    )[:, 0]
+    y_prior_arc  = prior_op.compute_stec_ensemble(
+        rep_rays, grid_point_weights=rep_W, n_workers=n_workers,
+    )[:, 0]
+
+    prior_inno = y_obs_arc - y_prior_arc
+    print(f"  [EKF] Prior innovations  "
+          f"mean={prior_inno.mean():.2f}  std={prior_inno.std():.2f}  "
+          f"max_abs={np.abs(prior_inno).max():.2f} TECU")
+
+    # ── 5. Observation noise covariance R ─────────────────────────────────────
+    R_mat = (sigma_obs ** 2) * np.eye(n_obs)
+
+    # ── 6. EKF iteration ──────────────────────────────────────────────────────
+    residual_history:    list = []
+    update_norm_history: list = []
+    converged = False
+    rel_norm  = np.inf
+
+    jac_mode = "analytical" if jacobian_analytical else "finite-diff"
+    _iter_bar = tqdm(
+        range(max_iter), desc=f"  [EKF] iterating [{jac_mode}]", unit="it", leave=False,
+    )
+    for it in _iter_bar:
+        P_2d = P_i.reshape(N_STATE, n_geo)
+
+        # Jacobian Ŵ_i = ∂H(P_i)/∂P  and baseline predictions y_hat
+        if jacobian_analytical:
+            J_i, y_hat = _ekf_param_analytical_jacobian(
+                P_2d, rep_rays, rep_W, alt_grid, n_geo,
+                n_workers=n_workers,
+            )
+        else:
+            J_i, y_hat = _ekf_param_jacobian(
+                P_2d, rep_rays, rep_W, alt_grid, n_geo,
+                eps_rel=eps_jac, n_workers=n_workers,
+            )
+
+        # Innovation at current iterate
+        innov = y_obs_arc - y_hat                        # (n_obs,)
+        resid = float(np.sqrt(np.mean(innov ** 2)))
+        residual_history.append(resid)
+
+        # Low-rank covariance products — avoid forming Q explicitly:
+        #   A_i = J_i X_c                  (n_obs, M)
+        #   P_yy ≈ A_i A_i^T / nm1         (n_obs, n_obs)
+        #   P_xy ≈ X_c A_i^T   / nm1       (n_state, n_obs)
+        A_i  = J_i @ X_c                                 # (n_obs, M)
+        P_yy = (A_i @ A_i.T) / nm1                       # (n_obs, n_obs)
+        P_xy = (X_c @ A_i.T) / nm1                       # (n_state, n_obs)
+
+        S = P_yy + R_mat                                  # (n_obs, n_obs)
+        try:
+            import scipy.linalg as _la
+            K_T = _la.solve(S, P_xy.T, assume_a="pos")   # (n_obs, n_state)
+        except Exception:
+            K_T = np.linalg.lstsq(S, P_xy.T, rcond=None)[0]
+        G = alpha * K_T.T                                 # (n_state, n_obs)
+
+        dP = G @ innov                                    # (n_state,)
+
+        # Convergence check before applying the step
+        rel_norm = float(np.linalg.norm(dP) / (np.linalg.norm(P_i) + 1e-30))
+        update_norm_history.append(rel_norm)
+        _iter_bar.set_postfix(RMSE=f"{resid:.3f}TECU", rel_dP=f"{rel_norm:.2e}")
+
+        P_i = P_i + dP
+
+        # Clamp to physical bounds after each step
+        if apply_bounds:
+            P_2d_new = P_i.reshape(N_STATE, n_geo)
+            for k_p, (lo, hi) in enumerate(IonosphericState.PARAM_BOUNDS):
+                P_2d_new[k_p] = np.clip(P_2d_new[k_p], lo, hi)
+            # Structural constraint: hmF2 > hmE + 20 km
+            from Ionosphere_Tomography_Inverter.ionospheric_state import I_HMF2, I_HME
+            P_2d_new[I_HMF2] = np.maximum(P_2d_new[I_HMF2], P_2d_new[I_HME] + 20.0)
+            P_i = P_2d_new.ravel()
+
+        if rel_norm < tol:
+            converged = True
+            _iter_bar.write(f"  [EKF] Converged at iteration {it + 1}  "
+                             f"(||ΔP||/||P|| = {rel_norm:.2e} < tol={tol:.1e})")
+            break
+    else:
+        _iter_bar.write(f"  [EKF] Reached max_iter={max_iter} without convergence  "
+                         f"(final ||ΔP||/||P|| = {rel_norm:.2e})")
+    _iter_bar.close()
+
+    n_iterations = len(residual_history)
+
+    # ── 6b. Analytical prior/posterior covariance (dense, parametric space) ──
+    # Reuses the FINAL iteration's linearization (J_i via P_xy/S, and X_c/nm1)
+    # already computed inside the loop above — no extra Jacobian evaluation.
+    # State ordering is (N_STATE, n_geo) C-order (param-major, geo-minor), the
+    # same convention as P_i.reshape(N_STATE, n_geo) — this is NOT the gridded
+    # KF's (n_alt, n_geo) Ne-space ordering, since EKF_Param's state is the 8
+    # Chapman/IRI parameters per grid point, not Ne(alt) itself.
+    n_state = N_STATE * n_geo
+    prior_P = (X_c @ X_c.T) / nm1                        # (n_state, n_state)
+    try:
+        import scipy.linalg as _la
+        K_gain = _la.solve(S, P_xy.T, assume_a="pos").T  # (n_state, n_obs), unscaled (no alpha damping)
+    except Exception:
+        K_gain = np.linalg.lstsq(S, P_xy.T, rcond=None)[0].T
+    post_P = prior_P - K_gain @ P_xy.T                   # (I - KH) P_prior
+    post_P = 0.5 * (post_P + post_P.T)                   # enforce symmetry
+
+    # ── 7. Posterior predictions (all sample rays) ────────────────────────────
+    P_post_2d   = P_i.reshape(N_STATE, n_geo)
+    post_state  = IonosphericState(n_geo, n_members=1)
+    post_state.ensemble = P_post_2d[:, :, np.newaxis].copy()
+    post_op = ObservationOperator(post_state, alt_grid)
+
+    y_post_all = post_op.compute_stec_ensemble(
+        all_sample_rays, grid_point_weights=all_sample_W, n_workers=n_workers,
+    )[:, 0]
+    y_post_arc = post_op.compute_stec_ensemble(
+        rep_rays, grid_point_weights=rep_W, n_workers=n_workers,
+    )[:, 0]
+
+    post_inno = y_obs_arc - y_post_arc
+    print(f"  [EKF] Posterior innovations  "
+          f"mean={post_inno.mean():.2f}  std={post_inno.std():.2f}  "
+          f"max_abs={np.abs(post_inno).max():.2f} TECU")
+
+    prior_rmse = float(np.sqrt(np.nanmean((y_obs_all - y_prior_all) ** 2)))
+    post_rmse  = float(np.sqrt(np.nanmean((y_obs_all - y_post_all) ** 2)))
+    print(f"  [EKF] Prior RMSE {prior_rmse:.3f} TECU  →  "
+          f"Post RMSE {post_rmse:.3f} TECU")
+
+    # ── 8. Convert parametric states → Ne profile grids ──────────────────────
+    prior_state_for_edp = IonosphericState(n_geo, n_members=1)
+    prior_state_for_edp.ensemble = X_f[:, 0].reshape(N_STATE, n_geo)[:, :, np.newaxis].copy()
+    prior_edp = _parametric_to_edp(prior_state_for_edp, prior_state_for_edp.ensemble, alt_grid)
+    post_edp  = _parametric_to_edp(post_state, post_state.ensemble, alt_grid)
+
+    # ── 9. TEC slices and per-arc statistics ─────────────────────────────────
+    tec_slices:      list = []
+    all_prior_resid  = y_obs_all - y_prior_all
+    all_post_resid   = y_obs_all - y_post_all
+
+    arc_prior_mean_l, arc_post_mean_l = [], []
+    arc_prior_rmse_l, arc_post_rmse_l = [], []
+    arc_lats_l, arc_lons_l, arc_lbl_l = [], [], []
+
+    soff = 0
+    for i, arc in enumerate(arc_truth_list):
+        n_s = ray_counts[i]
+        sl  = slice(soff, soff + n_s)
+        tec_slices.append(dict(
+            tec_truth = arc["tec_truth"],
+            prior_tec = y_prior_all[sl].copy(),
+            post_tec  = y_post_all[sl].copy(),
+            tang_km   = arc["tang_km"],
+        ))
+        rp = all_prior_resid[sl]
+        ra = all_post_resid[sl]
+        arc_prior_mean_l.append(float(np.nanmean(rp)))
+        arc_post_mean_l.append(float(np.nanmean(ra)))
+        arc_prior_rmse_l.append(float(np.sqrt(np.nanmean(rp ** 2))))
+        arc_post_rmse_l.append(float(np.sqrt(np.nanmean(ra ** 2))))
+        arc_lats_l.append(float(arc["tp_lats"].mean()))
+        arc_lons_l.append(float(arc["tp_lons"].mean()))
+        arc_lbl_l.append(f"{arc['conid']}{arc['prn_id']}")
+        soff += n_s
+
+    return dict(
+        prior_ne_5deg        = prior_edp,
+        posterior_ne_5deg    = post_edp,
+        prior_edp            = prior_edp,
+        posterior_edp        = post_edp,
+        prior_mean_state     = X_f[:, 0].reshape(N_STATE, n_geo).copy(),  # (N_STATE, n_geo)
+        posterior_mean_5deg  = P_post_2d.copy(),          # (N_STATE, n_geo)
+        posterior_mean_state = P_post_2d.copy(),
+        prior_P              = prior_P,                  # (n_state, n_state), param-major/geo-minor
+        post_P               = post_P,
+        tec_slices           = tec_slices,
+        prior_rmse           = prior_rmse,
+        post_rmse            = post_rmse,
+        all_prior_resid      = all_prior_resid,
+        all_post_resid       = all_post_resid,
+        arc_prior_mean       = np.array(arc_prior_mean_l),
+        arc_post_mean        = np.array(arc_post_mean_l),
+        arc_prior_rmse       = np.array(arc_prior_rmse_l),
+        arc_post_rmse        = np.array(arc_post_rmse_l),
+        arc_lats             = np.array(arc_lats_l),
+        arc_lons             = np.array(arc_lons_l),
+        arc_labels           = arc_lbl_l,
+        grid_lats            = grid_lats,
+        grid_lons            = grid_lons,
+        mda_arc_means_list   = None,
+        mda_flat_list        = None,
+        converged            = converged,
+        n_iterations         = n_iterations,
+        residual_history     = residual_history,
+        update_norm_history  = update_norm_history,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # §10  EnKF TEC + globe + EDP spaghetti plot
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2119,9 +2964,16 @@ def _plot_tec_edp_figure(
     alt_grid: np.ndarray,
     suptitle: str,
     save_path: str,
+    prior_mean_state: np.ndarray | None = None,
+    post_mean_state:  np.ndarray | None = None,
 ) -> None:
     """
     Shared TEC + globe + EDP spaghetti figure used by both EnKF and KF wrappers.
+
+    prior_mean_state, post_mean_state : optional (N_STATE, n_geo) parametric
+        Chapman/Epstein state vectors (only meaningful for the parametric
+        EnKF retrieval); when supplied, a colour-coded parameter box is drawn
+        for the model-grid centre vertex.
 
     Layout — GridSpec(2, 4, width_ratios=[1,1,1.5,1.2])
     ──────────────────────────────────────────────────────
@@ -2231,6 +3083,15 @@ def _plot_tec_edp_figure(
     ax_edp.legend(handles=edp_handles, fontsize=7,
                   facecolor="#2b2b2b", labelcolor="lightgray",
                   loc="lower right", framealpha=0.8)
+    ax_edp.set_ylim(bottom=0)
+
+    if prior_mean_state is not None and post_mean_state is not None:
+        _draw_param_boxes(
+            ax_edp,
+            [("Prior",     "steelblue", prior_mean_state[:, cen_5deg_idx]),
+             ("Posterior", "tomato",    post_mean_state[:, cen_5deg_idx])],
+            loc="upper left",
+        )
 
     # ── Populate TEC and globe panels ─────────────────────────────────────────
     globe_handles: list = [
@@ -2317,6 +3178,8 @@ def plot_enkf_tec_edp(
             f"Posterior RMSE {enkf_result['post_rmse']:.2f} TECU"
         ),
         save_path=save_path,
+        prior_mean_state=enkf_result["prior_ensemble"].mean(axis=2),
+        post_mean_state=enkf_result["posterior_mean_5deg"],
     )
 
 
@@ -2990,6 +3853,19 @@ def plot_edp_profiles_kf_enkf(
 
     axes[0, 0].set_ylabel("Altitude  (km)", fontsize=8)
     axes[1, 0].set_ylabel("Altitude  (km)", fontsize=8)
+    axes[0, 0].set_ylim(bottom=0)   # shared y-axis: applies to every panel
+
+    # Parametric-EnKF row: colour-coded parameter readout at the centre vertex
+    # (the gridded KF row has no Chapman/Epstein state to report).
+    enkf_prior_state = enkf_result.get("prior_ensemble")
+    enkf_post_state  = enkf_result.get("posterior_mean_5deg")
+    if enkf_prior_state is not None and enkf_post_state is not None:
+        _draw_param_boxes(
+            axes[1, 1],
+            [("Prior",     _COL_PRI_BOLD,  enkf_prior_state.mean(axis=2)[:, cen_idx]),
+             ("Posterior", _COL_POST_BOLD, enkf_post_state[:, cen_idx])],
+            loc="upper left",
+        )
 
     plt.tight_layout()
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
@@ -3637,6 +4513,22 @@ def plot_kf_enkf_comparison(
     ax_edp.legend(handles=edp_handles, fontsize=6,
                   facecolor="#2b2b2b", labelcolor="lightgray",
                   loc="upper right", framealpha=0.8)
+    ax_edp.set_ylim(bottom=0)
+
+    # Colour-coded parameter readout for the parametric EnKF (the gridded KF
+    # has no Chapman/Epstein state to report).
+    enkf_prior_state = enkf_result.get("prior_ensemble")
+    enkf_post_state  = enkf_result.get("posterior_mean_5deg")
+    if enkf_prior_state is not None and enkf_post_state is not None:
+        # Nearest 5-deg grid point to the same centroid used for truth above.
+        cen5_idx = int(np.argmin(_haversine_km(
+            cen_lat, cen_lon, grid_lats_5deg, grid_lons_5deg)))
+        _draw_param_boxes(
+            ax_edp,
+            [("EnKF prior",     "gray",       enkf_prior_state.mean(axis=2)[:, cen5_idx]),
+             ("EnKF posterior", "darkorange", enkf_post_state[:, cen5_idx])],
+            loc="lower left",
+        )
 
     # ── RMSE comparison bar chart ─────────────────────────────────────────────
     ax_rmse = fig.add_subplot(gs[1, 2])
@@ -3725,6 +4617,485 @@ def plot_kf_enkf_comparison(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# §6e  Ensemble scatter — prior vs. posterior parameter distributions
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Physical units for each of the 8 state parameters (matches PARAM_NAMES order)
+_PARAM_UNITS = [
+    "log₁₀(m⁻³)", "km", "km", "–", "km", "–", "log₁₀(m⁻³)", "km",
+]
+
+def plot_ensemble_scatter(
+    iri_ensemble: np.ndarray,
+    prior_ensemble: np.ndarray,
+    post_ensemble: np.ndarray,
+    iri_mean: np.ndarray,
+    truth_time: "pd.Timestamp | None" = None,
+    save_path: str = "./Figures/test_param_iono/ensemble_scatter.png",
+) -> None:
+    """
+    8×3 scatter figure comparing three stages of the EnKF ensemble for all 8
+    Chapman ionosphere parameters.
+
+    Column 1 — IRI draw (N_MEMBERS): the raw ensemble produced by
+    ``build_model_ensemble`` immediately after the IRI background call in
+    ``main()``.  This shows what $\\mathcal{N}(\\mu_{IRI}, Q_t)$ looks like
+    with the smaller ensemble used for forward-model diagnostics.
+
+    Column 2 — EnKF prior (ENKF_N_MEMBERS): the larger ensemble passed into
+    ``run_parametric_enkf``, captured as ``prior_ensemble_snap`` before any
+    Kalman update.  Should have the same spread as column 1 — if the two
+    columns look different the ensemble generation is inconsistent.
+
+    Column 3 — EnKF posterior (ENKF_N_MEMBERS): the analysis ensemble after
+    all ES-MDA iterations.  Spread should shrink toward the observations.
+
+    Each subplot: x-axis = geographic grid-point index, y-axis = parameter
+    value across all ensemble members.  The IRI background mean (``mean_5deg``)
+    is overlaid as a solid yellow line so the prior centre is always visible.
+
+    Parameters
+    ----------
+    iri_ensemble    : ndarray, shape (N_STATE, n_grid, N_MEMBERS)
+        Raw IRI-seeded ensemble from ``model_state.ensemble`` in ``main()``.
+    prior_ensemble  : ndarray, shape (N_STATE, n_grid, ENKF_N_MEMBERS)
+        EnKF forecast ensemble before the Kalman update
+        (``enkf_result["prior_ensemble"]``).
+    post_ensemble   : ndarray, shape (N_STATE, n_grid, ENKF_N_MEMBERS)
+        EnKF analysis ensemble after the Kalman update
+        (``enkf_result["posterior_ensemble"]``).
+    iri_mean        : ndarray, shape (N_STATE, n_grid)
+        IRI background mean (``mean_5deg``), overlaid on every subplot.
+    truth_time      : pd.Timestamp, optional
+        Assimilation time shown in the figure title.
+    save_path       : str
+        Output path for the PNG.
+    """
+    n_state = iri_ensemble.shape[0]
+    n_grid  = iri_ensemble.shape[1]
+    geo_idx = np.arange(n_grid)
+
+    BG_FIG   = "#1a1a1a"
+    BG_AX    = "#252525"
+    COL_IRI  = "#7ec8e3"   # sky-blue  — raw IRI draw
+    COL_PRI  = "#5b9bd5"   # steel-blue — EnKF prior
+    COL_PST  = "#e07b54"   # coral-orange — EnKF posterior
+    COL_MEAN = "#f5c518"   # bright yellow — IRI mean overlay
+    TXT      = "0.85"
+
+    columns = [
+        (iri_ensemble,   COL_IRI,  "IRI draw"),
+        (prior_ensemble, COL_PRI,  "EnKF prior"),
+        (post_ensemble,  COL_PST,  "EnKF posterior"),
+    ]
+    col_titles = [
+        f"IRI draw  (N = {iri_ensemble.shape[2]})",
+        f"EnKF prior  (N = {prior_ensemble.shape[2]})",
+        f"EnKF posterior  (N = {post_ensemble.shape[2]})",
+    ]
+
+    fig, axes = plt.subplots(
+        n_state, 3,
+        figsize=(19, 2.6 * n_state),
+        facecolor=BG_FIG,
+        gridspec_kw=dict(wspace=0.38, hspace=0.55,
+                         left=0.07, right=0.98, top=0.95, bottom=0.03),
+    )
+
+    time_str = f"  —  {truth_time.strftime('%Y-%m-%d %H:%M UT')}" if truth_time is not None else ""
+    fig.suptitle(
+        f"Ensemble Parameter Scatter  |  IRI draw · EnKF prior · EnKF posterior{time_str}",
+        color=TXT, fontsize=11, y=0.975,
+    )
+
+    for k in range(n_state):
+        param_name = PARAM_NAMES[k]
+        unit       = _PARAM_UNITS[k]
+        ylabel     = f"{param_name}\n({unit})"
+
+        for col, (ensemble, col_color, col_label) in enumerate(columns):
+            n_members = ensemble.shape[2]
+            x_all     = np.repeat(geo_idx, n_members)
+            y_all     = ensemble[k, :, :].ravel(order="C")
+
+            ax = axes[k, col]
+            ax.set_facecolor(BG_AX)
+            for sp in ax.spines.values():
+                sp.set_color("0.35")
+            ax.tick_params(colors=TXT, labelsize=7)
+            ax.xaxis.label.set_color(TXT)
+            ax.yaxis.label.set_color(TXT)
+
+            ax.scatter(
+                x_all, y_all,
+                s=1.5, alpha=0.07, color=col_color,
+                linewidths=0, rasterized=True,
+            )
+
+            ax.plot(
+                geo_idx, iri_mean[k],
+                color=COL_MEAN, lw=1.2, zorder=5,
+            )
+
+            ax.set_xlim(-0.5, n_grid - 0.5)
+            ax.set_xlabel("Grid-point index", color=TXT, fontsize=7)
+            # Only label y-axis on the leftmost column to save space
+            if col == 0:
+                ax.set_ylabel(ylabel, color=TXT, fontsize=7)
+            else:
+                ax.set_ylabel("")
+                ax.tick_params(labelleft=False)
+
+            if k == 0:
+                ax.set_title(col_titles[col], color=TXT, fontsize=9)
+
+            if k == 0 and col == 0:
+                ax.legend(
+                    handles=[
+                        mpatches.Patch(color=COL_IRI,  label="IRI draw",       alpha=0.7),
+                        mpatches.Patch(color=COL_PRI,  label="EnKF prior",     alpha=0.7),
+                        mpatches.Patch(color=COL_PST,  label="EnKF posterior", alpha=0.7),
+                        Line2D([0], [0], color=COL_MEAN, lw=1.5, label="IRI mean"),
+                    ],
+                    fontsize=6, facecolor=BG_AX, labelcolor=TXT,
+                    framealpha=0.8, loc="upper right",
+                )
+
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print(f"  Saved: {save_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# §15  scipy non-linear optimisation
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _FakeEdsOcc:
+    """Minimal stand-in for EdsOccultation exposing .geolocation."""
+    def __init__(self, grid_lats: np.ndarray, grid_lons: np.ndarray) -> None:
+        # col0=lon, col1=lat — matches demo_compare_kf_enkf convention
+        self.geolocation = np.column_stack([grid_lons, grid_lats])
+
+
+def _build_scipy_opt_res_kf(
+    parsed_list: list[dict],
+    arc_truth_list: list[dict],
+    prior_edp: np.ndarray,
+    grid_lats_5deg: np.ndarray,
+    grid_lons_5deg: np.ndarray,
+    time_dt: pd.Timestamp,
+) -> dict:
+    """
+    Build the res_kf-style dict expected by _run_parametric_optimization from
+    test_param_iono.py data structures.
+
+    LEO/GNSS positions are decimated using the same stride logic as
+    _build_arc_rays so that cl["tec"] = tec_truth aligns epoch-for-epoch.
+
+    Parameters
+    ----------
+    prior_edp : ndarray, shape (n_alt, n_grid)
+        IRI prior electron-density profiles on the 5-deg model grid.
+        Computed from the IRI mean state independently of any filter result.
+    """
+    clean_list: list[dict] = []
+    for parsed, arc_truth in zip(parsed_list, arc_truth_list):
+        leo_full  = parsed["LEO"]                          # (3, n_eps)
+        gnss_full = parsed["GNSS"]                         # (3, n_eps)
+        tang_full = np.asarray(parsed["tangent_alt_km"])   # (n_eps,)
+        n_eps     = leo_full.shape[1]
+
+        if n_eps > MAX_EPOCHS:
+            stride  = int(np.ceil(n_eps / MAX_EPOCHS))
+            dec_idx = np.arange(0, n_eps, stride)
+            deepest = int(np.argmin(tang_full))
+            if deepest not in dec_idx:
+                dec_idx = np.sort(np.append(dec_idx, deepest))
+        else:
+            dec_idx = np.arange(n_eps)
+
+        clean_list.append(dict(
+            LEO        = leo_full[:, dec_idx],
+            GNSS       = gnss_full[:, dec_idx],
+            tec        = arc_truth["tec_truth"],
+            tangent_km = arc_truth["tang_km"],
+        ))
+
+    return dict(
+        eds_occ      = _FakeEdsOcc(grid_lats_5deg, grid_lons_5deg),
+        clean_list   = clean_list,
+        prior_edp_3d = prior_edp,
+        time_window  = time_dt.strftime("%Y-%m-%d_%H%M"),
+    )
+
+
+def run_scipy_optimization(
+    parsed_list: list[dict],
+    arc_truth_list: list[dict],
+    prior_edp: np.ndarray,
+    grid_lats_5deg: np.ndarray,
+    grid_lons_5deg: np.ndarray,
+    alt_grid: np.ndarray,
+    time_dt: pd.Timestamp,
+    save_dir: str = SAVE_DIR,
+) -> dict[str, dict]:
+    """
+    Run the five scipy non-linear optimisation methods
+    (BFGS, Nelder-Mead, Newton-CG, SLSQP, trust-constr) against the
+    truth sTEC observations from the EnKF retrieval experiment.
+
+    Parameters
+    ----------
+    prior_edp : ndarray, shape (n_alt, n_grid)
+        IRI prior electron-density profiles on the 5-deg model grid.
+        Built from the IRI mean state and passed in directly so this function
+        does not depend on any filter (EnKF / KF) having been run first.
+
+    Returns a dict keyed by method name; each value has the same structure as
+    the res_kf / res_enkf result dicts.
+    """
+    res_kf_opt = _build_scipy_opt_res_kf(
+        parsed_list, arc_truth_list, prior_edp,
+        grid_lats_5deg, grid_lons_5deg, time_dt,
+    )
+    return _run_parametric_optimization(
+        res_kf                = res_kf_opt,
+        alt_grid              = alt_grid,
+        save_dir              = save_dir,
+        group_key             = time_dt.strftime("%Y-%m-%d_%H%M"),
+        sigma_obs_tecu        = SCIPY_OPT_SIGMA_OBS,
+        n_update_rays         = SCIPY_OPT_UPDATE_RAYS,
+        maxiter_unconstrained = SCIPY_OPT_MAXITER_UNC,
+        maxiter_constrained   = SCIPY_OPT_MAXITER_CON,
+        n_workers             = SCIPY_OPT_N_WORKERS,
+    )
+
+
+def plot_scipy_opt_results(
+    arc_truth_list: list[dict],
+    opt_results: dict[str, dict],
+    alt_grid: np.ndarray,
+    time_dt: pd.Timestamp,
+    enkf_result: dict | None = None,
+    save_dir: str = SAVE_DIR,
+    n_tec_shown: int = 3,
+) -> str:
+    """
+    Six-panel comparison of the scipy optimisation methods (optionally versus
+    the EnKF when enkf_result is supplied).
+
+    Layout (3 rows × 2 cols):
+    [0,0]  Prior TEC profiles         [0,1]  Posterior TEC (all methods)
+    [1,0]  Prior EDP spaghetti        [1,1]  Posterior EDP mean by method
+    [2,0]  TEC RMSE bar chart         [2,1]  Grid-mean log10(NmF2) by method
+    """
+    from matplotlib.lines import Line2D
+    from matplotlib.gridspec import GridSpec
+
+    os.makedirs(save_dir, exist_ok=True)
+    n_occ  = len(arc_truth_list)
+    n_alt  = len(alt_grid)
+    shown  = list(range(min(n_tec_shown, n_occ)))
+    cmap_occ = mpl.colormaps.get_cmap("tab10")
+    occ_cols = [cmap_occ(i % 10) for i in shown]
+
+    # Prior EDP comes from the first opt_result (all methods share the same IRI prior).
+    _first_opt = next(iter(opt_results.values()))
+    prior_edp  = np.asarray(_first_opt["prior_edp_3d"])   # (n_alt, n_geo)
+    n_geo      = prior_edp.shape[1] if prior_edp.ndim == 2 else int(prior_edp.size / n_alt)
+    prior_edp  = prior_edp.reshape(n_alt, n_geo)
+
+    style_map: dict[str, tuple[str, str, str]] = {
+        **(_OPT_METHOD_STYLES if enkf_result is None
+           else {"EnKF": ("darkorange", "-.", "s"), **_OPT_METHOD_STYLES}),
+    }
+    all_methods = (
+        list(_OPT_METHOD_STYLES.keys()) if enkf_result is None
+        else ["EnKF"] + list(_OPT_METHOD_STYLES.keys())
+    )
+
+    first_opt_slices = _first_opt["tec_slices"]
+    post_edp_enkf = enkf_result["posterior_edp"] if enkf_result is not None else None
+
+    fig = plt.figure(figsize=(18, 20))
+    _vs_str = " vs EnKF" if enkf_result is not None else ""
+    fig.suptitle(
+        f"scipy Non-Linear Optimisation{_vs_str} — {time_dt:%Y-%m-%d %H:%M}",
+        fontsize=13, y=0.99,
+    )
+    gs = GridSpec(3, 2, figure=fig, wspace=0.35, hspace=0.50,
+                  height_ratios=[1, 1, 0.9])
+    ax_tec_pr = fig.add_subplot(gs[0, 0])
+    ax_tec_po = fig.add_subplot(gs[0, 1], sharey=ax_tec_pr, sharex=ax_tec_pr)
+    ax_edp_pr = fig.add_subplot(gs[1, 0])
+    ax_edp_po = fig.add_subplot(gs[1, 1], sharey=ax_edp_pr, sharex=ax_edp_pr)
+    ax_rmse   = fig.add_subplot(gs[2, 0])
+    ax_nmf2   = fig.add_subplot(gs[2, 1])
+
+    # ── [0,0] Prior TEC ──────────────────────────────────────────────────────
+    ax = ax_tec_pr
+    for si, i in enumerate(shown):
+        arc = arc_truth_list[i]
+        ax.plot(arc["tec_truth"], arc["tang_km"],
+                color=occ_cols[si], lw=2.0,
+                label=f"{arc['conid']}{arc['prn_id']}")
+        sl = first_opt_slices[i]
+        ax.plot(sl["prior_tec"], sl["tangent_km"],
+                color="gray", lw=1.2, ls="--", alpha=0.7,
+                label="Prior" if si == 0 else "_")
+    ax.set_xlabel("TEC (TECU)", fontsize=10)
+    ax.set_ylabel("Tangent Altitude (km)", fontsize=10)
+    ax.set_title("Prior TEC (IRI)", fontsize=10)
+    ax.legend(fontsize=7, loc="upper right", framealpha=0.85)
+    ax.grid(True, alpha=0.3, ls=":")
+
+    # ── [0,1] Posterior TEC ──────────────────────────────────────────────────
+    ax = ax_tec_po
+    for si, i in enumerate(shown):
+        arc = arc_truth_list[i]
+        ax.plot(arc["tec_truth"], arc["tang_km"], color=occ_cols[si], lw=2.0)
+    for mname in all_methods:
+        col, ls, _ = style_map[mname]
+        if mname == "EnKF" and enkf_result is not None:
+            for si, i in enumerate(shown):
+                sl = enkf_result["tec_slices"][i]
+                ax.plot(sl["post_tec"], sl["tang_km"],
+                        color=col, lw=1.4, ls=ls, alpha=0.85)
+        elif mname != "EnKF":
+            for si, i in enumerate(shown):
+                sl = opt_results[mname]["tec_slices"][i]
+                ax.plot(sl["post_tec"], sl["tangent_km"],
+                        color=col, lw=1.4, ls=ls, alpha=0.85)
+    legend_po = (
+        [Line2D([0], [0], color="gray", lw=2.0, label="Truth TEC")] +
+        [Line2D([0], [0], color=style_map[m][0], lw=1.4,
+                ls=style_map[m][1], label=m)
+         for m in all_methods]
+    )
+    ax.legend(handles=legend_po, fontsize=7, loc="upper right", framealpha=0.85)
+    ax.set_xlabel("TEC (TECU)", fontsize=10)
+    ax.set_title("Posterior TEC", fontsize=10)
+    ax.grid(True, alpha=0.3, ls=":")
+
+    # ── [1,0] Prior EDP spaghetti ─────────────────────────────────────────────
+    ax = ax_edp_pr
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for g in range(n_geo):
+            ax.plot(prior_edp[:, g], alt_grid,
+                    color="steelblue", lw=0.5, alpha=0.3)
+        ax.plot(prior_edp.mean(axis=1), alt_grid,
+                color="steelblue", lw=2.5, label="IRI prior mean")
+    ax.set_xlabel("Electron Density (m⁻³)", fontsize=10)
+    ax.set_ylabel("Altitude (km)", fontsize=10)
+    ax.set_title("Prior EDP (all grid points)", fontsize=10)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3, ls=":")
+    ax.set_ylim(bottom=0)
+
+    # ── [1,1] Posterior EDP (grid-point mean per method) ─────────────────────
+    ax = ax_edp_po
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ax.plot(prior_edp.mean(axis=1), alt_grid,
+                color="gray", lw=1.5, ls="--", alpha=0.7, label="Prior")
+        if post_edp_enkf is not None:
+            col_enkf, ls_enkf, _ = style_map["EnKF"]
+            ax.plot(post_edp_enkf.mean(axis=1), alt_grid,
+                    color=col_enkf, lw=2.5, ls=ls_enkf, label="EnKF")
+        for mname, (col, ls, _) in _OPT_METHOD_STYLES.items():
+            post_edp = np.asarray(
+                opt_results[mname]["post_edp_3d"]
+            ).reshape(n_alt, n_geo)
+            ax.plot(post_edp.mean(axis=1), alt_grid,
+                    color=col, lw=1.8, ls=ls, label=mname)
+    ax.set_xlabel("Electron Density (m⁻³)", fontsize=10)
+    ax.set_title("Posterior EDP (grid-point mean)", fontsize=10)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3, ls=":")
+    ax.set_ylim(bottom=0)
+
+    # Colour-coded parameter readout (grid-point mean state per method).
+    post_entries = []
+    if post_edp_enkf is not None and enkf_result.get("posterior_mean_5deg") is not None:
+        post_entries.append((
+            "EnKF", style_map["EnKF"][0],
+            enkf_result["posterior_mean_5deg"].mean(axis=1),
+        ))
+    for mname, (col, ls, _) in _OPT_METHOD_STYLES.items():
+        pmean = opt_results[mname].get("post_mean_state")
+        if pmean is not None:
+            post_entries.append((mname, col, pmean.mean(axis=1)))
+    _draw_param_boxes(ax, post_entries, loc="lower left")
+
+    # ── [2,0] TEC RMSE bar chart ──────────────────────────────────────────────
+    ax = ax_rmse
+    prior_rmses = (
+        ([float(enkf_result["prior_rmse"])] if enkf_result is not None else []) +
+        [float(opt_results[m]["prior_tec_rmse"]) for m in _OPT_METHOD_STYLES]
+    )
+    post_rmses = (
+        ([float(enkf_result["post_rmse"])] if enkf_result is not None else []) +
+        [float(opt_results[m]["post_tec_rmse"]) for m in _OPT_METHOD_STYLES]
+    )
+    x_pos  = np.arange(len(all_methods))
+    bar_w  = 0.35
+    bar_col = [style_map[m][0] for m in all_methods]
+    ax.bar(x_pos - bar_w / 2, prior_rmses, bar_w,
+           color="lightgray", edgecolor="black", lw=0.8, label="Prior")
+    ax.bar(x_pos + bar_w / 2, post_rmses, bar_w,
+           color=bar_col, edgecolor="black", lw=0.8, label="Posterior", alpha=0.85)
+    for xi, (pr, po) in enumerate(zip(prior_rmses, post_rmses)):
+        ax.text(xi - bar_w / 2, pr + 0.02, f"{pr:.2f}",
+                ha="center", va="bottom", fontsize=7)
+        ax.text(xi + bar_w / 2, po + 0.02, f"{po:.2f}",
+                ha="center", va="bottom", fontsize=7)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(all_methods, rotation=25, ha="right", fontsize=9)
+    ax.set_ylabel("TEC RMSE (TECU)", fontsize=10)
+    ax.set_title("Prior vs. Posterior TEC RMSE", fontsize=10)
+    ax.legend(fontsize=9)
+    ax.grid(True, axis="y", alpha=0.3, ls=":")
+
+    # ── [2,1] Grid-mean log10(NmF2) per method ───────────────────────────────
+    ax = ax_nmf2
+    prior_nmf2 = float(np.log10(np.maximum(prior_edp.max(axis=0), 1.0)).mean())
+    post_nmf2s = (
+        [float(np.log10(np.maximum(post_edp_enkf.max(axis=0), 1.0)).mean())]
+        if post_edp_enkf is not None else []
+    ) + [
+        float(np.log10(np.maximum(
+            np.asarray(opt_results[m]["post_edp_3d"]).reshape(n_alt, n_geo).max(axis=0),
+            1.0
+        )).mean())
+        for m in _OPT_METHOD_STYLES
+    ]
+    ax.axhline(prior_nmf2, color="gray", lw=1.5, ls="--",
+               label=f"Prior ({prior_nmf2:.2f})")
+    ax.bar(x_pos, post_nmf2s, 0.6, color=bar_col,
+           edgecolor="black", lw=0.8, alpha=0.85)
+    for xi, v in enumerate(post_nmf2s):
+        ax.text(xi, v + 0.003, f"{v:.2f}",
+                ha="center", va="bottom", fontsize=7)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(all_methods, rotation=25, ha="right", fontsize=9)
+    ax.set_ylabel("Mean log₁₀(NmF2) (m⁻³)", fontsize=10)
+    ax.set_title("Posterior Grid-Mean log₁₀(NmF2)", fontsize=10)
+    ax.legend(fontsize=9)
+    ax.grid(True, axis="y", alpha=0.3, ls=":")
+
+    plt.tight_layout(rect=[0, 0, 1, 0.98])
+    plot_path = os.path.join(save_dir, f"scipy_opt_comparison_{YYYY}_{DOY:03d}.png")
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"\n  scipy optimisation comparison plot → {plot_path}")
+    return plot_path
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # §6 (continued)  main() — EnKF retrieval experiment steps
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3732,6 +5103,7 @@ def _run_enkf_retrieval_experiment(
     parsed_list: list[dict],
     meta_list: list[dict],
     mean_5deg: np.ndarray,
+    iri_ensemble: np.ndarray,
     grid_lats_1deg: np.ndarray,
     grid_lons_1deg: np.ndarray,
     grid_lats_5deg: np.ndarray,
@@ -3790,200 +5162,373 @@ def _run_enkf_retrieval_experiment(
         grid_lats_1deg, grid_lons_1deg, ALT_GRID,
     )
 
+    # IRI prior EDP on the 5-deg model grid — built once here so that scipy
+    # optimisation can run independently of any filter.
+    _prior_scipy_state = IonosphericState(grid_lats_5deg.size, n_members=1)
+    _prior_scipy_state.ensemble = mean_5deg[:, :, np.newaxis].copy()
+    prior_edp_5deg = _parametric_to_edp(
+        _prior_scipy_state, _prior_scipy_state.ensemble, ALT_GRID
+    )
+
+    enkf_result = None
+    kf_result   = None
+
     # ── Step 9a: EnKF assimilation ────────────────────────────────────────────
-    print(f"\nStep 9a: Running ParametricEnKF "
-          f"({ENKF_N_MEMBERS} members, ES-MDA {ENKF_N_MDA} iter) …")
-    model_state_enkf = build_model_ensemble(
-        mean_5deg, grid_lats_5deg, grid_lons_5deg,
-        n_members=ENKF_N_MEMBERS, corr_length_km=CORR_LENGTH_KM,
-    )
-    enkf_result = run_parametric_enkf(
-        arc_truth_list, model_state_enkf,
-        grid_lats_5deg, grid_lons_5deg, ALT_GRID,
-    )
+    if RUN_ENKF:
+        print(f"\nStep 9a: Running ParametricEnKF "
+              f"({ENKF_N_MEMBERS} members, ES-MDA {ENKF_N_MDA} iter) …")
+        model_state_enkf = build_model_ensemble(
+            mean_5deg, grid_lats_5deg, grid_lons_5deg,
+            n_members=ENKF_N_MEMBERS, corr_length_km=CORR_LENGTH_KM,
+        )
+        enkf_result = run_parametric_enkf(
+            arc_truth_list, model_state_enkf,
+            grid_lats_5deg, grid_lons_5deg, ALT_GRID,
+            apply_bounds = ENKF_APPLY_BOUNDS,
+        )
+    else:
+        print("\n  [skip] EnKF disabled (RUN_ENKF = False)")
 
     # ── Step 9b: Gridded Ne KF assimilation ──────────────────────────────────
-    print(f"\nStep 9b: Running gridded Ne KF (linear update, IRI baseline prior) …")
-    # build_model_ensemble pins member 0 to the unperturbed IRI baseline;
-    # the remaining members are drawn stochastically for the covariance.
-    model_state_kf = build_model_ensemble(
-        mean_5deg, grid_lats_5deg, grid_lons_5deg,
-        n_members=ENKF_N_MEMBERS, corr_length_km=CORR_LENGTH_KM,
-    )
-    kf_result = run_gridded_ne_kf(
-        arc_truth_list, model_state_kf,
-        grid_lats_5deg, grid_lons_5deg, ALT_GRID,
-    )
+    if RUN_KF:
+        print(f"\nStep 9b: Running gridded Ne KF (linear update, IRI baseline prior) …")
+        # build_model_ensemble pins member 0 to the unperturbed IRI baseline;
+        # the remaining members are drawn stochastically for the covariance.
+        model_state_kf = build_model_ensemble(
+            mean_5deg, grid_lats_5deg, grid_lons_5deg,
+            n_members=ENKF_N_MEMBERS, corr_length_km=CORR_LENGTH_KM,
+        )
+        kf_result = run_gridded_ne_kf(
+            arc_truth_list, model_state_kf,
+            grid_lats_5deg, grid_lons_5deg, ALT_GRID,
+        )
+    else:
+        print("\n  [skip] KF disabled (RUN_KF = False)")
+
+    # ── Step 9f: EKF_Param assimilation ──────────────────────────────────────
+    if RUN_EKF_PARAM:
+        print(f"\nStep 9f: Running EKF_Param "
+              f"(alpha={EKF_PARAM_ALPHA}, tol={EKF_PARAM_TOL:.1e}, "
+              f"max_iter={EKF_PARAM_MAX_ITER}) …")
+        model_state_ekf = build_model_ensemble(
+            mean_5deg, grid_lats_5deg, grid_lons_5deg,
+            n_members=ENKF_N_MEMBERS, corr_length_km=CORR_LENGTH_KM,
+        )
+        ekf_param_result = EKF_Param(
+            arc_truth_list, model_state_ekf,
+            grid_lats_5deg, grid_lons_5deg, ALT_GRID,
+            sigma_obs      = EKF_PARAM_SIGMA_OBS,
+            max_update_rays= EKF_PARAM_UPDATE_RAYS,
+            alpha                = EKF_PARAM_ALPHA,
+            tol                  = EKF_PARAM_TOL,
+            max_iter             = EKF_PARAM_MAX_ITER,
+            apply_bounds         = EKF_PARAM_APPLY_BOUNDS,
+            eps_jac              = EKF_PARAM_EPS_JAC,
+            n_workers            = EKF_PARAM_N_WORKERS,
+            jacobian_analytical  = EKF_PARAM_JAC_ANALYTICAL,
+        )
+    else:
+        ekf_param_result = None
+        print("\n  [skip] EKF_Param disabled (RUN_EKF_PARAM = False)")
 
     # ── Step 9c: KF covariance panels ────────────────────────────────────────
-    print("\nStep 9c: Plotting KF covariance panels (alt-alt + horizontal) …")
-    plot_kf_covariance_panels(
-        prior_Xc       = kf_result["prior_Xc"],
-        post_Xc        = kf_result["post_Xc"],
-        prior_edp      = kf_result["prior_edp"],
-        alt_grid       = ALT_GRID,
-        grid_lats_5deg = grid_lats_5deg,
-        grid_lons_5deg = grid_lons_5deg,
-        truth_time     = truth_time,
-        save_path      = os.path.join(save_dir, f"kf_covariance_{YYYY}_{DOY:03d}.png"),
-    )
+    if kf_result is not None:
+        print("\nStep 9c: Plotting KF covariance panels (alt-alt + horizontal) …")
+        plot_kf_covariance_panels(
+            prior_Xc       = kf_result["prior_Xc"],
+            post_Xc        = kf_result["post_Xc"],
+            prior_edp      = kf_result["prior_edp"],
+            alt_grid       = ALT_GRID,
+            grid_lats_5deg = grid_lats_5deg,
+            grid_lons_5deg = grid_lons_5deg,
+            truth_time     = truth_time,
+            save_path      = os.path.join(save_dir, f"kf_covariance_{YYYY}_{DOY:03d}.png"),
+        )
 
     # ── Step 9d: EnKF covariance panels ──────────────────────────────────────
-    print("\nStep 9d: Plotting EnKF covariance panels (8×8 param + NmF2 spatial) …")
-    plot_enkf_covariance_panels(
-        prior_ensemble = enkf_result["prior_ensemble"],
-        post_ensemble  = enkf_result["posterior_ensemble"],
-        grid_lats_5deg = grid_lats_5deg,
-        grid_lons_5deg = grid_lons_5deg,
-        truth_time     = truth_time,
-        save_path      = os.path.join(save_dir, f"enkf_covariance_{YYYY}_{DOY:03d}.png"),
-    )
+    if enkf_result is not None:
+        print("\nStep 9d: Plotting EnKF covariance panels (8×8 param + NmF2 spatial) …")
+        plot_enkf_covariance_panels(
+            prior_ensemble = enkf_result["prior_ensemble"],
+            post_ensemble  = enkf_result["posterior_ensemble"],
+            grid_lats_5deg = grid_lats_5deg,
+            grid_lons_5deg = grid_lons_5deg,
+            truth_time     = truth_time,
+            save_path      = os.path.join(save_dir, f"enkf_covariance_{YYYY}_{DOY:03d}.png"),
+        )
+
+    # ── Step 9e: ensemble scatter (8×2 prior vs. posterior) ─────────────────
+    if enkf_result is not None:
+        print("\nStep 9e: Plotting ensemble parameter scatter (8×2 prior vs. posterior) …")
+        plot_ensemble_scatter(
+            iri_ensemble   = iri_ensemble,
+            prior_ensemble = enkf_result["prior_ensemble"],
+            post_ensemble  = enkf_result["posterior_ensemble"],
+            iri_mean       = mean_5deg,
+            truth_time     = truth_time,
+            save_path      = os.path.join(save_dir, f"ensemble_scatter_{YYYY}_{DOY:03d}.png"),
+        )
 
     # ── Step 10: TEC + globe + EDP plot (EnKF) ───────────────────────────────
-    print("\nStep 10: Plotting EnKF TEC profiles, globe, and EDP spaghetti …")
-    plot_enkf_tec_edp(
-        arc_truth_list, enkf_result, truth_ne_1deg,
-        grid_lats_1deg, grid_lons_1deg,
-        grid_lats_5deg, grid_lons_5deg,
-        ALT_GRID, truth_time,
-        save_path=os.path.join(save_dir, f"enkf_tec_edp_{YYYY}_{DOY:03d}.png"),
-    )
+    if enkf_result is not None:
+        print("\nStep 10: Plotting EnKF TEC profiles, globe, and EDP spaghetti …")
+        plot_enkf_tec_edp(
+            arc_truth_list, enkf_result, truth_ne_1deg,
+            grid_lats_1deg, grid_lons_1deg,
+            grid_lats_5deg, grid_lons_5deg,
+            ALT_GRID, truth_time,
+            save_path=os.path.join(save_dir, f"enkf_tec_edp_{YYYY}_{DOY:03d}.png"),
+        )
 
     # ── Step 10b: TEC + globe + EDP plot (KF) ────────────────────────────────
-    print("\nStep 10b: Plotting KF TEC profiles, globe, and EDP spaghetti …")
-    plot_kf_tec_edp(
-        arc_truth_list, kf_result, truth_ne_1deg,
-        grid_lats_1deg, grid_lons_1deg,
-        grid_lats_5deg, grid_lons_5deg,
-        ALT_GRID, truth_time,
-        save_path=os.path.join(save_dir, f"kf_tec_edp_{YYYY}_{DOY:03d}.png"),
-    )
+    if kf_result is not None:
+        print("\nStep 10b: Plotting KF TEC profiles, globe, and EDP spaghetti …")
+        plot_kf_tec_edp(
+            arc_truth_list, kf_result, truth_ne_1deg,
+            grid_lats_1deg, grid_lons_1deg,
+            grid_lats_5deg, grid_lons_5deg,
+            ALT_GRID, truth_time,
+            save_path=os.path.join(save_dir, f"kf_tec_edp_{YYYY}_{DOY:03d}.png"),
+        )
+
+    # ── Step 10c: TEC + globe + EDP plot (EKF_Param) ─────────────────────────
+    if ekf_param_result is not None:
+        print("\nStep 10c: Plotting EKF_Param TEC profiles, globe, and EDP spaghetti …")
+        _plot_tec_edp_figure(
+            arc_truth_list,
+            ekf_param_result["tec_slices"],
+            ekf_param_result["prior_edp"],
+            ekf_param_result["posterior_edp"],
+            truth_ne_1deg,
+            grid_lats_1deg, grid_lons_1deg,
+            grid_lats_5deg, grid_lons_5deg,
+            ALT_GRID,
+            suptitle=(
+                f"EKF_Param retrieval — truth ionosphere "
+                f"{truth_time.strftime('%Y-%m-%d %H:%M')} UTC  "
+                f"(+{TRUTH_HOUR_OFFSET} h, F10.7+{TRUTH_F107_DELTA:.0f})\n"
+                f"Prior RMSE {ekf_param_result['prior_rmse']:.2f} TECU  →  "
+                f"Posterior RMSE {ekf_param_result['post_rmse']:.2f} TECU  "
+                f"({ekf_param_result['n_iterations']} iters, "
+                f"{'converged' if ekf_param_result['converged'] else 'not converged'})"
+            ),
+            save_path=os.path.join(save_dir, f"ekf_param_tec_edp_{YYYY}_{DOY:03d}.png"),
+            prior_mean_state=ekf_param_result["prior_mean_state"],
+            post_mean_state=ekf_param_result["posterior_mean_5deg"],
+        )
 
     # ── Step 11: arc innovation diagnostic (EnKF) ────────────────────────────
-    print("\nStep 11: Plotting EnKF per-arc innovation diagnostic …")
-    _plot_arc_innovation_diagnostic(
-        arc_labels          = enkf_result["arc_labels"],
-        arc_prior_mean      = enkf_result["arc_prior_mean"],
-        arc_post_mean       = enkf_result["arc_post_mean"],
-        arc_prior_rmse      = enkf_result["arc_prior_rmse"],
-        arc_post_rmse       = enkf_result["arc_post_rmse"],
-        arc_lats            = enkf_result["arc_lats"],
-        arc_lons            = enkf_result["arc_lons"],
-        all_prior           = enkf_result["all_prior_resid"],
-        all_post_main       = enkf_result["all_post_resid"],
-        group_key           = f"{YYYY}_{DOY:03d}_enkf",
-        save_dir            = save_dir,
-        filter_name         = "ParametricEnKF",
-        prior_rmse          = enkf_result["prior_rmse"],
-        post_rmse           = enkf_result["post_rmse"],
-        mda_arc_means_list  = enkf_result["mda_arc_means_list"],
-        mda_flat_list       = enkf_result["mda_flat_list"],
-    )
+    if enkf_result is not None:
+        print("\nStep 11: Plotting EnKF per-arc innovation diagnostic …")
+        _plot_arc_innovation_diagnostic(
+            arc_labels          = enkf_result["arc_labels"],
+            arc_prior_mean      = enkf_result["arc_prior_mean"],
+            arc_post_mean       = enkf_result["arc_post_mean"],
+            arc_prior_rmse      = enkf_result["arc_prior_rmse"],
+            arc_post_rmse       = enkf_result["arc_post_rmse"],
+            arc_lats            = enkf_result["arc_lats"],
+            arc_lons            = enkf_result["arc_lons"],
+            all_prior           = enkf_result["all_prior_resid"],
+            all_post_main       = enkf_result["all_post_resid"],
+            group_key           = f"{YYYY}_{DOY:03d}_enkf",
+            save_dir            = save_dir,
+            filter_name         = "ParametricEnKF",
+            prior_rmse          = enkf_result["prior_rmse"],
+            post_rmse           = enkf_result["post_rmse"],
+            mda_arc_means_list  = enkf_result["mda_arc_means_list"],
+            mda_flat_list       = enkf_result["mda_flat_list"],
+        )
 
     # ── Step 11b: arc innovation diagnostic (KF) ──────────────────────────────
-    print("\nStep 11b: Plotting KF per-arc innovation diagnostic …")
-    _plot_arc_innovation_diagnostic(
-        arc_labels          = kf_result["arc_labels"],
-        arc_prior_mean      = kf_result["arc_prior_mean"],
-        arc_post_mean       = kf_result["arc_post_mean"],
-        arc_prior_rmse      = kf_result["arc_prior_rmse"],
-        arc_post_rmse       = kf_result["arc_post_rmse"],
-        arc_lats            = kf_result["arc_lats"],
-        arc_lons            = kf_result["arc_lons"],
-        all_prior           = kf_result["all_prior_resid"],
-        all_post_main       = kf_result["all_post_resid"],
-        group_key           = f"{YYYY}_{DOY:03d}_kf",
-        save_dir            = save_dir,
-        filter_name         = "GriddedNeKF",
-        prior_rmse          = kf_result["prior_rmse"],
-        post_rmse           = kf_result["post_rmse"],
-        mda_arc_means_list  = None,
-        mda_flat_list       = None,
-    )
+    if kf_result is not None:
+        print("\nStep 11b: Plotting KF per-arc innovation diagnostic …")
+        _plot_arc_innovation_diagnostic(
+            arc_labels          = kf_result["arc_labels"],
+            arc_prior_mean      = kf_result["arc_prior_mean"],
+            arc_post_mean       = kf_result["arc_post_mean"],
+            arc_prior_rmse      = kf_result["arc_prior_rmse"],
+            arc_post_rmse       = kf_result["arc_post_rmse"],
+            arc_lats            = kf_result["arc_lats"],
+            arc_lons            = kf_result["arc_lons"],
+            all_prior           = kf_result["all_prior_resid"],
+            all_post_main       = kf_result["all_post_resid"],
+            group_key           = f"{YYYY}_{DOY:03d}_kf",
+            save_dir            = save_dir,
+            filter_name         = "GriddedNeKF",
+            prior_rmse          = kf_result["prior_rmse"],
+            post_rmse           = kf_result["post_rmse"],
+            mda_arc_means_list  = None,
+            mda_flat_list       = None,
+        )
+
+    # ── Step 11c: arc innovation diagnostic (EKF_Param) ─────────────────────
+    if ekf_param_result is not None:
+        print("\nStep 11c: Plotting EKF_Param per-arc innovation diagnostic …")
+        _plot_arc_innovation_diagnostic(
+            arc_labels         = ekf_param_result["arc_labels"],
+            arc_prior_mean     = ekf_param_result["arc_prior_mean"],
+            arc_post_mean      = ekf_param_result["arc_post_mean"],
+            arc_prior_rmse     = ekf_param_result["arc_prior_rmse"],
+            arc_post_rmse      = ekf_param_result["arc_post_rmse"],
+            arc_lats           = ekf_param_result["arc_lats"],
+            arc_lons           = ekf_param_result["arc_lons"],
+            all_prior          = ekf_param_result["all_prior_resid"],
+            all_post_main      = ekf_param_result["all_post_resid"],
+            group_key          = f"{YYYY}_{DOY:03d}_ekf_param",
+            save_dir           = save_dir,
+            filter_name        = "EKF_Param",
+            prior_rmse         = ekf_param_result["prior_rmse"],
+            post_rmse          = ekf_param_result["post_rmse"],
+            mda_arc_means_list = None,
+            mda_flat_list      = None,
+        )
 
     # ── Step 12: EDP spatial error (5×2) — EnKF ──────────────────────────────
-    print("\nStep 12: Plotting EnKF EDP spatial error (5×2 orthographic) …")
-    plot_edp_spatial_error(
-        truth_ne_5deg, enkf_result["posterior_ne_5deg"],
-        grid_lats_5deg, grid_lons_5deg, ALT_GRID,
-        truth_time=truth_time,
-        save_path=os.path.join(save_dir, f"edp_spatial_error_{YYYY}_{DOY:03d}.png"),
-    )
+    if enkf_result is not None:
+        print("\nStep 12: Plotting EnKF EDP spatial error (5×2 orthographic) …")
+        plot_edp_spatial_error(
+            truth_ne_5deg, enkf_result["posterior_ne_5deg"],
+            grid_lats_5deg, grid_lons_5deg, ALT_GRID,
+            truth_time=truth_time,
+            save_path=os.path.join(save_dir, f"edp_spatial_error_{YYYY}_{DOY:03d}.png"),
+        )
 
     # ── Step 12b: EDP spatial error (5×3) — KF with truth column ─────────────
-    print("\nStep 12b: Plotting KF EDP spatial error (5×3 orthographic) …")
-    plot_edp_spatial_error(
-        truth_ne_5deg, kf_result["posterior_ne_5deg"],
-        grid_lats_5deg, grid_lons_5deg, ALT_GRID,
-        truth_time=truth_time,
-        show_truth_col=True,
-        save_path=os.path.join(save_dir, f"edp_spatial_error_kf_{YYYY}_{DOY:03d}.png"),
-    )
+    if kf_result is not None:
+        print("\nStep 12b: Plotting KF EDP spatial error (5×3 orthographic) …")
+        plot_edp_spatial_error(
+            truth_ne_5deg, kf_result["posterior_ne_5deg"],
+            grid_lats_5deg, grid_lons_5deg, ALT_GRID,
+            truth_time=truth_time,
+            show_truth_col=True,
+            save_path=os.path.join(save_dir, f"edp_spatial_error_kf_{YYYY}_{DOY:03d}.png"),
+        )
+
+    # ── Step 12c: EDP spatial error — EKF_Param ──────────────────────────────
+    if ekf_param_result is not None:
+        print("\nStep 12c: Plotting EKF_Param EDP spatial error (5×2 orthographic) …")
+        plot_edp_spatial_error(
+            truth_ne_5deg, ekf_param_result["posterior_ne_5deg"],
+            grid_lats_5deg, grid_lons_5deg, ALT_GRID,
+            truth_time=truth_time,
+            save_path=os.path.join(save_dir, f"edp_spatial_error_ekf_param_{YYYY}_{DOY:03d}.png"),
+        )
 
     # ── Step 13: parameter spatial error (8×2) — EnKF only ───────────────────
-    print("\nStep 13: Plotting parameter spatial error (8×2 orthographic) …")
-    plot_parameter_spatial_error(
-        truth_mean_5deg, enkf_result["posterior_mean_5deg"],
-        grid_lats_5deg, grid_lons_5deg,
-        truth_time=truth_time,
-        save_path=os.path.join(save_dir, f"param_spatial_error_{YYYY}_{DOY:03d}.png"),
-    )
+    if enkf_result is not None:
+        print("\nStep 13: Plotting parameter spatial error (8×2 orthographic) …")
+        plot_parameter_spatial_error(
+            truth_mean_5deg, enkf_result["posterior_mean_5deg"],
+            grid_lats_5deg, grid_lons_5deg,
+            truth_time=truth_time,
+            save_path=os.path.join(save_dir, f"param_spatial_error_{YYYY}_{DOY:03d}.png"),
+        )
 
     # ── Step 13b: EnKF Δ log10(NmF2) — filter vs. required correction ────────
-    print("\nStep 13b: Plotting EnKF Δ log10(NmF2) correction comparison …")
-    plot_enkf_delta_nmf2(
-        enkf_result["prior_edp"], enkf_result["posterior_mean_5deg"], truth_mean_5deg,
-        grid_lats_5deg, grid_lons_5deg,
-        truth_time=truth_time,
-        save_path=os.path.join(save_dir, f"enkf_delta_nmf2_{YYYY}_{DOY:03d}.png"),
-    )
+    if enkf_result is not None:
+        print("\nStep 13b: Plotting EnKF Δ log10(NmF2) correction comparison …")
+        plot_enkf_delta_nmf2(
+            enkf_result["prior_edp"], enkf_result["posterior_mean_5deg"], truth_mean_5deg,
+            grid_lats_5deg, grid_lons_5deg,
+            truth_time=truth_time,
+            save_path=os.path.join(save_dir, f"enkf_delta_nmf2_{YYYY}_{DOY:03d}.png"),
+        )
 
     # ── Step 13c: log10(NmF2) vs. grid-point index ───────────────────────────
-    print("\nStep 13c: Plotting log10(NmF2) by grid-point index …")
-    plot_nmf2_by_index(
-        mean_5deg, kf_result, enkf_result, truth_mean_5deg,
-        grid_lats_5deg, grid_lons_5deg,
-        truth_time=truth_time,
-        save_path=os.path.join(save_dir, f"nmf2_by_index_{YYYY}_{DOY:03d}.png"),
-    )
+    if kf_result is not None and enkf_result is not None:
+        print("\nStep 13c: Plotting log10(NmF2) by grid-point index …")
+        plot_nmf2_by_index(
+            mean_5deg, kf_result, enkf_result, truth_mean_5deg,
+            grid_lats_5deg, grid_lons_5deg,
+            truth_time=truth_time,
+            save_path=os.path.join(save_dir, f"nmf2_by_index_{YYYY}_{DOY:03d}.png"),
+        )
 
     # ── Step 13d: EDP profiles — prior / posterior / ΔNe (KF top, EnKF bottom) ─
-    print("\nStep 13d: Plotting EDP profile comparison (KF vs EnKF) …")
-    plot_edp_profiles_kf_enkf(
-        kf_result, enkf_result, truth_ne_5deg,
-        grid_lats_5deg, grid_lons_5deg, ALT_GRID,
-        truth_time=truth_time,
-        save_path=os.path.join(save_dir, f"edp_profiles_kf_enkf_{YYYY}_{DOY:03d}.png"),
-    )
+    if kf_result is not None and enkf_result is not None:
+        print("\nStep 13d: Plotting EDP profile comparison (KF vs EnKF) …")
+        plot_edp_profiles_kf_enkf(
+            kf_result, enkf_result, truth_ne_5deg,
+            grid_lats_5deg, grid_lons_5deg, ALT_GRID,
+            truth_time=truth_time,
+            save_path=os.path.join(save_dir, f"edp_profiles_kf_enkf_{YYYY}_{DOY:03d}.png"),
+        )
 
     # ── Step 14: KF vs EnKF comparison plot ──────────────────────────────────
-    print("\nStep 14: Plotting KF vs EnKF comparison …")
-    plot_kf_enkf_comparison(
-        arc_truth_list    = arc_truth_list,
-        kf_result         = kf_result,
-        enkf_result       = enkf_result,
-        truth_ne_1deg     = truth_ne_1deg,
-        grid_lats_1deg    = grid_lats_1deg,
-        grid_lons_1deg    = grid_lons_1deg,
-        grid_lats_5deg    = grid_lats_5deg,
-        grid_lons_5deg    = grid_lons_5deg,
-        alt_grid          = ALT_GRID,
-        truth_time        = truth_time,
-        save_path         = os.path.join(
-            save_dir, f"kf_vs_enkf_comparison_{YYYY}_{DOY:03d}.png"
-        ),
-    )
+    if kf_result is not None and enkf_result is not None:
+        print("\nStep 14: Plotting KF vs EnKF comparison …")
+        plot_kf_enkf_comparison(
+            arc_truth_list    = arc_truth_list,
+            kf_result         = kf_result,
+            enkf_result       = enkf_result,
+            truth_ne_1deg     = truth_ne_1deg,
+            grid_lats_1deg    = grid_lats_1deg,
+            grid_lons_1deg    = grid_lons_1deg,
+            grid_lats_5deg    = grid_lats_5deg,
+            grid_lons_5deg    = grid_lons_5deg,
+            alt_grid          = ALT_GRID,
+            truth_time        = truth_time,
+            save_path         = os.path.join(
+                save_dir, f"kf_vs_enkf_comparison_{YYYY}_{DOY:03d}.png"
+            ),
+        )
+
+    # ── Step 15: scipy non-linear optimisation (5 methods) ────────────────────
+    if RUN_SCIPY_OPT:
+        print(f"\nStep 15: Running scipy non-linear optimisation "
+              f"({len(_OPT_METHOD_STYLES)} methods) …")
+        opt_results = run_scipy_optimization(
+            parsed_list    = parsed_list,
+            arc_truth_list = arc_truth_list,
+            prior_edp      = prior_edp_5deg,
+            grid_lats_5deg = grid_lats_5deg,
+            grid_lons_5deg = grid_lons_5deg,
+            alt_grid       = ALT_GRID,
+            time_dt        = time_dt,
+            save_dir       = save_dir,
+        )
+
+        print("\nStep 15b: Plotting scipy optimisation comparison …")
+        plot_scipy_opt_results(
+            arc_truth_list = arc_truth_list,
+            opt_results    = opt_results,
+            alt_grid       = ALT_GRID,
+            time_dt        = time_dt,
+            enkf_result    = enkf_result,   # None when RUN_ENKF=False — omits EnKF comparison
+            save_dir       = save_dir,
+        )
+    else:
+        opt_results = {}
+        print("\n  [skip] scipy optimisation disabled (RUN_SCIPY_OPT = False)")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("  Filter comparison summary")
     print("=" * 60)
-    print(f"  Prior  RMSE:  {kf_result['prior_rmse']:.3f} TECU")
-    print(f"  KF     RMSE:  {kf_result['post_rmse']:.3f} TECU"
-          f"  (Δ = {kf_result['post_rmse'] - kf_result['prior_rmse']:+.3f})")
-    print(f"  EnKF   RMSE:  {enkf_result['post_rmse']:.3f} TECU"
-          f"  (Δ = {enkf_result['post_rmse'] - enkf_result['prior_rmse']:+.3f})")
-    print(f"\n✓ EnKF + KF retrieval experiment complete.  Figures in: {save_dir}")
+    _ref = kf_result or enkf_result or ekf_param_result
+    if _ref is not None:
+        print(f"  Prior  RMSE:  {_ref['prior_rmse']:.3f} TECU")
+    if kf_result is not None:
+        print(f"  KF     RMSE:  {kf_result['post_rmse']:.3f} TECU"
+              f"  (Δ = {kf_result['post_rmse'] - kf_result['prior_rmse']:+.3f})")
+    if enkf_result is not None:
+        print(f"  EnKF   RMSE:  {enkf_result['post_rmse']:.3f} TECU"
+              f"  (Δ = {enkf_result['post_rmse'] - enkf_result['prior_rmse']:+.3f})")
+    if ekf_param_result is not None:
+        conv_tag = f"converged in {ekf_param_result['n_iterations']} iter" \
+                   if ekf_param_result['converged'] \
+                   else f"{ekf_param_result['n_iterations']} iter (not converged)"
+        print(f"  EKF_P  RMSE:  {ekf_param_result['post_rmse']:.3f} TECU"
+              f"  (Δ = {ekf_param_result['post_rmse'] - ekf_param_result['prior_rmse']:+.3f})"
+              f"  [{conv_tag}]")
+    if opt_results:
+        print("─" * 60)
+        for mname, res in opt_results.items():
+            pr = res["prior_tec_rmse"]
+            po = res["post_tec_rmse"]
+            print(f"  {mname:<14}  prior={pr:.3f}  post={po:.3f}"
+                  f"  (Δ = {po - pr:+.3f})")
+    print(f"\n✓ Retrieval experiment complete.  Figures in: {save_dir}")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,11 @@ from scipy.interpolate import interp1d
 
 from TEC_model.podTc_file_processing import rayTangent, parse_podTc2_nc_file
 
+# NumPy >=2.0 removed np.trapz (renamed to np.trapezoid); NumPy <2.0 doesn't
+# have np.trapezoid yet. Resolve once at import time so call sites work
+# under either version.
+_trapz = getattr(np, "trapezoid", None) or getattr(np, "trapz")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal math helpers
@@ -231,7 +236,7 @@ def _forward_tec(p_km, N_e):
         if valid.sum() < 2:
             continue
         integrand   = Ne_r[valid] * r[valid] / denom[valid]
-        TEC_fwd[i]  = 2.0 * np.trapz(integrand, r[valid])
+        TEC_fwd[i]  = 2.0 * _trapz(integrand, r[valid])
 
     return TEC_fwd / 1e16               # e-/m² → TECU
 
@@ -409,7 +414,6 @@ def run_abel_inversion(podTc2_data):
         print(f"  [Abel] Missing key in podTc2_data: {e}")
         return None
 
-    print("  -> Running Lei-Abel inversion...")
     N_e, N_e_grad, alt_km, TEC_cal, _, N_e_m, alt_km_m, TEC_fwd, TEC_fwd_m = _lei_abel(
         TEC_in, LEO, GNSS, time
     )

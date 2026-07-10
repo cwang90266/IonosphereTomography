@@ -118,7 +118,7 @@ _orig_plot_group = _demo_group._plot_group
 
 
 def _patched_plot_group(
-    result, save_dir, group_key, *, suffix="", mode_label="Sequential KF"
+    result, save_dir, group_key, *, suffix="", mode_label="Sequential KF", **kwargs
 ):
     isr_arg = None
     if suffix == "_joint" and _isr_profiles_for_patch:
@@ -141,11 +141,12 @@ def _patched_plot_group(
                 )]
         except Exception:
             isr_arg = _isr_profiles_for_patch[:1]
+    kwargs.setdefault("isr_profiles", isr_arg)
+    kwargs.setdefault("isr_site", (ISR_LON_W, ISR_LAT) if isr_arg else None)
     return _orig_plot_group(
         result, save_dir, group_key,
         suffix=suffix, mode_label=mode_label,
-        isr_profiles=isr_arg,
-        isr_site=(ISR_LON_W, ISR_LAT) if isr_arg else None,
+        **kwargs,
     )
 
 
@@ -487,6 +488,7 @@ def plot_isr_profile_comparison(
     ax_prof.xaxis.set_major_formatter(ne_fmt)
     ax_prof.grid(True, alpha=0.3, ls=":")
     ax_prof.legend(fontsize=9, loc="upper right", framealpha=0.85)
+    ax_prof.set_ylim(bottom=0)
 
     # ── Panel 2: NmF2 scatter ─────────────────────────────────────────────────
     isr_nm = np.array([p["nm_f2"] for p in isr_profiles if not np.isnan(p["nm_f2"])])
@@ -569,6 +571,7 @@ def plot_isr_profile_comparison(
     ax_bias.xaxis.set_major_formatter(ne_fmt)
     ax_bias.grid(True, alpha=0.3, ls=":")
     ax_bias.legend(fontsize=9, loc="upper right", framealpha=0.85)
+    ax_bias.set_ylim(bottom=0)
 
     plt.tight_layout()
     safe_key  = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
@@ -1024,6 +1027,7 @@ def _plot_incremental_convergence(
     ax_edp.grid(True, alpha=0.3, ls=":")
     ax_edp.legend(fontsize=7, loc="upper right", framealpha=0.85,
                   ncol=max(1, n_steps // 12))
+    ax_edp.set_ylim(bottom=0)
 
     # ── Panel 2: NmF2 and hmF2 vs. step count ────────────────────────────────
     ns    = [s["n_occ"]  for s in steps]
@@ -2619,7 +2623,7 @@ def plot_occ_tec_max_vs_isr_forward_tec(
                      marker="*", ms=14, color="darkorchid", zorder=7,
                      mec="black", mew=1.0, label=f"Iono NmF2 ({m['iono_foF2']:.1f} MHz)")
 
-        ax3.set_ylim(80, 800)
+        ax3.set_ylim(0, 800)
         ax3.set_xlabel("Ne (×10¹⁰ m⁻³)", fontsize=10)
         if col_idx == 0:
             ax3.set_ylabel("Altitude (km)", fontsize=11)
