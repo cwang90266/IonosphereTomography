@@ -5,29 +5,39 @@ ionosphere forward model in enkf_update.py / observation_operator.py.
 
 Workflow
 --------
-1. Scan a day directory for podTc2 occultation files; select up to N_OCC_MAX
-   arcs distributed evenly across GNSS constellations (round-robin).
-2. Build two Fibonacci sphere grids:
-     • 1-deg spacing  — fine grid for the "truth" ensemble (9 deterministic
-                        members, one per parameter perturbation).
-     • 5-deg spacing  — coarser grid for the model ensemble (N_MEMBERS stochastic
-                        members drawn from the IRI background covariance).
-   Both grids are anchored on the full arc geometry (all decimated tangent-point
-   locations) connected by MST + SLERP great-circle waypoints to guarantee
-   continuous spatial coverage even when arcs are geographically separated.
-3. Run the parametric forward model (ObservationOperator) for every arc on both
-   grids using IDW interpolation (12 nearest neighbours).
-4. Produce diagnostic figures:
-     • param_iono_test_{YYYY}_{DOY}.png        — 2×2 TEC panels + globe map
-     • ensemble_histograms_{YYYY}_{DOY}.png    — 8×1 per-parameter histograms
-     • param_sensitivity_{YYYY}_{DOY}.png      — 8×2 signed sensitivity sweep
-     • param_sensitivity_abs_{YYYY}_{DOY}.png  — 8×2 absolute sensitivity sweep
+1. Scan the day directory for podTc2 occultation files once, bin qualifying
+   arcs into WINDOW_MINUTES-wide windows (keyed on TEC-max epoch), then apply
+   the ISR ROI gate + round-robin constellation selection per window. Windows
+   with fewer than MIN_ARCS_PER_WINDOW arcs are dropped.
+2. For every retained window (main() loops over them), rebuild the geometry-
+   dependent Fibonacci grids from that window's arcs, then run the full
+   time-dependent pipeline:
+     • 1-deg + 5-deg Fibonacci grids (anchored on arc tangent tracks +
+       MST/SLERP waypoints for connectivity).
+     • IRI truth ensemble (9 deterministic +1σ members) on the 1-deg grid.
+     • Stochastic IRI ensemble (N_MEMBERS members) on the 5-deg grid.
+     • Parametric forward model (ObservationOperator) with IDW interpolation
+       (12 nearest neighbours) for every arc on both grids.
+     • Gridded Ne linear KF + iterative EKF_Param on the parametric state.
+3. Every per-window figure is suffixed with the window's "_HHMM" tag so
+   successive windows never overwrite each other. Per-window results (RMSE,
+   filter outputs, arc/ray metadata) are collected into a dict keyed by
+   window_key for downstream cross-window comparison plotting (separate).
+
+Filenames (all suffixed "_{YYYY}_{DOY}_{HHMM}"):
+     • param_iono_test_…             — 2×2 TEC panels + globe map
+     • ensemble_histograms_…         — 8×1 per-parameter histograms
+     • param_sensitivity[_abs]_…     — 8×2 sensitivity sweeps
+     • kf_covariance_…, kf_tec_edp_…, edp_spatial_error_kf_…
+     • ekf_param_tec_edp_…, edp_spatial_error_ekf_param_…
+     • kf_vs_ekf_param_comparison_…
 """
 
 from __future__ import annotations
 
 import sys
 import os
+import json
 from pathlib import Path
 from collections import defaultdict
 
@@ -79,6 +89,109 @@ from demo_compare_kf_enkf import (
     _draw_param_boxes,
 )
 from demo_group import CONSTELLATION_CONFIG, _CONST_FALLBACK_CMAP
+from demo_isr_initial_conditions import INSTRUMENTS
+from demo import extract_robust_f2_peak
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Frequency-domain metric helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def ne_to_mhz(ne_m3: np.ndarray) -> np.ndarray:
+    """Electron density [m⁻³] → plasma frequency [MHz]."""
+    return 8.978e-6 * np.sqrt(np.maximum(np.asarray(ne_m3, dtype=float), 0.0))
+
+
+def extract_e_layer_peak(ne_arr: np.ndarray, alt_arr: np.ndarray,
+                          e_alt_min: float = 90.0,
+                          e_alt_max: float = 150.0) -> tuple[float, float]:
+    """
+    Return (NmE [m⁻³], hmE [km]) — the peak electron density in the E-layer
+    altitude band [e_alt_min, e_alt_max] km. Returns (nan, nan) if the band
+    contains no valid points.
+    """
+    ne_arr  = np.asarray(ne_arr, dtype=float)
+    alt_arr = np.asarray(alt_arr, dtype=float)
+    mask = (alt_arr >= e_alt_min) & (alt_arr <= e_alt_max) & np.isfinite(ne_arr)
+    if mask.sum() == 0:
+        return np.nan, np.nan
+    band_ne  = ne_arr[mask]
+    band_alt = alt_arr[mask]
+    idx = int(np.argmax(band_ne))
+    return float(band_ne[idx]), float(band_alt[idx])
+
+
+def compute_retrieval_freq_metrics(
+    truth_ne: np.ndarray,          # (n_alt,) truth profile at one grid point
+    prior_ne: np.ndarray,          # (n_alt,)
+    post_ne:  np.ndarray,          # (n_alt,)
+    alt_grid: np.ndarray,          # (n_alt,) km
+    mhz_thresholds: tuple = (0.5, 0.2, 0.1),
+) -> dict:
+    """
+    Compute frequency-domain retrieval metrics comparing prior/posterior Ne
+    profiles against truth at a single grid point.
+
+    Returns a dict with:
+        truth_foF2, prior_foF2, post_foF2          [MHz]
+        truth_foE,  prior_foE,  post_foE           [MHz]
+        prior_foF2_err, post_foF2_err              [MHz, signed: est - truth]
+        prior_foE_err,  post_foE_err               [MHz]
+        prior_fp_rmse,  post_fp_rmse               [MHz, profile RMSE in plasma freq]
+        within_{X}mhz_foF2_prior/post              [bool, per threshold]
+        within_{X}mhz_foE_prior/post               [bool]
+        within_{X}mhz_profile_prior/post           [bool]
+    """
+    truth_ne = np.asarray(truth_ne, dtype=float)
+    prior_ne = np.asarray(prior_ne, dtype=float)
+    post_ne  = np.asarray(post_ne,  dtype=float)
+    alt_grid = np.asarray(alt_grid, dtype=float)
+
+    # F2 peak
+    truth_nmf2, _ = extract_robust_f2_peak(truth_ne, alt_grid)
+    prior_nmf2, _ = extract_robust_f2_peak(prior_ne, alt_grid)
+    post_nmf2,  _ = extract_robust_f2_peak(post_ne,  alt_grid)
+
+    truth_foF2 = ne_to_mhz(truth_nmf2)
+    prior_foF2 = ne_to_mhz(prior_nmf2)
+    post_foF2  = ne_to_mhz(post_nmf2)
+
+    # E layer peak
+    truth_nme, _ = extract_e_layer_peak(truth_ne, alt_grid)
+    prior_nme, _ = extract_e_layer_peak(prior_ne, alt_grid)
+    post_nme,  _ = extract_e_layer_peak(post_ne,  alt_grid)
+
+    truth_foE = ne_to_mhz(truth_nme)
+    prior_foE = ne_to_mhz(prior_nme)
+    post_foE  = ne_to_mhz(post_nme)
+
+    # Full-profile plasma-frequency RMSE
+    truth_fp = ne_to_mhz(truth_ne)
+    prior_fp = ne_to_mhz(prior_ne)
+    post_fp  = ne_to_mhz(post_ne)
+    valid = np.isfinite(truth_fp) & np.isfinite(prior_fp) & np.isfinite(post_fp)
+    prior_fp_rmse = float(np.sqrt(np.mean((prior_fp[valid] - truth_fp[valid])**2))) if valid.any() else np.nan
+    post_fp_rmse  = float(np.sqrt(np.mean((post_fp[valid]  - truth_fp[valid])**2))) if valid.any() else np.nan
+
+    out = dict(
+        truth_foF2=float(truth_foF2), prior_foF2=float(prior_foF2), post_foF2=float(post_foF2),
+        truth_foE=float(truth_foE),   prior_foE=float(prior_foE),   post_foE=float(post_foE),
+        prior_foF2_err=float(prior_foF2 - truth_foF2),
+        post_foF2_err =float(post_foF2  - truth_foF2),
+        prior_foE_err =float(prior_foE  - truth_foE),
+        post_foE_err  =float(post_foE   - truth_foE),
+        prior_fp_rmse=prior_fp_rmse,
+        post_fp_rmse =post_fp_rmse,
+    )
+    for thr in mhz_thresholds:
+        thr_str = str(thr).replace(".", "")
+        out[f"within_{thr_str}mhz_foF2_prior"] = bool(abs(out["prior_foF2_err"]) <= thr)
+        out[f"within_{thr_str}mhz_foF2_post"]  = bool(abs(out["post_foF2_err"])  <= thr)
+        out[f"within_{thr_str}mhz_foE_prior"]  = bool(abs(out["prior_foE_err"])  <= thr)
+        out[f"within_{thr_str}mhz_foE_post"]   = bool(abs(out["post_foE_err"])   <= thr)
+        out[f"within_{thr_str}mhz_profile_prior"] = bool(prior_fp_rmse <= thr)
+        out[f"within_{thr_str}mhz_profile_post"]  = bool(post_fp_rmse  <= thr)
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -91,21 +204,82 @@ from demo_group import CONSTELLATION_CONFIG, _CONST_FALLBACK_CMAP
 # │  All methods share the same truth ionosphere, synthetic TEC, and prior. │
 # └─────────────────────────────────────────────────────────────────────────┘
 RUN_KF        = True   # Gridded Ne linear Kalman Filter (Ne-space, single-step)
-RUN_ENKF      = False   # Parametric Ensemble KF / ES-MDA (Chapman-param state)
 RUN_EKF_PARAM = True   # Iterative Extended KF on parametric IRI state
-RUN_SCIPY_OPT = True   # scipy non-linear optimisation (BFGS, NM, Newton-CG, SLSQP, trust-constr)
 
-DOY           = 154
+DOY           = 265
 YYYY          = 2025
 BASE_PATH     = (f"/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/"
                  f"{YYYY}.{DOY}/")
 SAVE_DIR      = "./Figures/test_param_iono/"
 IRI_CACHE_DIR = "./Data/IRI_param_cache/"
 
+# ── §0b  Multi-date sweep configuration ─────────────────────────────────────
+# Each entry is (YYYY, DOY, description) defining which day directories to test.
+# Cover: winter solstice, spring equinox, summer solstice, autumn equinox +
+# the nominal default day → captures seasonal variation.
+SWEEP_DATES = [
+    # (year, doy, description)
+    # (2025,  1,  ""),
+    (2026, 43,  "late_winter_spring"),
+    (2025, 172, "summer_solstice"),
+    (2025, 265, "autumn_equinox"),     
+    (2025, 352, "winter_solstice"),
+]
+
+# N_OCC sweep range
+SWEEP_N_OCC_VALUES = list(range(10, 101, 10))   # [10, 20, 30, …, 100]
+
+# Where to save sweep results
+SWEEP_RESULTS_CSV = "./Data/occ_sweep_results.csv"
+SWEEP_SAVE_DIR    = "./Figures/occ_sweep/"
+
+# Root directory holding per-day podTc2 subfolders ("{YYYY}.{DOY}/").
+SWEEP_PODTC2_ROOT = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2"
+
 ALT_MIN_TEC   = 100.0   # km — integration band for measured TEC (lower bound)
 ALT_MAX_TEC   = 400.0   # km — integration band for measured TEC (upper bound)
 
-N_OCC_MAX     = 8      # maximum number of occultations to process
+N_OCC_MAX     = 30     # maximum number of occultations to process per window
+
+ISR_SITES      = ("ESR", "TRO")
+ISR_ROI_MAX_KM = 2500.0   # RO peak-tangent-point → ISR site gate (great-circle km)
+
+# ── Simulated IGS ground-station observations ────────────────────────────────
+# Extends arc_truth_list with synthetic ground-to-GNSS sTEC observations at
+# fixed Nordic IGS station coordinates.  Satellite positions are taken from a
+# real broadcast ephemeris (BRDC RINEX file in Data/RINEX_Cache), so each
+# (station, SV) arc mirrors the geometry an actual IGS receiver would see.
+# The truth state is forward-modelled through those rays the same way as RO
+# arcs, so the KF and EKF see a longer arc_truth_list without any change to
+# their update logic.  Set USE_SIMULATED_IGS = False to disable.
+USE_SIMULATED_IGS       = True
+IGS_SIM_STATIONS        = ["TRO1", "WUTH", "NYA1", "KIR0", "SOD3", "ALRT","SCOR", "HOFN", 'REYK']  # 4-char prefixes into IGSNetwork.json
+IGS_SIM_STATIONS_JSON   = "./Data/IGS_Stations/IGSNetwork.json"
+IGS_SIM_ELEV_CUTOFF_DEG = 20.0   # visibility cutoff — SVs below this elevation are skipped
+IGS_SIM_N_EPOCHS        = 8      # target sample epochs per (station, SV) arc,
+                                 # spread across the window centred on the arc's time
+IGS_SIM_N_RAY_PTS       = 500    # ECEF samples per ray before altitude filtering
+                                 # (large because the LOS from receiver to GNSS SV is
+                                 # ~20 000+ km long but only ~1000 km sits in the ionosphere)
+IGS_SIM_IPP_ALT_KM      = 300.0  # nominal ionospheric pierce altitude for tp_lat/tp_lon
+IGS_SIM_CONID           = "I"    # constellation tag (falls back to Greys cmap)
+IGS_SIM_CONSTELLATIONS  = ("G", "R", "E", "C")  # which SV prefixes to include
+IGS_SIM_BRDC_DIR        = "./Data/RINEX_Cache"
+
+# Observation-mode sweep — the filter suite is run once per mode with per-mode
+# figures suffixed "_{mode}".  igs_only rebuilds the Fibonacci grid from IGS
+# pierce points so its ROI is IGS-centred rather than RO-centred.
+FILTER_MODES = ("ro_only", "ro_igs", "igs_only")
+
+# ── Multi-window sweep across the day ────────────────────────────────────────
+# The pipeline is executed once per discrete time window across the target day.
+# WINDOW_MINUTES controls the binning width (30 matches demo_group.py). Given
+# the ISR ROI gate typically leaves only ~30 arcs/day, most 30-min windows are
+# sparse; MIN_ARCS_PER_WINDOW filters out windows too thin for meaningful
+# assimilation. Coarsen WINDOW_MINUTES (e.g. 60 or 180) to process fewer,
+# denser windows.
+WINDOW_MINUTES        = 60   # per-window bin width (minutes)
+MIN_ARCS_PER_WINDOW   = 16    # skip windows with fewer ROI-passing arcs
 
 # Altitude grid for Ne integration (log-spaced 60–800 km)
 ALT_GRID = np.logspace(np.log10(60.0), np.log10(800.0), num=55, dtype=float)
@@ -118,12 +292,12 @@ MAX_EPOCHS = 200   # maximum ray epochs per arc (decimated if more)
 
 # Per-parameter 1-σ perturbation for the truth ensemble members
 # log10(NmF2), hmF2, H0, gamma, B0, B1, log10(NmE), hmE
-_TRUTH_SIGMA = np.array([0.5, 38.0, 33.0, 0.2, 23.0, 0.30, 0.4, 8.0])
+_TRUTH_SIGMA = np.array([1.7, 38.0, 33.0, 0.2, 23.0, 0.30, -1.4, 12.0])
 
 
-# IDW interpolation settings (applied identically to both 1-deg and 5-deg grids)
-_IDW_POWER   = 2.0
-_IDW_NEAREST = 12
+# Gaussian kernel interpolation settings (applied identically to both 1-deg and 5-deg grids)
+_IDW_NEAREST    = 12   # node cap in _idw_weights; also used for min_points in Fibonacci grids
+_IDW_SIGMA_SCALE = 1.5  # sigma = SIGMA_SCALE × distance-to-3rd-nearest (local density estimate)
 
 # Parameter sensitivity sweep
 _N_SWEEP = 61      # number of sweep points (odd → symmetric about baseline)
@@ -181,22 +355,65 @@ SCIPY_OPT_UPDATE_RAYS = ENKF_MAX_UPDATE_RAYS   # representative rays per arc
 # §1  File scanning and selection
 # ─────────────────────────────────────────────────────────────────────────────
 
-def scan_and_select_files(
+def _near_isr_site_mask(
+    lat: np.ndarray,
+    lon: np.ndarray,
+    sites: tuple[str, ...] = ISR_SITES,
+    max_km: float = ISR_ROI_MAX_KM,
+) -> np.ndarray:
+    """True where (lat, lon) is within max_km of at least one ISR site."""
+    lat = np.asarray(lat, dtype=float)
+    lon = np.asarray(lon, dtype=float)
+    within = np.zeros(lat.shape, dtype=bool)
+    for site in sites:
+        inst = INSTRUMENTS[site]
+        dist_km = _haversine_km(inst["lat"], inst["lon"], lat, lon)
+        within |= (dist_km <= max_km)
+    return within
+
+
+def _round_robin_by_constellation(
+    candidates: list[dict],
+    max_files: int,
+) -> list[dict]:
+    """
+    Distribute *candidates* across GNSS constellations (G/R/E/C) in
+    round-robin order, capping at *max_files*.  Order preserved within each
+    per-constellation queue.
+    """
+    const_pool: dict[str, list] = defaultdict(list)
+    for r in candidates:
+        const_pool[r["conid"]].append(r)
+
+    queues = [list(const_pool[c])
+              for c in sorted(const_pool, key=lambda c: -len(const_pool[c]))]
+    selected: list = []
+    while len(selected) < max_files and any(queues):
+        for q in queues:
+            if q and len(selected) < max_files:
+                selected.append(q.pop(0))
+        queues = [q for q in queues if q]
+    return selected
+
+
+def scan_and_select_files_per_window(
     base_path: str,
     alt_min: float        = ALT_MIN_TEC,
     alt_max: float        = ALT_MAX_TEC,
     alt_min_tangent: float = 90.0,
     max_files: int        = N_OCC_MAX,
     file_suffix: str      = ".0001_nc",
-    time_window_min: int  = 30,
+    time_window_min: int  = WINDOW_MINUTES,
+    min_arcs_per_window: int = MIN_ARCS_PER_WINDOW,
 ) -> list[dict]:
     """
     Scan *base_path* for podTc2 netCDF files, filter to those whose tangent
     altitude range overlaps [alt_min, alt_max] km AND whose full arc probes
-    below *alt_min_tangent* km (default 90 km), group by 30-minute time
-    window, pick the window with the most occultations, then select up to
-    *max_files* records distributed evenly across GNSS constellations
-    (round-robin by constellation letter G/R/E/C).
+    below *alt_min_tangent* km, then bin into *time_window_min*-minute windows
+    keyed on the TEC-max epoch datetime.  For each window: apply the ISR ROI
+    gate and select up to *max_files* records via round-robin over GNSS
+    constellations.  Windows with fewer than *min_arcs_per_window* ROI-passing
+    arcs are dropped.
 
     Parameters
     ----------
@@ -204,11 +421,22 @@ def scan_and_select_files(
         Require the arc's minimum tangent altitude to be below this value (km).
         Ensures the ray path probes deep enough into the lower ionosphere /
         upper mesosphere.  Default 90 km.
+    time_window_min : int
+        Bin width in minutes.  30 matches demo_group.py's convention.
+    min_arcs_per_window : int
+        Minimum number of ROI-passing arcs required for a window to be
+        retained.  KF/EKF assimilation needs several arcs for meaningful
+        geometric coverage; sparser windows are silently dropped.
 
     Returns
     -------
-    selected : list of dicts with keys
-        path, leo_id, prn_id, conid, lat, lon, slta, min_tang_km, date
+    windows : list of dicts, one per retained window, sorted chronologically.
+        Each dict has keys:
+            window_key : "YYYY-MM-DD_HHMM"  (window start, floored to the bin)
+            hhmm       : "HHMM"             (for filename suffixing)
+            time_dt    : pd.Timestamp       (window start; also the IRI
+                                             evaluation time for this window)
+            records    : list[dict]         (selected arc records)
     """
     records = []
     for fname in sorted(os.listdir(base_path)):
@@ -302,47 +530,222 @@ def scan_and_select_files(
     if not records:
         raise RuntimeError(f"No qualifying podTc2 files found in {base_path}")
 
-    # Group by 30-minute window keyed on the TEC-max epoch datetime, so that
-    # only arcs whose ionospheric peak occurs within the same half-hour window
-    # are grouped together — much tighter colocation than using the file start.
-    def _window_key(r):
-        t = r["tec_max_dt"]
-        slot = (t.hour * 60 + t.minute) // time_window_min
-        return f"{t.date()}_{slot:04d}"
+    # Bin records by TEC-max epoch into time_window_min windows.  Keying on
+    # tec_max_dt (rather than file start) colocates arcs whose ionospheric
+    # peak falls in the same bin.
+    def _window_slot_start(t: pd.Timestamp) -> pd.Timestamp:
+        total_min = t.hour * 60 + t.minute
+        floored   = (total_min // time_window_min) * time_window_min
+        h, m      = divmod(floored, 60)
+        return pd.Timestamp(t.year, t.month, t.day, int(h), int(m))
 
-    groups: dict[str, list] = defaultdict(list)
+    groups: dict[pd.Timestamp, list] = defaultdict(list)
     for r in records:
-        groups[_window_key(r)].append(r)
+        groups[_window_slot_start(r["tec_max_dt"])].append(r)
 
-    best_key = max(groups, key=lambda k: len(groups[k]))
-    tec_times = sorted(r["tec_max_dt"] for r in groups[best_key])
-    span_min  = (tec_times[-1] - tec_times[0]).total_seconds() / 60.0
-    print(f"  Best window: {best_key}  "
-          f"({len(groups[best_key])} occultations, "
-          f"TEC-max span {span_min:.1f} min)")
+    print(f"  Qualifying arcs: {len(records)} across {len(groups)} "
+          f"{time_window_min}-min bins (before ROI gate)")
 
-    # Round-robin constellation selection
-    const_pool: dict[str, list] = defaultdict(list)
-    for r in groups[best_key]:
-        const_pool[r["conid"]].append(r)
+    windows: list[dict] = []
+    kept_arcs_total   = 0
+    dropped_sparse    = 0
+    dropped_no_roi    = 0
 
-    queues = [list(const_pool[c])
-              for c in sorted(const_pool, key=lambda c: -len(const_pool[c]))]
-    selected: list = []
-    while len(selected) < max_files and any(queues):
-        for q in queues:
-            if q and len(selected) < max_files:
-                selected.append(q.pop(0))
-        queues = [q for q in queues if q]
+    for window_dt in sorted(groups):
+        cands = groups[window_dt]
 
-    # Print constellation breakdown
-    breakdown: dict[str, int] = defaultdict(int)
-    for r in selected:
-        breakdown[r["conid"]] += 1
-    print(f"  Selected {len(selected)} occultations: "
-          + "  ".join(f"{c}:{n}" for c, n in sorted(breakdown.items())))
+        # ROI gate: keep only occultations within ISR_ROI_MAX_KM of ESR/TRO
+        lats = np.array([r["lat"] for r in cands])
+        lons = np.array([r["lon"] for r in cands])
+        roi_mask = _near_isr_site_mask(lats, lons)
+        cands = [r for r, ok in zip(cands, roi_mask) if ok]
 
-    return selected
+        if not cands:
+            dropped_no_roi += 1
+            continue
+        if len(cands) < min_arcs_per_window:
+            dropped_sparse += 1
+            continue
+
+        selected = _round_robin_by_constellation(cands, max_files)
+        hhmm     = f"{window_dt.hour:02d}{window_dt.minute:02d}"
+        wkey     = f"{window_dt.strftime('%Y-%m-%d')}_{hhmm}"
+
+        # Constellation breakdown for reporting
+        breakdown: dict[str, int] = defaultdict(int)
+        for r in selected:
+            breakdown[r["conid"]] += 1
+        const_str = "  ".join(f"{c}:{n}" for c, n in sorted(breakdown.items()))
+        print(f"    Window {wkey}: {len(selected)} arcs  [{const_str}]")
+
+        windows.append(dict(
+            window_key = wkey,
+            hhmm       = hhmm,
+            time_dt    = window_dt,
+            records    = selected,
+        ))
+        kept_arcs_total += len(selected)
+
+    print(f"  Retained {len(windows)} windows "
+          f"({kept_arcs_total} total arcs); "
+          f"dropped {dropped_no_roi} (no ROI arcs) + "
+          f"{dropped_sparse} (< {min_arcs_per_window} arcs).")
+
+    return windows
+
+
+def _isr_site_grid_index(grid_lats: np.ndarray, grid_lons: np.ndarray,
+                          site: str) -> int:
+    """Index of the grid node nearest ISR *site* (great-circle distance)."""
+    inst = INSTRUMENTS[site]
+    d = _haversine_km(float(inst["lat"]), float(inst["lon"]),
+                      np.asarray(grid_lats, dtype=float),
+                      np.asarray(grid_lons, dtype=float))
+    return int(np.argmin(d))
+
+
+def run_occ_count_sweep(
+    window: dict,
+    model_state: "IonosphericState",
+    grid_lats: np.ndarray,              # 5-deg model grid lats
+    grid_lons: np.ndarray,              # 5-deg model grid lons
+    alt_grid: np.ndarray,
+    all_ro_arcs: list[dict],            # full RO arc_truth_list (forward-modelled)
+    igs_arcs: list[dict],               # forward-modelled IGS arc_truth_list (may be empty)
+    truth_ne_1deg: np.ndarray,          # (n_alt, n_truth) truth Ne on the 1-deg grid
+    grid_lats_truth: np.ndarray,        # 1-deg truth grid lats
+    grid_lons_truth: np.ndarray,        # 1-deg truth grid lons
+    truth_time=None,
+    n_occ_values: list[int] = SWEEP_N_OCC_VALUES,
+    modes: tuple = FILTER_MODES,
+    save_dir: str = SWEEP_SAVE_DIR,
+) -> list[dict]:
+    """
+    Sweep the number of assimilated RO occultations and record frequency-domain
+    retrieval accuracy at the ISR sites.
+
+    For every N_OCC in *n_occ_values* the full RO arc list is sub-sampled to
+    N_OCC arcs via round-robin constellation balancing, then EKF_Param is run in
+    each observation *mode*:
+
+        ro_only  : sub-sampled RO arcs only.
+        ro_igs   : sub-sampled RO arcs + all simulated IGS arcs.
+        igs_only : simulated IGS arcs only (N_OCC does not change the input, so
+                   the EKF is run once and its metrics replicated per N_OCC row).
+
+    The prior/posterior Ne columns are read out at the 5-deg model grid node
+    nearest each ISR site; the truth column is read from *truth_ne_1deg* at the
+    nearest 1-deg node.  compute_retrieval_freq_metrics turns the three columns
+    into foF2/foE/plasma-frequency-RMSE metrics.
+
+    Returns a list of per-(N_OCC, mode, site) row dicts for CSV accumulation.
+    """
+    window_key = window["window_key"]
+    time_dt    = window["time_dt"]
+    doy        = int(pd.Timestamp(time_dt).dayofyear)
+    hour       = int(pd.Timestamp(time_dt).hour)
+
+    # Nearest 1-deg truth column per ISR site (truth is N_OCC-invariant).
+    truth_col_by_site: dict[str, np.ndarray] = {}
+    for site in ISR_SITES:
+        t_idx = _isr_site_grid_index(grid_lats_truth, grid_lons_truth, site)
+        truth_col_by_site[site] = np.asarray(truth_ne_1deg[:, t_idx], dtype=float)
+
+    # Nearest 5-deg model column index per ISR site (grid is N_OCC-invariant).
+    model_idx_by_site: dict[str, int] = {
+        site: _isr_site_grid_index(grid_lats, grid_lons, site)
+        for site in ISR_SITES
+    }
+
+    ekf_kwargs = dict(
+        sigma_obs           = EKF_PARAM_SIGMA_OBS,
+        max_update_rays     = EKF_PARAM_UPDATE_RAYS,
+        alpha               = EKF_PARAM_ALPHA,
+        tol                 = EKF_PARAM_TOL,
+        max_iter            = EKF_PARAM_MAX_ITER,
+        apply_bounds        = EKF_PARAM_APPLY_BOUNDS,
+        eps_jac             = EKF_PARAM_EPS_JAC,
+        n_workers           = EKF_PARAM_N_WORKERS,
+        jacobian_analytical = EKF_PARAM_JAC_ANALYTICAL,
+    )
+
+    def _rows_from_ekf(ekf: dict, mode: str, n_occ: int, n_arcs_used: int) -> list[dict]:
+        prior_edp = ekf["prior_edp"]        # (n_alt, n_grid5)
+        post_edp  = ekf["posterior_edp"]    # (n_alt, n_grid5)
+        rows_out: list[dict] = []
+        for site in ISR_SITES:
+            g5       = model_idx_by_site[site]
+            prior_ne = np.asarray(prior_edp[:, g5], dtype=float)
+            post_ne  = np.asarray(post_edp[:, g5],  dtype=float)
+            truth_ne = truth_col_by_site[site]
+            fm = compute_retrieval_freq_metrics(truth_ne, prior_ne, post_ne, alt_grid)
+            rows_out.append(dict(
+                window_key    = window_key,
+                time_dt       = pd.Timestamp(time_dt).isoformat(),
+                truth_time    = (pd.Timestamp(truth_time).isoformat()
+                                 if truth_time is not None else None),
+                doy           = doy,
+                hour          = hour,
+                mode          = mode,
+                n_occ         = n_occ,
+                n_arcs_used   = n_arcs_used,
+                site          = site,
+                converged     = bool(ekf.get("converged", False)),
+                n_iterations  = int(ekf.get("n_iterations", 0)),
+                prior_rmse_tecu = float(ekf.get("prior_rmse", np.nan)),
+                post_rmse_tecu  = float(ekf.get("post_rmse",  np.nan)),
+                **fm,
+            ))
+        return rows_out
+
+    rows: list[dict] = []
+
+    # igs_only is N_OCC-invariant → run its EKF once and replicate rows.
+    igs_only_ekf: dict | None = None
+    if "igs_only" in modes and igs_arcs:
+        print(f"\n  [sweep {window_key}] igs_only EKF ({len(igs_arcs)} IGS arcs) …")
+        try:
+            igs_only_ekf = EKF_Param(
+                igs_arcs, model_state, grid_lats, grid_lons, alt_grid, **ekf_kwargs,
+            )
+        except Exception as exc:
+            print(f"    [warn] igs_only EKF failed: {type(exc).__name__}: {exc}")
+            igs_only_ekf = None
+
+    for n_occ in n_occ_values:
+        sub_ro = _round_robin_by_constellation(all_ro_arcs, n_occ)
+        n_ro   = len(sub_ro)
+        print(f"\n  [sweep {window_key}] N_OCC={n_occ}  "
+              f"(RO arcs available={len(all_ro_arcs)}, used={n_ro})")
+
+        for mode in modes:
+            if mode == "ro_only":
+                arcs = sub_ro
+            elif mode == "ro_igs":
+                arcs = sub_ro + list(igs_arcs)
+            elif mode == "igs_only":
+                if igs_only_ekf is not None:
+                    rows.extend(_rows_from_ekf(
+                        igs_only_ekf, "igs_only", n_occ, len(igs_arcs)))
+                continue
+            else:
+                continue
+
+            if not arcs:
+                print(f"    [skip] mode={mode}: no arcs.")
+                continue
+
+            n_arcs_used = len(arcs)
+            try:
+                ekf = EKF_Param(arcs, model_state, grid_lats, grid_lons,
+                                alt_grid, **ekf_kwargs)
+            except Exception as exc:
+                print(f"    [warn] mode={mode} N_OCC={n_occ} EKF failed: "
+                      f"{type(exc).__name__}: {exc}")
+                continue
+            rows.extend(_rows_from_ekf(ekf, mode, n_occ, n_arcs_used))
+
+    return rows
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -792,18 +1195,37 @@ def _idw_weights(
     tp_lon: float,
     grid_lats: np.ndarray,
     grid_lons: np.ndarray,
-    power: float = _IDW_POWER,
-    n_nearest: int = _IDW_NEAREST,
 ) -> np.ndarray:
     """
-    Compute IDW weights from tangent point (tp_lat, tp_lon) to the *n_nearest*
-    grid nodes.  Returns a full-length weight vector (zeros for non-neighbours).
+    Smooth Gaussian interpolation weights from (tp_lat, tp_lon) to grid nodes.
+
+    Sigma is set adaptively to _IDW_SIGMA_SCALE × the distance to the 3rd-
+    nearest node, which scales correctly to both the 1-deg and 5-deg Fibonacci
+    grids without a fixed bandwidth.  Active nodes are capped at _IDW_NEAREST
+    by proximity so cost in _integrate_ray_idw stays bounded.
+
+    The Gaussian kernel replaces the former hard-cutoff IDW (power=2) scheme.
+    With power-law weights, swapping the k-th and (k+1)-th nearest nodes caused
+    a discrete jump of ~0.5 % per transition in the blended Ne and hence in the
+    integrated TEC — enough to produce visible oscillations across the arc.
+    The Gaussian decays much faster: by the time the k-th node is reached its
+    weight is negligible relative to the nearest nodes, so any swap at the
+    cap boundary has a sub-0.01 % effect on the blended TEC.
     """
     d_km = _haversine_km(tp_lat, tp_lon, grid_lats, grid_lons)
     d_km = np.maximum(d_km, 0.01)
-    idx  = np.argsort(d_km)[:n_nearest]
-    w    = np.zeros(len(grid_lats))
-    w[idx] = 1.0 / (d_km[idx] ** power)
+    # Adaptive sigma from the 3rd-nearest distance (index 2 after sort).
+    sigma_km = float(np.sort(d_km)[min(2, len(d_km) - 1)]) * _IDW_SIGMA_SCALE
+    w = np.exp(-(d_km / sigma_km) ** 2)
+    # Cap to _IDW_NEAREST nodes by proximity (Gaussian is monotone in d,
+    # so the cap picks the same nodes that would dominate the weight sum).
+    if len(w) > _IDW_NEAREST:
+        cap_idx = np.argpartition(d_km, _IDW_NEAREST)[:_IDW_NEAREST]
+        mask = np.zeros(len(w), dtype=bool)
+        mask[cap_idx] = True
+        w = np.where(mask, w, 0.0)
+    if w.sum() == 0.0:
+        w[np.argmin(d_km)] = 1.0
     w /= w.sum()
     return w
 
@@ -987,28 +1409,431 @@ def run_forward_models(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# §4b  Simulated IGS ground-station geometry + forward model
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Ground-based ionospheric assimilation uses fixed receivers on the Earth's
+# surface with line-of-sight rays to GNSS satellites overhead.  Here we simulate
+# that geometry with:
+#
+#   • Real station coordinates loaded from Data/IGS_Stations/IGSNetwork.json
+#     (matched by 4-char prefix, filtered to those inside ISR_ROI_MAX_KM of the
+#     ISR sites).
+#   • Real GNSS satellite positions propagated from the day's broadcast
+#     navigation file (BRDC RINEX in Data/RINEX_Cache) via TEC_model's
+#     BroadcastEphemeris — one arc per (station, SV) pair, with rays taken at
+#     several epochs across the RO window so each arc sweeps out the SV's
+#     actual sky track for that observation window.
+#   • The same truth IonosphericState + ObservationOperator + IDW weighting as
+#     RO arcs, so the resulting arc dicts drop straight into arc_truth_list.
+#
+# _build_gnss_to_leo_ray filters ray samples to the ionospheric band exactly
+# as it does for RO — the ground-to-SV LOS is ~20 000+ km long but only the
+# ~1000 km inside the ionosphere contributes to sTEC.
+
+_WGS84_A_KM = 6378.137
+_WGS84_E2   = 6.694379990141317e-3
+
+
+def _geodetic_to_ecef_km(lat_deg: float, lon_deg: float, h_m: float) -> np.ndarray:
+    """(lat_deg, lon_deg, h_m) → ECEF (x, y, z) in km."""
+    lat = np.radians(lat_deg)
+    lon = np.radians(lon_deg)
+    N   = _WGS84_A_KM / np.sqrt(1.0 - _WGS84_E2 * np.sin(lat) ** 2)
+    h_km = h_m * 1e-3
+    x = (N + h_km) * np.cos(lat) * np.cos(lon)
+    y = (N + h_km) * np.cos(lat) * np.sin(lon)
+    z = (N * (1.0 - _WGS84_E2) + h_km) * np.sin(lat)
+    return np.array([x, y, z], dtype=float)
+
+
+def _load_igs_sim_stations(
+    json_path: str,
+    codes: list[str],
+    roi_max_km: float = ISR_ROI_MAX_KM,
+) -> list[dict]:
+    """
+    Load requested IGS station coordinates from IGSNetwork.json and gate them
+    against the ISR ROI.
+
+    Matches by case-insensitive 4-char prefix (e.g. "TRO1" → "TRO100NOR").  For
+    each matched station, prefers the JSON's X/Y/Z (metres) if present,
+    otherwise derives ECEF from Latitude/Longitude/Height via WGS84.
+
+    Returns
+    -------
+    List of dicts (preserving the input code order), keys:
+        code, lat, lon, height_m, ecef_km.
+    """
+    try:
+        with open(json_path, "r") as fh:
+            network = json.load(fh)
+    except FileNotFoundError:
+        print(f"  [IGS-sim] Station JSON not found: {json_path}  → no stations.")
+        return []
+
+    codes_upper = [c.upper() for c in codes]
+    resolved: dict[str, dict] = {}
+    for entry_key, entry in network.items():
+        prefix = entry_key[:4].upper()
+        if prefix not in codes_upper or prefix in resolved:
+            continue
+        try:
+            lat = float(entry["Latitude"])
+            lon = float(entry["Longitude"])
+            h_m = float(entry["Height"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        # ROI gate — station itself must be within ISR ROI
+        if not _near_isr_site_mask(
+            np.array([lat]), np.array([lon]), max_km=roi_max_km,
+        )[0]:
+            continue
+        try:
+            ecef_km = np.array([
+                float(entry["X"]) * 1e-3,
+                float(entry["Y"]) * 1e-3,
+                float(entry["Z"]) * 1e-3,
+            ], dtype=float)
+        except (KeyError, TypeError, ValueError):
+            ecef_km = _geodetic_to_ecef_km(lat, lon, h_m)
+        resolved[prefix] = dict(
+            code=prefix, lat=lat, lon=lon, height_m=h_m, ecef_km=ecef_km,
+        )
+
+    ordered = [resolved[c] for c in codes_upper if c in resolved]
+    dropped = [c for c in codes_upper if c not in resolved]
+    if dropped:
+        print(f"  [IGS-sim] Skipped stations (not in JSON or outside ROI): {dropped}")
+    if ordered:
+        print(f"  [IGS-sim] Resolved {len(ordered)} station(s): "
+              f"{[s['code'] for s in ordered]}")
+    return ordered
+
+
+def _elev_from_station(
+    sv_ecef_km: np.ndarray,
+    rx_ecef_km: np.ndarray,
+    lat_deg: float,
+    lon_deg: float,
+) -> float:
+    """
+    Elevation angle (degrees) of an SV seen from the station at
+    (lat_deg, lon_deg).  Uses the local ENU basis expressed in ECEF —
+    elevation = 90° means the SV is overhead, 0° means at the horizon.
+    """
+    lat = np.radians(lat_deg)
+    lon = np.radians(lon_deg)
+    E = np.array([-np.sin(lon),                 np.cos(lon),                0.0        ])
+    N = np.array([-np.sin(lat) * np.cos(lon),  -np.sin(lat) * np.sin(lon),  np.cos(lat)])
+    U = np.array([ np.cos(lat) * np.cos(lon),   np.cos(lat) * np.sin(lon),  np.sin(lat)])
+    d = sv_ecef_km - rx_ecef_km
+    e_v = float(np.dot(d, E))
+    n_v = float(np.dot(d, N))
+    u_v = float(np.dot(d, U))
+    horiz = np.hypot(e_v, n_v)
+    return float(np.degrees(np.arctan2(u_v, horiz)))
+
+
+def _resolve_brdc_path(
+    time_dt: pd.Timestamp,
+    cache_dir: str = IGS_SIM_BRDC_DIR,
+) -> Path | None:
+    """
+    Return the path of the multi-constellation BRDC navigation file that covers
+    time_dt's UTC day, or None if none is cached.
+
+    Recognises both BRDC00IGS_R_{YYYY}{DOY}0000_01D_MN.rnx and the .gz variant,
+    and falls back to BRDM00IGS if BRDC is missing.  The path is passed as-is
+    to BroadcastEphemeris; georinex transparently decompresses .gz.
+    """
+    yyyy = time_dt.year
+    doy  = int(time_dt.strftime("%j"))
+    cache = Path(cache_dir)
+    for prefix in ("BRDC00IGS", "BRDM00IGS"):
+        for ext in (".rnx", ".rnx.gz"):
+            p = cache / f"{prefix}_R_{yyyy}{doy:03d}0000_01D_MN{ext}"
+            if p.exists():
+                return p
+    return None
+
+
+def _load_broadcast_ephemeris(time_dt: pd.Timestamp):
+    """
+    Load the BroadcastEphemeris object for *time_dt*'s UTC day.  Returns None
+    (with a printed message) if the RINEX nav file isn't cached — the caller
+    should fall back to RO-only in that case.
+    """
+    from TEC_model.igs_tec_pipeline import BroadcastEphemeris
+    nav_path = _resolve_brdc_path(time_dt)
+    if nav_path is None:
+        print(f"  [IGS-sim] No BRDC nav file cached for "
+              f"{time_dt.strftime('%Y-DOY%j')} under {IGS_SIM_BRDC_DIR}  "
+              f"→ IGS geometry unavailable.")
+        return None
+    print(f"  [IGS-sim] Broadcast ephemeris: {nav_path.name}")
+    try:
+        return BroadcastEphemeris(nav_path)
+    except Exception as exc:
+        print(f"  [IGS-sim] BroadcastEphemeris load failed ({exc!r}) "
+              f"— IGS geometry unavailable.")
+        return None
+
+
+def _ipp_latlon_km(
+    sv_ecef_km: np.ndarray,
+    rx_ecef_km: np.ndarray,
+    h_ipp_km: float = IGS_SIM_IPP_ALT_KM,
+) -> tuple[float, float]:
+    """
+    Ionospheric pierce point (lat, lon) at altitude h_ipp_km along one LOS.
+    Used as the horizontal anchor (tp_lat, tp_lon) for IDW weighting.
+    """
+    t_vals = np.linspace(0.0, 1.0, 200)
+    pts    = sv_ecef_km[:, None] + t_vals * (rx_ecef_km[:, None] - sv_ecef_km[:, None])
+    lons, lats, alts_m = _TRANSFORMER.transform(
+        pts[0] * 1e3, pts[1] * 1e3, pts[2] * 1e3,
+    )
+    alts_km = alts_m / 1e3
+    idx     = int(np.argmin(np.abs(alts_km - h_ipp_km)))
+    return float(lats[idx]), float(lons[idx])
+
+
+def _build_igs_sim_arcs(
+    stations: list[dict],
+    time_dt: pd.Timestamp,
+    ephem,
+    window_minutes: float = WINDOW_MINUTES,
+    n_epochs: int         = IGS_SIM_N_EPOCHS,
+    elev_cutoff_deg: float = IGS_SIM_ELEV_CUTOFF_DEG,
+    constellations: tuple[str, ...] = IGS_SIM_CONSTELLATIONS,
+    n_ray_pts: int  = IGS_SIM_N_RAY_PTS,
+) -> list[dict]:
+    """
+    Build geometry-only arcs for the simulated IGS ground-station observations
+    using the day's real broadcast ephemeris.
+
+    For each (station, SV) pair the SV's ECEF position is propagated from the
+    BRDC nav file at *n_epochs* sample times spread across the window
+    (time_dt ± window_minutes/2).  Rays with SV elevation below
+    *elev_cutoff_deg* are dropped; a (station, SV) pair with fewer than two
+    surviving rays is skipped entirely.  Ray endpoints (rx, sv) run through
+    _build_gnss_to_leo_ray for the same ionospheric-band filtering used by
+    RO arcs.
+
+    Parameters
+    ----------
+    ephem : TEC_model.igs_tec_pipeline.BroadcastEphemeris
+        Loaded ephemeris object — see _load_broadcast_ephemeris.
+    time_dt : pd.Timestamp
+        Window centre (used to compute GPS SOW / UTC SOD for each epoch).
+    window_minutes : float
+        Full duration of the sampling window in minutes.  Rays are taken at
+        *n_epochs* evenly spaced instants across [-window/2, +window/2].
+
+    Returns
+    -------
+    List of dicts (no tec_truth yet — filled in by generate_simulated_igs_tec):
+        rays     : list of (n_iono, 3) ray arrays
+        tp_lats  : (n_rays,) IPP latitudes (deg)
+        tp_lons  : (n_rays,) IPP longitudes (deg)
+        tang_km  : (n_rays,) elevation (deg) — kept in the "tang_km" slot as
+                    the arc's per-ray ordering axis, replacing the RO tangent
+                    altitude that has no analogue for ground-based rays.
+        conid    : IGS_SIM_CONID
+        prn_id   : "{station}_{SV}"  (e.g. "TRO1_G05")
+        leo_id   : station code
+    """
+    from TEC_model.igs_tec_pipeline import _utc_to_gps_sow
+
+    if ephem is None or not stations:
+        return []
+
+    # Sample epochs across the window
+    half_sec = 0.5 * window_minutes * 60.0
+    offsets  = np.linspace(-half_sec, +half_sec, max(int(n_epochs), 2))
+    epoch_times = [time_dt + pd.Timedelta(seconds=float(o)) for o in offsets]
+
+    # Restrict to the constellations we want; skip unknown SVs
+    all_svs = [sv for sv in ephem._cache.keys() if sv[:1] in constellations]
+    all_svs.sort()
+
+    arcs: list[dict] = []
+    n_pairs_tried  = 0
+    n_pairs_kept   = 0
+    for sta in stations:
+        rx_km = sta["ecef_km"]
+        lat0  = sta["lat"]
+        lon0  = sta["lon"]
+        for sv in all_svs:
+            n_pairs_tried += 1
+            rays: list = []
+            tp_lats: list[float] = []
+            tp_lons: list[float] = []
+            elevs: list[float]   = []
+            for t_ep in epoch_times:
+                # GLONASS ephemeris uses UTC seconds-of-day; others use GPS SOW
+                if sv.startswith("R"):
+                    t_arg = float(t_ep.hour * 3600 + t_ep.minute * 60 + t_ep.second)
+                else:
+                    t_arg = _utc_to_gps_sow(t_ep)
+                sv_ecef = ephem.sv_position_km(sv, t_arg)
+                if sv_ecef is None:
+                    continue
+                el = _elev_from_station(sv_ecef, rx_km, lat0, lon0)
+                if el < elev_cutoff_deg:
+                    continue
+                ray = _build_gnss_to_leo_ray(sv_ecef, rx_km, n_pts=n_ray_pts)
+                ipp_lat, ipp_lon = _ipp_latlon_km(sv_ecef, rx_km)
+                rays.append(ray)
+                tp_lats.append(ipp_lat)
+                tp_lons.append(ipp_lon)
+                elevs.append(el)
+            if len(rays) < 2:
+                continue
+            n_pairs_kept += 1
+            arcs.append(dict(
+                rays    = rays,
+                tp_lats = np.array(tp_lats),
+                tp_lons = np.array(tp_lons),
+                tang_km = np.array(elevs),
+                conid   = IGS_SIM_CONID,
+                prn_id  = f"{sta['code']}_{sv}",
+                leo_id  = sta["code"],
+            ))
+    print(f"  [IGS-sim] {n_pairs_kept}/{n_pairs_tried} (station, SV) pairs "
+          f"visible above {elev_cutoff_deg:.0f}° across "
+          f"{window_minutes:.0f}-min window.")
+    return arcs
+
+
+def generate_simulated_igs_tec(
+    sim_arcs: list[dict],
+    truth_state: IonosphericState,
+    grid_lats_truth: np.ndarray,
+    grid_lons_truth: np.ndarray,
+    alt_grid: np.ndarray,
+) -> list[dict]:
+    """
+    Forward-model simulated ground-to-GNSS rays through the truth state to
+    produce synthetic sTEC observations, mirroring generate_truth_tec.
+
+    Parameters
+    ----------
+    sim_arcs             : geometry arcs from _build_igs_sim_arcs.
+    truth_state          : single-member IonosphericState on the 1-deg truth grid.
+    grid_lats/lons_truth : (n_truth,) truth grid coordinates.
+    alt_grid             : altitude integration grid (km).
+
+    Returns
+    -------
+    Arc dicts with the same field set as generate_truth_tec:
+        rays, tec_truth, tp_lats, tp_lons, tang_km, conid, prn_id, leo_id.
+    """
+    obs_truth = ObservationOperator(truth_state, alt_grid)
+    out_arcs: list[dict] = []
+
+    for arc_idx, sim in enumerate(sim_arcs):
+        rays    = sim["rays"]
+        tp_lats = sim["tp_lats"]
+        tp_lons = sim["tp_lons"]
+        n_ep    = len(rays)
+
+        W = np.stack([
+            _idw_weights(tp_lats[k], tp_lons[k],
+                         grid_lats_truth, grid_lons_truth)
+            for k in range(n_ep)
+        ])  # (n_ep, n_truth)
+
+        Y_truth   = obs_truth.compute_stec_ensemble(rays, grid_point_weights=W)
+        tec_truth = Y_truth[:, 0]
+
+        print(f"  IGS-sim arc {arc_idx+1}/{len(sim_arcs)}: "
+              f"{sim['leo_id']} {sim['prn_id']}  "
+              f"{n_ep} rays  "
+              f"TEC {tec_truth.min():.1f}–{tec_truth.max():.1f} TECU")
+
+        out_arcs.append(dict(
+            rays      = rays,
+            tec_truth = tec_truth,
+            tp_lats   = tp_lats,
+            tp_lons   = tp_lons,
+            tang_km   = sim["tang_km"],
+            conid     = sim["conid"],
+            prn_id    = sim["prn_id"],
+            leo_id    = sim["leo_id"],
+        ))
+
+    return out_arcs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # §5  Plotting helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _resolve_conid(arc: dict) -> str:
+    """Return G/R/E/C for an arc.
+    IGS-sim arcs store conid='I'; the real GNSS letter is the first character
+    of the SV portion of prn_id (e.g. 'TRO1_G05' → 'G').
+    """
+    conid = str(arc.get("conid", "?")).upper()
+    if conid not in _CONST_POS:
+        sv = str(arc.get("prn_id", "")).split("_")[-1]
+        c = sv[:1].upper()
+        conid = c if c in _CONST_POS else "G"
+    return conid
+
+
+def _arc_label(arc: dict) -> str:
+    """Short legend label for an arc.
+    For IGS-sim arcs (conid not in G/R/E/C) the prn_id already encodes
+    station+SV (e.g. 'TRO1_G05'), so use it directly.
+    For RO arcs use the conventional 'LEO CPRN' format.
+    """
+    raw_conid = str(arc.get("conid", "?")).upper()
+    prn_id = str(arc.get("prn_id", "?"))
+    if raw_conid not in _CONST_POS:
+        return prn_id
+    return f"{arc.get('leo_id', '?')} {raw_conid}{prn_id}"
+
+
+def _capped_legend(
+    ax: plt.Axes,
+    max_items: int = 8,
+    handles: list | None = None,
+    labels: list[str] | None = None,
+    **kwargs,
+) -> None:
+    """Call ax.legend() but truncate to max_items entries to prevent overflow."""
+    if handles is None:
+        handles, labels = ax.get_legend_handles_labels()
+    elif labels is None:
+        labels = [h.get_label() for h in handles]
+    handles = list(handles)
+    labels  = list(labels)
+    if not handles:
+        return
+    if len(handles) > max_items:
+        n_extra = len(handles) - (max_items - 1)
+        handles = handles[:max_items - 1] + [Line2D([0], [0], color="none")]
+        labels  = labels[:max_items - 1]  + [f"… +{n_extra} more"]
+    ax.legend(handles=handles, labels=labels, **kwargs)
+
 
 def _occ_colors(parsed_list: list[dict]) -> list:
     """
     Assign a unique colour to each occultation, deepening shade within each
     GNSS constellation using that constellation's colourmap.
     """
-    # Count per constellation
+    # Count per constellation (using resolved G/R/E/C regardless of raw conid)
     const_counts: dict[str, int] = defaultdict(int)
     for arc in parsed_list:
-        prn_id = str(arc.get("prn_id", arc.get("prn", "?")))
-        conid  = str(arc.get("conid", prn_id[0].upper()
-                              if prn_id[0].upper() in "GREC" else "?")).upper()
-        const_counts[conid] += 1
+        const_counts[_resolve_conid(arc)] += 1
 
     const_idx: dict[str, int] = defaultdict(int)
     colors = []
     for arc in parsed_list:
-        prn_id = str(arc.get("prn_id", arc.get("prn", "?")))
-        conid  = str(arc.get("conid", prn_id[0].upper()
-                              if prn_id[0].upper() in "GREC" else "?")).upper()
+        conid  = _resolve_conid(arc)
         cfg    = CONSTELLATION_CONFIG.get(conid, {})
         cmap   = mpl.colormaps.get_cmap(cfg.get("cmap", _CONST_FALLBACK_CMAP))
         n      = max(const_counts[conid], 1)
@@ -1123,11 +1948,11 @@ def plot_results(
 
     for arc_i, (tr, mo, col) in enumerate(
             zip(truth_arcs, model_arcs, occ_colors)):
-        const  = str(tr["conid"]).upper()
+        const  = _resolve_conid(tr)
         prn_id = str(tr["prn_id"])
         leo_id = str(tr["leo_id"])
         tang   = tr["tangent_km"]
-        label  = f"{leo_id} {const}{prn_id}"
+        label  = _arc_label(tr)
 
         ax = tec_axes.get(const, tec_axes["G"])
 
@@ -1177,9 +2002,9 @@ def plot_results(
     # Add legend on TEC axes
     for const, ax in tec_axes.items():
         if ax.lines:
-            ax.legend(fontsize=5, facecolor="#2b2b2b",
-                      labelcolor="lightgray", loc="best",
-                      framealpha=0.7)
+            _capped_legend(ax, fontsize=5, facecolor="#2b2b2b",
+                           labelcolor="lightgray", loc="best",
+                           framealpha=0.7)
 
     # Shared parameter legend below TEC panels
     param_handles = [
@@ -1203,7 +2028,8 @@ def plot_results(
     )
 
     # Globe legend
-    ax_globe.legend(
+    _capped_legend(
+        ax_globe,
         handles=globe_legend_handles,
         fontsize=6, facecolor="#2b2b2b",
         labelcolor="lightgray", loc="lower left",
@@ -1541,27 +2367,392 @@ def plot_parameter_influence(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# §5b  Per-parameter error summary (companion to group-summary)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ne_to_params_easy(
+    ne_profiles: np.ndarray,
+    alt_grid: np.ndarray,
+) -> np.ndarray:
+    """
+    Extract the 8-parameter state from Ne(h) profiles without IRI feature
+    scalars.  Used to evaluate the gridded-Ne KF posterior in parameter space.
+
+    Parameters 0,1,6,7 (NmF2, hmF2, NmE, hmE) are read from profile peaks.
+    Parameters 2,3 (H0, gamma) are fitted from the topside.
+    Parameters 4,5 (B0, B1) are set to NaN — they cannot be reliably
+    recovered from a Ne profile alone.
+
+    Returns (N_STATE, n_geo) in log10/km/dimensionless units.
+    """
+    from demo_compare_kf_enkf import _fit_topside_H0_gamma, _h0_seed_from_profile
+
+    n_alt, n_geo = ne_profiles.shape
+    out = np.full((N_STATE, n_geo), np.nan)
+
+    f2_mask = alt_grid > 100.0
+    e_lo, e_hi = 80.0, 160.0
+    e_mask = (alt_grid >= e_lo) & (alt_grid <= e_hi)
+
+    for g in range(n_geo):
+        ne = ne_profiles[:, g]
+
+        # NmF2 / hmF2 — peak above 100 km
+        if f2_mask.any():
+            f2_ne  = ne[f2_mask]
+            f2_alt = alt_grid[f2_mask]
+            i_peak = int(np.argmax(f2_ne))
+            nm_f2  = float(f2_ne[i_peak])
+            hm_f2  = float(f2_alt[i_peak])
+        else:
+            nm_f2, hm_f2 = 1e11, 300.0
+
+        # NmE / hmE — peak in E-layer window
+        if e_mask.any():
+            e_ne  = ne[e_mask]
+            e_alt = alt_grid[e_mask]
+            i_e   = int(np.argmax(e_ne))
+            nm_e  = float(e_ne[i_e])
+            hm_e  = float(e_alt[i_e])
+        else:
+            nm_e, hm_e = 1e9, 110.0
+
+        out[I_LOG_NMF2, g] = np.log10(max(nm_f2, 1.0))
+        out[I_HMF2,     g] = hm_f2
+        out[I_LOG_NME,  g] = np.log10(max(nm_e, 1.0))
+        out[I_HME,      g] = hm_e
+
+        # H0, gamma — topside L-BFGS-B fit (same as _state_from_iri_direct)
+        top_mask = alt_grid > hm_f2
+        if top_mask.sum() >= 5:
+            try:
+                H0_seed = _h0_seed_from_profile(
+                    ne[top_mask], alt_grid[top_mask], nm_f2, hm_f2,
+                )
+                H0, gamma = _fit_topside_H0_gamma(
+                    ne[top_mask], alt_grid[top_mask], nm_f2, hm_f2, H0_seed,
+                )
+                out[I_H0,    g] = float(H0)
+                out[I_GAMMA, g] = float(gamma)
+            except Exception:
+                pass
+
+    return out
+
+
+def plot_param_error_summary(
+    filter_results_by_mode: dict[str, dict],
+    save_path: str,
+) -> None:
+    """
+    Per-parameter absolute error figure — companion to the group summary plot.
+
+    For each of the 8 IRI state parameters, shows the mean absolute error
+    (averaged over all 5-deg grid points) for:
+      • Prior (IRI baseline vs truth)            — grey
+      • Gridded Ne KF posterior vs truth         — steelblue
+        (NmF2, hmF2, NmE, hmE, H0, gamma fitted from posterior Ne;
+         B0, B1 not plotted — KF does not update parameters directly)
+      • EKF_Param posterior vs truth             — seagreen
+        (all 8 parameters available directly)
+
+    Grouped by the 3 observation modes on the x-axis of each sub-panel.
+    Layout: 4 rows × 2 columns, one panel per parameter.
+    """
+    modes        = [m for m in FILTER_MODES if filter_results_by_mode.get(m)]
+    mode_labels  = {"ro_only": "RO only", "ro_igs": "RO+IGS", "igs_only": "IGS only"}
+    x_labels     = [mode_labels.get(m, m) for m in modes]
+    n_modes      = len(modes)
+    if n_modes == 0:
+        return
+
+    # ── collect per-(mode, filter) mean absolute parameter errors ──────────────
+    # shape: (n_modes,) per category
+    prior_err  = np.full((N_STATE, n_modes), np.nan)
+    kf_err     = np.full((N_STATE, n_modes), np.nan)
+    ekf_err    = np.full((N_STATE, n_modes), np.nan)
+
+    for mi, mode in enumerate(modes):
+        fr = filter_results_by_mode[mode]
+        truth = fr.get("truth_mean_5deg")
+        if truth is None:
+            continue
+        truth = np.asarray(truth)           # (N_STATE, n_geo)
+
+        kf  = fr.get("kf_result")
+        ekf = fr.get("ekf_param")
+
+        # Prior — prefer EKF's explicit parameter record; fall back to
+        # extracting from the KF prior Ne profiles if EKF did not run.
+        prior_state = None
+        if ekf is not None:
+            prior_state = ekf.get("prior_mean_state")
+        if prior_state is None and kf is not None:
+            prior_ne = kf.get("prior_ne_5deg")
+            if prior_ne is not None:
+                prior_state = _ne_to_params_easy(np.asarray(prior_ne), ALT_GRID)
+        if prior_state is not None:
+            prior_state = np.asarray(prior_state)
+            prior_err[:, mi] = np.nanmean(np.abs(prior_state - truth), axis=1)
+
+        # Gridded Ne KF posterior — fit parameters from posterior Ne profiles
+        if kf is not None:
+            post_ne = kf.get("posterior_ne_5deg")
+            if post_ne is not None:
+                kf_params = _ne_to_params_easy(np.asarray(post_ne), ALT_GRID)
+                kf_err[:, mi] = np.nanmean(np.abs(kf_params - truth), axis=1)
+
+        # EKF_Param posterior — parameters available directly
+        if ekf is not None:
+            post_p = ekf.get("posterior_mean_5deg")
+            if post_p is not None:
+                post_p = np.asarray(post_p)
+                ekf_err[:, mi] = np.nanmean(np.abs(post_p - truth), axis=1)
+
+    # ── figure ─────────────────────────────────────────────────────────────────
+    param_units = [
+        "log₁₀(m⁻³)", "km", "km", "–", "km", "–", "log₁₀(m⁻³)", "km",
+    ]
+    n_cols, n_rows = 2, 4
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(10, 10),
+        facecolor="#1e1e1e",
+    )
+    fig.patch.set_facecolor("#1e1e1e")
+
+    x   = np.arange(n_modes, dtype=float)
+    bw  = 0.24
+    off = np.array([-bw, 0.0, bw])   # prior, KF, EKF
+
+    for param_i in range(N_STATE):
+        row = param_i // n_cols
+        col = param_i %  n_cols
+        ax  = axes[row, col]
+        ax.set_facecolor("#2b2b2b")
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#555")
+        ax.tick_params(colors="lightgray", labelsize=7)
+
+        pv = prior_err[param_i]
+        kv = kf_err[param_i]
+        ev = ekf_err[param_i]
+
+        # B0 (index 4) and B1 (index 5) — KF cannot recover these
+        kf_na = param_i in (I_B0, I_B1)
+
+        bars_prior = ax.bar(x + off[0], pv, bw, color="#888888",
+                            alpha=0.85, label="Prior")
+        bars_kf    = ax.bar(x + off[1], kv if not kf_na else np.zeros(n_modes),
+                            bw, color="steelblue", alpha=0.85,
+                            label="KF post" if not kf_na else "_")
+        bars_ekf   = ax.bar(x + off[2], ev, bw, color="seagreen",
+                            alpha=0.85, label="EKF post")
+
+        if kf_na:
+            # shade KF bars to indicate N/A
+            for b in bars_kf:
+                b.set_hatch("///")
+                b.set_edgecolor("#aaaaaa")
+                b.set_alpha(0.35)
+
+        ax.set_title(
+            f"{PARAM_NAMES[param_i]}  ({param_units[param_i]})",
+            color="white", fontsize=8,
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels(x_labels, fontsize=7, color="lightgray")
+        ax.set_ylabel("Mean |error|", color="lightgray", fontsize=7)
+        ax.grid(axis="y", lw=0.3, alpha=0.4, color="gray")
+
+        if param_i == 0:
+            legend = ax.legend(
+                fontsize=7, facecolor="#2b2b2b", labelcolor="lightgray",
+                loc="upper right", framealpha=0.8,
+            )
+
+    fig.suptitle(
+        "Per-parameter absolute error vs truth  "
+        "(mean over 5° grid)   B0/B1 hatched = not recovered by Ne-space KF",
+        color="white", fontsize=9, y=1.01,
+    )
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print(f"  Saved: {save_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §5c  Group-summary metrics plot (simulated-truth adapter)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# plotIonosphereTomography._plot_group_summary_metrics was built for the real
+# ISR-DA comparison pipeline: it expects a nested filter_results[obs_mode]
+# [filter_type] dict, an eds_occ-like object with a .geolocation attribute
+# per config, and an ISR-style "window_edps" truth list.
+#
+# The wrapper below repackages test_param_iono's per-mode retrieval output
+# into that schema.  The only functional difference from the real-ISR flow is
+# where the "truth" comes from: instead of ISR EDPs pulled from
+# demo_esr_isr.load_edps(), we sample the *synthetic* truth ionosphere
+# (truth_ne_1deg) at the nearest 1-deg grid vertex to each ISR site.  The
+# resulting profile is tagged kindat="simulated" so the plot's legend labels
+# it "Simulated truth EDP" (see _ISR_KINDAT_STYLE).
+
+def plot_group_summary_metrics_simulated(
+    filter_results_by_mode: dict[str, dict],
+    save_dir: str,
+    hhmm: str,
+) -> str | None:
+    """
+    Adapter to plotIonosphereTomography._plot_group_summary_metrics for the
+    test_param_iono synthetic-truth pipeline.
+
+    Parameters
+    ----------
+    filter_results_by_mode
+        `{mode: filter_result}` — the `filter_results` dict returned by
+        `_process_time_window`, where each value has `kf_result`, `ekf_param`,
+        `truth_ne_1deg`, and the mode-specific `grid_lats_1deg` / `grid_lons_1deg`
+        / `grid_lats_5deg` / `grid_lons_5deg`.
+    save_dir
+        Directory to save the summary figure into.
+    hhmm
+        The window's HHMM tag; used in the figure filename.
+
+    Returns
+    -------
+    str | None
+        Path to the saved figure, or None if nothing plotable was produced.
+    """
+    from types import SimpleNamespace
+    from plotIonosphereTomography import _plot_group_summary_metrics
+
+    # Reference mode for building the ISR-site truth spaghetti — every mode
+    # samples the same underlying truth ionosphere, but only the RO-anchored
+    # grids are guaranteed to have a vertex near the ISR sites, so we prefer
+    # ro_igs → ro_only → igs_only.
+    ref_mode = next(
+        (m for m in ("ro_igs", "ro_only", "igs_only")
+         if filter_results_by_mode.get(m) is not None),
+        None,
+    )
+    if ref_mode is None:
+        print("  [skip] group summary metrics plot: no filter results")
+        return None
+    ref = filter_results_by_mode[ref_mode]
+    ref_grid_lats_1 = np.asarray(ref["grid_lats_1deg"])
+    ref_grid_lons_1 = np.asarray(ref["grid_lons_1deg"])
+    ref_truth_1deg  = np.asarray(ref["truth_ne_1deg"])
+
+    # ── Build window_edps: one simulated "truth" profile per ISR site ────────
+    window_edps: list[dict] = []
+    for site in ISR_SITES:
+        inst = INSTRUMENTS[site]
+        lat  = float(inst["lat"])
+        lon  = float(inst["lon"])
+        d    = _haversine_km(lat, lon, ref_grid_lats_1, ref_grid_lons_1)
+        idx1 = int(np.argmin(d))
+        window_edps.append(dict(
+            alt_km = np.asarray(ALT_GRID, dtype=float),
+            ne_m3  = np.asarray(ref_truth_1deg[:, idx1], dtype=float),
+            lat    = lat,
+            lon    = lon,
+            kindat = "simulated",
+        ))
+
+    # ── Build filter_results[obs_mode][filter_type] from per-mode dicts ──────
+    filter_results_nested: dict[str, dict[str, dict]] = {}
+    for mode in FILTER_MODES:
+        fr = filter_results_by_mode.get(mode)
+        mode_dict: dict[str, dict] = {}
+        if fr is not None:
+            glats5 = np.asarray(fr["grid_lats_5deg"])
+            glons5 = np.asarray(fr["grid_lons_5deg"])
+            # _group_edp_rmse_vs_isr expects geolocation as (n_geo, 2) with
+            # columns [lon, lat]; the mesh_pts array is then built as
+            # np.column_stack([geoloc[:,1], geoloc[:,0]]) = (lat, lon).
+            geoloc = np.column_stack([glons5, glats5])
+            eds_occ = SimpleNamespace(geolocation=geoloc)
+
+            kf = fr.get("kf_result")
+            if kf is not None:
+                mode_dict["gridded_kf"] = dict(
+                    prior_edp_3d   = np.asarray(kf["prior_edp"]),
+                    post_edp_3d    = np.asarray(kf["posterior_edp"]),
+                    alt_grid       = np.asarray(ALT_GRID),
+                    eds_occ        = eds_occ,
+                    prior_tec_rmse = float(kf["prior_rmse"]),
+                    post_tec_rmse  = float(kf["post_rmse"]),
+                )
+            ekf = fr.get("ekf_param")
+            if ekf is not None:
+                entry: dict = dict(
+                    prior_edp_3d   = np.asarray(ekf["prior_edp"]),
+                    post_edp_3d    = np.asarray(ekf["posterior_edp"]),
+                    alt_grid       = np.asarray(ALT_GRID),
+                    eds_occ        = eds_occ,
+                    prior_tec_rmse = float(ekf["prior_rmse"]),
+                    post_tec_rmse  = float(ekf["post_rmse"]),
+                )
+                pstate = ekf.get("posterior_mean_5deg")
+                if pstate is not None:
+                    entry["posterior_mean_state"] = np.asarray(pstate)
+                mode_dict["parametric_ekf"] = entry
+        filter_results_nested[mode] = mode_dict
+
+    group_key = f"{YYYY}_{DOY:03d}_{hhmm}"
+    summary_path = _plot_group_summary_metrics(
+        group_key      = group_key,
+        filter_results = filter_results_nested,
+        window_edps    = window_edps,
+        save_dir       = Path(save_dir),
+    )
+
+    # ── Parameter-error companion figure ──────────────────────────────────────
+    plot_param_error_summary(
+        filter_results_by_mode = filter_results_by_mode,
+        save_path = os.path.join(
+            save_dir, f"group_param_error_{group_key}.png"
+        ),
+    )
+
+    return summary_path
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # §6  main()
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main() -> None:
-    os.makedirs(SAVE_DIR,      exist_ok=True)
-    os.makedirs(IRI_CACHE_DIR, exist_ok=True)
+def _process_time_window(
+    window: dict,
+    save_dir: str = SAVE_DIR,
+) -> dict:
+    """
+    Run Steps 2–14 of the pipeline for a single time window.
 
-    # ── Step 1: scan files ───────────────────────────────────────────────────
-    print("=" * 60)
-    print("Step 1: Scanning podTc2 files …")
-    meta_list = scan_and_select_files(BASE_PATH)
-    if not meta_list:
-        print("No files selected.  Exiting.")
-        return
+    Grid geometry (Fibonacci sub-grid over the arc tangent tracks) depends on
+    the window's specific arc set, so grids are rebuilt per window even though
+    the *procedure* itself is time-invariant.  Every downstream state (IRI
+    truth/baseline, ensemble draws, forward models, KF/EKF assimilation) is
+    time-dependent and rebuilt from scratch here.
 
-    print(f"  Parsing {len(meta_list)} files …")
+    All figures produced for this window are namespaced with the window's
+    "_HHMM" suffix so successive windows do not overwrite each other.
+    """
+    window_key = window["window_key"]
+    hhmm       = window["hhmm"]
+    time_dt    = window["time_dt"]
+    records    = window["records"]
+    save_suffix = f"_{hhmm}"
+
+    print(f"  Parsing {len(records)} files …")
     parsed_list: list[dict] = []
-    for rec in meta_list:
+    for rec in records:
         try:
             data = parse_podTc2_nc_file(rec["path"])
-            # Carry metadata into parsed dict
             data["conid"]  = rec["conid"]
             data["prn_id"] = rec["prn_id"]
             data["leo_id"] = rec["leo_id"]
@@ -1570,14 +2761,11 @@ def main() -> None:
             warnings.warn(f"Could not parse {rec['path']}: {exc}")
 
     if not parsed_list:
-        print("All files failed to parse.  Exiting.")
-        return
+        print("  All files failed to parse.  Skipping window.")
+        return {"window_key": window_key, "hhmm": hhmm, "time_dt": time_dt,
+                "error": "no arcs parsed"}
 
-    # Representative time: median of file times
-    times = [rec["date"] for rec in meta_list]
-    mid   = len(times) // 2
-    time_dt: pd.Timestamp = sorted(times)[mid]
-    print(f"  Representative time: {time_dt}")
+    print(f"  Window time_dt (bin start): {time_dt}")
 
     # ── Step 2: build Fibonacci grids ────────────────────────────────────────
     print("\nStep 2: Building Fibonacci grids …")
@@ -1631,17 +2819,15 @@ def main() -> None:
     print(f"  Model ensemble: {model_state.n_members} members "
           f"× {model_state.n_grid_points} grid points")
 
-    # Ensemble variance summary
-    ens_var = model_state.ensemble.var(axis=2)  # (N_STATE, n_grid)
+    ens_var = model_state.ensemble.var(axis=2)
     print("  Per-parameter ensemble std (mean over grid):")
     for k, name in enumerate(PARAM_NAMES):
         print(f"    {name:20s}  σ = {float(np.sqrt(ens_var[k].mean())):.4g}")
 
-    # Ensemble histograms
     plot_ensemble_histograms(
         model_state, mean_5deg, time_dt,
         save_path=os.path.join(
-            SAVE_DIR, f"ensemble_histograms_{YYYY}_{DOY:03d}.png"
+            save_dir, f"ensemble_histograms_{YYYY}_{DOY:03d}{save_suffix}.png"
         ),
     )
 
@@ -1655,7 +2841,6 @@ def main() -> None:
         ALT_GRID,
     )
 
-    # Summary statistics
     print("\nArc summary (IRI baseline vs 5-deg model mean):")
     for tr, mo in zip(truth_arcs, model_arcs):
         diff = tr["tec_all"][:, 0] - mo["tec_mean"]
@@ -1663,10 +2848,10 @@ def main() -> None:
               f"mean_diff={diff.mean():+.3f} TECU  "
               f"rmse={float(np.sqrt((diff**2).mean())):.3f} TECU")
 
-    # ── Step 5: main results plot ─────────────────────────────────────────────
+    # ── Step 5: main results plot ────────────────────────────────────────────
     print("\nStep 5: Plotting results …")
     save_results = os.path.join(
-        SAVE_DIR, f"param_iono_test_{YYYY}_{DOY:03d}.png"
+        save_dir, f"param_iono_test_{YYYY}_{DOY:03d}{save_suffix}.png"
     )
     plot_results(
         truth_arcs, model_arcs,
@@ -1677,21 +2862,15 @@ def main() -> None:
 
     # ── Step 6: parameter sensitivity sweep ──────────────────────────────────
     print("\nStep 6: Parameter sensitivity sweep …")
-
-    # Representative 1-deg grid point: nearest node to the TEC-max of arc 0
     tree_1deg = cKDTree(np.column_stack([grid_lats_1deg, grid_lons_1deg]))
-    ref_lat = meta_list[0]["lat"]
-    ref_lon = meta_list[0]["lon"]
+    ref_lat = records[0]["lat"]
+    ref_lon = records[0]["lon"]
     _, _gp_idx = tree_1deg.query([[ref_lat, ref_lon]])
     gp_idx = int(_gp_idx[0])
     mean_1gp = mean_1deg[:, gp_idx]
 
-    # Build rays for arc 0 — epoch order matches truth_arcs[0]
     rays_0, tp_lats_0, tp_lons_0, tang_km_0, _ = _build_arc_rays(parsed_list[0])
-
-    # 1-deg grid perturbed TECs for arc 0: columns 1–8 correspond to each
-    # parameter individually shifted by +1σ — column k is the truth for panel k.
-    tec_truth_arc0 = truth_arcs[0]["tec_all"][:, 1:]   # (n_ep, N_STATE)
+    tec_truth_arc0 = truth_arcs[0]["tec_all"][:, 1:]
 
     arc0 = parsed_list[0]
     arc_label_0 = (f"{str(arc0.get('leo_id', '?'))} "
@@ -1699,10 +2878,10 @@ def main() -> None:
                    f"{str(arc0.get('prn_id', '?'))}")
 
     save_sens = os.path.join(
-        SAVE_DIR, f"param_sensitivity_{YYYY}_{DOY:03d}"
+        save_dir, f"param_sensitivity_{YYYY}_{DOY:03d}{save_suffix}"
     )
     save_abs = os.path.join(
-        SAVE_DIR, f"param_sensitivity_abs_{YYYY}_{DOY:03d}"
+        save_dir, f"param_sensitivity_abs_{YYYY}_{DOY:03d}{save_suffix}"
     )
 
     plot_parameter_influence(
@@ -1718,22 +2897,236 @@ def main() -> None:
         tec_truth_perturbed=tec_truth_arc0,
     )
 
-    print("\n✓ test_param_iono.py completed successfully.")
-    print(f"  Figures in: {SAVE_DIR}")
+    # ── Step 6b: build simulated IGS geometry once (shared by ro_igs / igs_only) ─
+    igs_sim_geometry: list[dict] = []
+    if USE_SIMULATED_IGS:
+        print(f"\nStep 6b: Building simulated IGS geometry from broadcast ephemeris "
+              f"(stations {IGS_SIM_STATIONS}) …")
+        igs_stations = _load_igs_sim_stations(
+            IGS_SIM_STATIONS_JSON, IGS_SIM_STATIONS,
+            roi_max_km=ISR_ROI_MAX_KM,
+        )
+        if igs_stations:
+            ephem = _load_broadcast_ephemeris(time_dt)
+            if ephem is not None:
+                igs_sim_geometry = _build_igs_sim_arcs(
+                    igs_stations, time_dt, ephem,
+                    window_minutes=WINDOW_MINUTES,
+                )
+        else:
+            print("  [IGS-sim] No stations resolved within ROI — no IGS arcs.")
 
-    # ── Step 7–13: EnKF retrieval experiment ──────────────────────────────────
-    _run_enkf_retrieval_experiment(
-        parsed_list      = parsed_list,
-        meta_list        = meta_list,
-        mean_5deg        = mean_5deg,
-        iri_ensemble     = model_state.ensemble,
-        grid_lats_1deg   = grid_lats_1deg,
-        grid_lons_1deg   = grid_lons_1deg,
-        grid_lats_5deg   = grid_lats_5deg,
-        grid_lons_5deg   = grid_lons_5deg,
-        time_dt          = time_dt,
-        save_dir         = SAVE_DIR,
+    # ── Step 6c: build an IGS-centred grid + prior for the igs_only mode ─────
+    # The RO-derived grid is anchored on tangent tracks; when the filter has
+    # no RO observations at all we want the ROI to follow the IGS pierce
+    # points instead, so we build a separate Fibonacci grid from them.
+    igs_grid_lats_1deg = igs_grid_lons_1deg = None
+    igs_grid_lats_5deg = igs_grid_lons_5deg = None
+    igs_mean_5deg      = None
+    if igs_sim_geometry:
+        print("\nStep 6c: Building IGS-only Fibonacci grids from IPP points …")
+        ipp_lats_all = np.concatenate([a["tp_lats"] for a in igs_sim_geometry])
+        ipp_lons_all = np.concatenate([a["tp_lons"] for a in igs_sim_geometry])
+        igs_grid_lats_1deg, igs_grid_lons_1deg = _make_fibonacci_grid(
+            ipp_lats_all, ipp_lons_all, spacing_deg=1.0,
+        )
+        igs_grid_lats_5deg, igs_grid_lons_5deg = _make_fibonacci_grid(
+            ipp_lats_all, ipp_lons_all, spacing_deg=5.0,
+        )
+        print(f"  IGS 1-deg grid: {len(igs_grid_lats_1deg)} nodes  "
+              f"({float(igs_grid_lats_1deg.min()):.1f}° "
+              f"→ {float(igs_grid_lats_1deg.max()):.1f}° lat, "
+              f"{float(igs_grid_lons_1deg.min()):.1f}° "
+              f"→ {float(igs_grid_lons_1deg.max()):.1f}° lon)")
+        print(f"  IGS 5-deg grid: {len(igs_grid_lats_5deg)} nodes")
+
+        igs_lat_min_5 = float(igs_grid_lats_5deg.min())
+        igs_lat_max_5 = float(igs_grid_lats_5deg.max())
+        igs_lon_min_5 = float(igs_grid_lons_5deg.min())
+        igs_lon_max_5 = float(igs_grid_lons_5deg.max())
+        igs_mean_5deg, _ = build_iri_state_grid_cached(
+            time_dt, igs_grid_lats_5deg, igs_grid_lons_5deg, ALT_GRID,
+            spacing_deg=5.0,
+            lat_min=igs_lat_min_5, lat_max=igs_lat_max_5,
+            lon_min=igs_lon_min_5, lon_max=igs_lon_max_5,
+        )
+
+    # ── Steps 7–14: filter retrieval experiment, once per observation mode ───
+    filter_results: dict[str, dict] = {}
+    for mode in FILTER_MODES:
+        if mode == "ro_igs" and not igs_sim_geometry:
+            print(f"\n[skip] mode=ro_igs — no IGS geometry available; using "
+                  f"ro_only result instead.")
+            continue
+        if mode == "igs_only" and (not igs_sim_geometry or igs_mean_5deg is None):
+            print(f"\n[skip] mode=igs_only — no IGS geometry / grid available.")
+            continue
+
+        if mode == "igs_only":
+            mode_grid_1 = (igs_grid_lats_1deg, igs_grid_lons_1deg)
+            mode_grid_5 = (igs_grid_lats_5deg, igs_grid_lons_5deg)
+            mode_mean_5 = igs_mean_5deg
+        else:
+            mode_grid_1 = (grid_lats_1deg, grid_lons_1deg)
+            mode_grid_5 = (grid_lats_5deg, grid_lons_5deg)
+            mode_mean_5 = mean_5deg
+
+        print("\n" + "-" * 66)
+        print(f"  Observation mode: {mode}")
+        print("-" * 66)
+        filter_results[mode] = _run_enkf_retrieval_experiment(
+            parsed_list      = parsed_list,
+            meta_list        = records,
+            mean_5deg        = mode_mean_5,
+            grid_lats_1deg   = mode_grid_1[0],
+            grid_lons_1deg   = mode_grid_1[1],
+            grid_lats_5deg   = mode_grid_5[0],
+            grid_lons_5deg   = mode_grid_5[1],
+            time_dt          = time_dt,
+            save_dir         = save_dir,
+            save_suffix      = f"{save_suffix}_{mode}",
+            mode             = mode,
+            igs_sim_geometry = igs_sim_geometry if mode in ("ro_igs", "igs_only") else None,
+        )
+
+    # Backward-compatible primary result for cross-window aggregation: prefer
+    # ro_igs (the fullest observation set) → ro_only → igs_only.
+    primary_result = (
+        filter_results.get("ro_igs")
+        or filter_results.get("ro_only")
+        or filter_results.get("igs_only")
     )
+
+    # ── Step 14b: cross-mode group summary metrics figure ────────────────────
+    # Mirrors plotIonosphereTomography._plot_group_summary_metrics from the
+    # ISR-DA pipeline, but with the synthetic truth EDP substituted for real
+    # ISR profiles.  Skipped if none of the three modes produced a result.
+    if filter_results:
+        print("\nStep 14b: Plotting cross-mode group summary metrics …")
+        try:
+            plot_group_summary_metrics_simulated(
+                filter_results_by_mode = filter_results,
+                save_dir               = save_dir,
+                hhmm                   = hhmm,
+            )
+        except Exception as exc:
+            print(f"  [warn] group summary metrics plot failed: "
+                  f"{type(exc).__name__}: {exc}")
+
+    return {
+        "window_key":     window_key,
+        "hhmm":           hhmm,
+        "time_dt":        time_dt,
+        "n_arcs":         len(parsed_list),
+        "records":        records,
+        "parsed_list":    parsed_list,
+        "truth_arcs":     truth_arcs,
+        "model_arcs":     model_arcs,
+        "grid_1deg":      (grid_lats_1deg, grid_lons_1deg),
+        "grid_5deg":      (grid_lats_5deg, grid_lons_5deg),
+        "filter_result":  primary_result,
+        "filter_results": filter_results,
+    }
+
+
+def main() -> None:
+    os.makedirs(SAVE_DIR,      exist_ok=True)
+    os.makedirs(IRI_CACHE_DIR, exist_ok=True)
+
+    # ── Step 1: full-day file scan → per-window record lists ─────────────────
+    print("=" * 60)
+    print(f"Step 1: Scanning podTc2 files in {BASE_PATH}")
+    print(f"        window size = {WINDOW_MINUTES} min, "
+          f"min arcs/window = {MIN_ARCS_PER_WINDOW}")
+    windows = scan_and_select_files_per_window(BASE_PATH)
+
+    if not windows:
+        print("No windows retained after ROI + sparsity filtering.  Exiting.")
+        return
+
+    print("\n" + "=" * 60)
+    print(f"Processing {len(windows)} window(s) on {YYYY}.{DOY:03d}")
+    print("=" * 60)
+
+    all_results: dict[str, dict] = {}
+    for i, w in enumerate(windows):
+        header = f" Window {i+1}/{len(windows)}: {w['window_key']} " \
+                 f"({len(w['records'])} arcs) "
+        print("\n" + "#" * 70)
+        print("#" + header.center(68) + "#")
+        print("#" * 70)
+        try:
+            all_results[w["window_key"]] = _process_time_window(w, SAVE_DIR)
+        except Exception as exc:
+            print(f"  ✗ Window {w['window_key']} FAILED: {type(exc).__name__}: {exc}")
+            all_results[w["window_key"]] = {
+                "window_key": w["window_key"],
+                "hhmm":       w["hhmm"],
+                "time_dt":    w["time_dt"],
+                "error":      f"{type(exc).__name__}: {exc}",
+            }
+
+    # ── Cross-window summary ─────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print(f" Cross-window summary — {YYYY}.{DOY:03d}")
+    print("=" * 60)
+    print(f"  {'Window':<20}  {'mode':<9}  {'n_arcs':>6}  "
+          f"{'prior':>8}  {'KF':>8}  {'EKF_P':>8}")
+
+    def _fmt(x):
+        return f"{x:>8.3f}" if isinstance(x, (int, float)) else " " * 8
+
+    for wkey, r in all_results.items():
+        if "error" in r:
+            print(f"  {wkey:<20}  ERROR: {r['error']}")
+            continue
+        per_mode = r.get("filter_results") or {}
+        if not per_mode:
+            # Legacy single-result path (shouldn't trigger now, but keep safe).
+            fr = r.get("filter_result") or {}
+            prior = fr.get("prior_rmse")
+            kf    = (fr.get("kf_result") or {}).get("post_rmse")
+            ekf   = (fr.get("ekf_param") or {}).get("post_rmse")
+            print(f"  {wkey:<20}  {'(single)':<9}  "
+                  f"{r.get('n_arcs', 0):>6d}  "
+                  f"{_fmt(prior)}  {_fmt(kf)}  {_fmt(ekf)}")
+            continue
+        for mode in FILTER_MODES:
+            fr = per_mode.get(mode)
+            if fr is None:
+                print(f"  {wkey:<20}  {mode:<9}  {'skipped':>6}")
+                continue
+            prior = fr.get("prior_rmse")
+            kf    = (fr.get("kf_result") or {}).get("post_rmse")
+            ekf   = (fr.get("ekf_param") or {}).get("post_rmse")
+            n_arc = len(fr.get("arc_truth_list") or [])
+            print(f"  {wkey:<20}  {mode:<9}  {n_arc:>6d}  "
+                  f"{_fmt(prior)}  {_fmt(kf)}  {_fmt(ekf)}")
+
+    n_err = sum(1 for r in all_results.values() if "error" in r)
+
+    # ── Cross-window EDP-RMSE plots (per-site & regional) ────────────────────
+    n_ok = len(all_results) - n_err
+    if n_ok > 0:
+        print("\n" + "=" * 60)
+        print(f" Cross-window EDP-RMSE plots — {YYYY}.{DOY:03d}")
+        print("=" * 60)
+        plot_edp_site_rmse_across_windows(
+            all_results, ALT_GRID,
+            save_path=os.path.join(
+                SAVE_DIR, f"edp_site_rmse_across_windows_{YYYY}_{DOY:03d}.png"
+            ),
+        )
+        plot_edp_regional_rmse_across_windows(
+            all_results, ALT_GRID,
+            save_path=os.path.join(
+                SAVE_DIR, f"edp_regional_rmse_across_windows_{YYYY}_{DOY:03d}.png"
+            ),
+        )
+
+    print(f"\n✓ test_param_iono.py completed.")
+    print(f"  Windows attempted: {len(all_results)}  "
+          f"(errors: {n_err})   Figures in: {SAVE_DIR}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1772,7 +3165,8 @@ def build_truth_iri_grid(
     Returns
     -------
     truth_state  : single-member IonosphericState (the deterministic truth).
-    ne_profiles  : (n_alt, n_grid) electron density profiles (m⁻³).
+    ne_profiles  : (n_alt, n_grid) electron density profiles (m⁻³) reconstructed
+                   from the fitted 8-parameter state (not the raw IRI lookup).
     mean_state   : (N_STATE, n_grid) parameter state in log/km/dim-less units.
     """
     n_grid = len(grid_lats)
@@ -1781,18 +3175,25 @@ def build_truth_iri_grid(
           f"{truth_time.strftime('%H:%M')} UTC, "
           f"F10.7+{TRUTH_F107_DELTA:.0f}) …")
 
-    ne_profiles, feature_vecs = _get_iri_edp_and_features_batch(
+    ne_profiles_iri, feature_vecs = _get_iri_edp_and_features_batch(
         truth_time, grid_lats, grid_lons, alt_grid, truth_sampling_df,
     )
     mean_state = np.empty((N_STATE, n_grid))
     for g in range(n_grid):
         mean_state[:, g] = _state_from_iri_direct(
-            ne_profiles[:, g], feature_vecs[:, g], alt_grid,
+            ne_profiles_iri[:, g], feature_vecs[:, g], alt_grid,
         )
 
     truth_state          = IonosphericState(n_grid_points=n_grid, n_members=1)
     truth_state.ensemble = mean_state[:, :, np.newaxis].copy()
     truth_state.clamp_to_physical_bounds()
+
+    # Reconstruct Ne profiles from the fitted 8-parameter state so that
+    # truth_ne_{1,5}deg used in EDP plots is consistent with what the
+    # ObservationOperator integrates (the analytic 8-param formula), not the
+    # raw IRI lookup which the forward model never directly uses.
+    ne_profiles = _parametric_to_edp(truth_state, truth_state.ensemble, alt_grid)
+
     return truth_state, ne_profiles, mean_state
 
 
@@ -1864,318 +3265,6 @@ def generate_truth_tec(
         ))
 
     return arc_list
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# §9  ParametricEnKF assimilation
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_parametric_enkf(
-    arc_truth_list: list[dict],
-    model_state: IonosphericState,
-    grid_lats_5deg: np.ndarray,
-    grid_lons_5deg: np.ndarray,
-    alt_grid: np.ndarray,
-    loc_radius_km: float  = ENKF_LOC_RADIUS_KM,
-    sigma_obs: float      = ENKF_SIGMA_OBS,
-    inflation: float      = ENKF_INFLATION,
-    n_mda: int            = ENKF_N_MDA,
-    max_update_step: float = ENKF_MAX_UPDATE_STEP,
-    max_update_rays: int  = ENKF_MAX_UPDATE_RAYS,
-    apply_bounds: bool    = True,
-) -> dict:
-    """
-    Assimilate truth-generated sTEC observations into the 5-deg model ensemble.
-
-    Uses ES-MDA (Emerick & Reynolds 2013) with Gaspari-Cohn ray-path
-    localisation.  Mirrors the logic of _run_parametric_enkf in
-    demo_compare_kf_enkf.py but operates directly on arc_truth_list.
-
-    Returns
-    -------
-    dict with keys:
-        model_state, prior_ensemble, prior_edp, posterior_edp,
-        posterior_ne_5deg (same as posterior_edp), posterior_mean_5deg,
-        tec_slices, prior_rmse, post_rmse,
-        all_prior_resid, all_post_resid,
-        arc_prior_mean, arc_post_mean, arc_prior_rmse, arc_post_rmse,
-        arc_lats, arc_lons, arc_labels,
-        mda_arc_means_list, mda_flat_list, grid_lats, grid_lons
-    """
-    n_geo     = model_state.n_grid_points
-    n_members = model_state.n_members
-    n_occ     = len(arc_truth_list)
-
-    _idw_k = min(4, n_geo)
-
-    # ── Build per-arc ray sets ────────────────────────────────────────────────
-    # (A) All per-epoch rays  → TEC profile evaluation and RMSE diagnostics
-    # (B) Decimated subset   → EnKF update (compact observation vector)
-    per_arc_sample_rays: list[list] = []
-    per_arc_tp_lats:     list       = []
-    per_arc_tp_lons:     list       = []
-    ray_counts:          list[int]  = []
-    arc_all_tec:         list       = []
-
-    rep_rays:          list      = []
-    rep_tp_lats_list:  list      = []
-    rep_tp_lons_list:  list      = []
-    rep_tec_obs_list:  list      = []
-    arc_update_counts: list[int] = []
-
-    for arc in arc_truth_list:
-        rays    = arc["rays"]
-        tec     = arc["tec_truth"]
-        tp_lats = arc["tp_lats"]
-        tp_lons = arc["tp_lons"]
-        n_s     = len(rays)
-
-        per_arc_sample_rays.append(rays)
-        per_arc_tp_lats.append(tp_lats)
-        per_arc_tp_lons.append(tp_lons)
-        ray_counts.append(n_s)
-        arc_all_tec.append(tec)
-
-        # Uniform-stride sub-decimation for the update rays
-        if n_s > max_update_rays:
-            stride = int(np.ceil(n_s / max_update_rays))
-            chosen = list(range(0, n_s, stride))
-            if n_s - 1 not in chosen:
-                chosen.append(n_s - 1)
-        else:
-            chosen = list(range(n_s))
-
-        for idx in chosen:
-            rep_rays.append(rays[idx])
-            rep_tp_lats_list.append(float(tp_lats[idx]))
-            rep_tp_lons_list.append(float(tp_lons[idx]))
-            rep_tec_obs_list.append(float(tec[idx]))
-        arc_update_counts.append(len(chosen))
-
-    rep_tp_lats = np.array(rep_tp_lats_list)
-    rep_tp_lons = np.array(rep_tp_lons_list)
-    y_obs_arc   = np.array(rep_tec_obs_list)
-    y_obs_all   = np.concatenate(arc_all_tec)
-
-    # Flat per-epoch tangent points (for IDW weight computation)
-    all_tp_lats_flat = np.concatenate([a.tolist() for a in per_arc_tp_lats])
-    all_tp_lons_flat = np.concatenate([a.tolist() for a in per_arc_tp_lons])
-    all_sample_rays  = [r for arc_r in per_arc_sample_rays for r in arc_r]
-
-    all_sample_W = _idw_weights_enkf(
-        all_tp_lats_flat, all_tp_lons_flat,
-        grid_lats_5deg, grid_lons_5deg, k=_idw_k,
-    )
-    rep_W = _idw_weights_enkf(
-        rep_tp_lats, rep_tp_lons,
-        grid_lats_5deg, grid_lons_5deg, k=_idw_k,
-    )
-
-    n_update_obs = len(rep_rays)
-    print(f"  [EnKF] {n_occ} arcs  |  "
-          f"{len(all_sample_rays)} profile rays  |  "
-          f"{n_update_obs} update rays  |  "
-          f"{n_members} members")
-    if n_update_obs >= n_members:
-        print(f"  [EnKF] WARNING: n_update_obs ({n_update_obs}) >= n_members ({n_members}). "
-              f"D = P_yy + R will be rank-deficient — reduce ENKF_MAX_UPDATE_RAYS.")
-
-    # ── Prior forward model ───────────────────────────────────────────────────
-    op                    = ObservationOperator(model_state, alt_grid)
-    prior_ensemble_snap   = model_state.ensemble.copy()
-
-    Y_all_prior_ens  = op.compute_stec_ensemble(
-        all_sample_rays, grid_point_weights=all_sample_W,
-    )
-    Y_all_prior_mean = Y_all_prior_ens.mean(axis=1)
-
-    Y_rep_prior_ens  = op.compute_stec_ensemble(rep_rays, grid_point_weights=rep_W)
-    Y_rep_prior_mean = Y_rep_prior_ens.mean(axis=1)
-
-    prior_inno = y_obs_arc - Y_rep_prior_mean
-    print(f"  [EnKF] Prior innovations  "
-          f"mean={prior_inno.mean():.2f}  std={prior_inno.std():.2f}  "
-          f"max_abs={np.abs(prior_inno).max():.2f} TECU")
-
-    # ── Localisation matrix ───────────────────────────────────────────────────
-    if n_geo > 1 and np.isfinite(loc_radius_km) and loc_radius_km > 0:
-        L_ray = build_ray_localisation_matrix(
-            grid_lats_5deg, grid_lons_5deg, rep_rays, loc_radius_km,
-        )
-        print(f"  [EnKF] GC ray-path localisation  loc_radius={loc_radius_km:.0f} km")
-    else:
-        L_ray = None
-
-    # ── Prior inflation ───────────────────────────────────────────────────────
-    if inflation > 1.0:
-        X_mu              = model_state.ensemble.mean(axis=2, keepdims=True)
-        model_state.ensemble = X_mu + (model_state.ensemble - X_mu) * inflation
-
-    # ── EnKF / ES-MDA update ─────────────────────────────────────────────────
-    R     = (sigma_obs ** 2) * np.eye(len(rep_rays))
-    R_mda = n_mda * R
-
-    enkf = ParametricEnKF(
-        state         = model_state,
-        grid_lats     = grid_lats_5deg,
-        grid_lons     = grid_lons_5deg,
-        loc_radius_km = loc_radius_km,
-        inflation     = 1.0,   # inflation already applied above
-    )
-
-    mda_inno_list: list[np.ndarray] = []
-    for mda_i in range(n_mda):
-        Y_mda_ens = op.compute_stec_ensemble(rep_rays, grid_point_weights=rep_W)
-        inno_mda  = y_obs_arc - Y_mda_ens.mean(axis=1)
-        mda_inno_list.append(inno_mda.copy())
-        label_i   = (f"ES-MDA {mda_i+1}/{n_mda}"
-                     if n_mda > 1 else "EnKF update")
-        print(f"  [{label_i}]  "
-              f"mean={inno_mda.mean():.2f}  std={inno_mda.std():.2f}  "
-              f"max_abs={np.abs(inno_mda).max():.2f} TECU")
-        _, diag = enkf.assimilate(
-            Y_f                 = Y_mda_ens,
-            y_obs               = y_obs_arc,
-            R                   = R_mda,
-            localisation_matrix = L_ray,
-            max_update_step     = max_update_step,
-            deterministic       = False,
-            apply_bounds        = apply_bounds,
-        )
-
-        # ── Update diagnostics ────────────────────────────────────────────────
-        K    = diag["kalman_gain"]   # (n_state_flat, n_obs)
-        P_yy = diag["P_yy"]         # (n_obs, n_obs)
-        R_val = (sigma_obs ** 2) * n_mda
-
-        # Condition number estimate from the diagonal of D = P_yy + R
-        # (cheap; full cond() on a 1292×1292 matrix would be slow)
-        d_diag    = np.diag(P_yy) + R_val
-        cond_est  = float(d_diag.max() / max(d_diag.min(), 1e-30))
-        k_max_abs = float(np.abs(K).max())
-        print(f"    D diag [{d_diag.min():.3g}, {d_diag.max():.3g}]  "
-              f"cond(D) ≈ {cond_est:.2e}  |K|_max = {k_max_abs:.3g}")
-
-        ens = model_state.ensemble   # (N_STATE, n_geo, n_members)
-        n_nan_inf = int(np.sum(~np.isfinite(ens)))
-        if n_nan_inf > 0:
-            print(f"    *** {n_nan_inf} NaN/Inf entries in ensemble after update ***")
-
-        print(f"    {'Parameter':<20s}  {'mean':>10s}  {'std':>10s}  "
-              f"{'min':>10s}  {'max':>10s}  {'out-of-bounds':>14s}")
-        for k_p, pname in enumerate(PARAM_NAMES):
-            lo, hi   = IonosphericState.PARAM_BOUNDS[k_p]
-            slab     = ens[k_p]   # (n_geo, n_members)
-            n_oob    = int(np.sum((slab < lo) | (slab > hi)))
-            finite   = slab[np.isfinite(slab)]
-            mean_v   = float(finite.mean()) if finite.size else float("nan")
-            std_v    = float(finite.std())  if finite.size else float("nan")
-            min_v    = float(finite.min())  if finite.size else float("nan")
-            max_v    = float(finite.max())  if finite.size else float("nan")
-            oob_str  = f"{n_oob}/{n_geo * n_members}"
-            print(f"    {pname:<20s}  {mean_v:>10.4g}  {std_v:>10.4g}  "
-                  f"{min_v:>10.4g}  {max_v:>10.4g}  {oob_str:>14s}")
-
-    # ── Posterior forward model ───────────────────────────────────────────────
-    Y_all_post_ens  = op.compute_stec_ensemble(
-        all_sample_rays, grid_point_weights=all_sample_W,
-    )
-    Y_all_post_mean = Y_all_post_ens.mean(axis=1)
-    Y_rep_post_ens  = op.compute_stec_ensemble(rep_rays, grid_point_weights=rep_W)
-    Y_rep_post_mean = Y_rep_post_ens.mean(axis=1)
-    post_inno       = y_obs_arc - Y_rep_post_mean
-
-    prior_rmse = float(np.sqrt(np.nanmean((y_obs_all - Y_all_prior_mean) ** 2)))
-    post_rmse  = float(np.sqrt(np.nanmean((y_obs_all - Y_all_post_mean) ** 2)))
-    print(f"  [EnKF] Prior RMSE {prior_rmse:.3f} TECU  →  "
-          f"Post RMSE {post_rmse:.3f} TECU")
-
-    # ── Convert parametric state → Ne profile grids ───────────────────────────
-    prior_state_enc          = IonosphericState(n_geo, n_members)
-    prior_state_enc.ensemble = prior_ensemble_snap
-    prior_edp   = _parametric_to_edp(prior_state_enc, prior_ensemble_snap, alt_grid)
-    post_edp    = _parametric_to_edp(model_state,     model_state.ensemble, alt_grid)
-
-    posterior_mean_5deg = model_state.ensemble.mean(axis=2)   # (N_STATE, n_geo)
-
-    # ── TEC slices (one per arc) ──────────────────────────────────────────────
-    tec_slices: list[dict] = []
-    soff = 0
-    for i, arc in enumerate(arc_truth_list):
-        n_s = ray_counts[i]
-        sl  = slice(soff, soff + n_s)
-        tec_slices.append(dict(
-            tec_truth = arc["tec_truth"],
-            prior_tec = Y_all_prior_mean[sl].copy(),
-            post_tec  = Y_all_post_mean[sl].copy(),
-            tang_km   = arc["tang_km"],
-        ))
-        soff += n_s
-
-    # ── Per-arc innovation statistics ─────────────────────────────────────────
-    all_prior_resid = y_obs_all - Y_all_prior_mean
-    all_post_resid  = y_obs_all - Y_all_post_mean
-
-    arc_prior_mean_l, arc_post_mean_l  = [], []
-    arc_prior_rmse_l, arc_post_rmse_l  = [], []
-    arc_lats_l, arc_lons_l, arc_lbl_l  = [], [], []
-
-    soff = 0
-    for i, arc in enumerate(arc_truth_list):
-        n_s = ray_counts[i]
-        sl  = slice(soff, soff + n_s)
-        rp  = all_prior_resid[sl]
-        ra  = all_post_resid[sl]
-        arc_prior_mean_l.append(float(np.nanmean(rp)))
-        arc_post_mean_l.append(float(np.nanmean(ra)))
-        arc_prior_rmse_l.append(float(np.sqrt(np.nanmean(rp ** 2))))
-        arc_post_rmse_l.append(float(np.sqrt(np.nanmean(ra ** 2))))
-        arc_lats_l.append(float(arc["tp_lats"].mean()))
-        arc_lons_l.append(float(arc["tp_lons"].mean()))
-        arc_lbl_l.append(f"{arc['conid']}{arc['prn_id']}")
-        soff += n_s
-
-    # Per-MDA-step mean residuals per arc (for the innovation bar chart)
-    arc_upd_offs = np.concatenate([[0], np.cumsum(arc_update_counts)])
-    mda_arc_means_list: list[np.ndarray] = []
-    for inno_step in mda_inno_list:
-        step_means = []
-        for ai in range(n_occ):
-            sl_u = slice(int(arc_upd_offs[ai]), int(arc_upd_offs[ai + 1]))
-            step_means.append(float(np.nanmean(inno_step[sl_u])))
-        mda_arc_means_list.append(np.array(step_means))
-
-    return dict(
-        model_state         = model_state,
-        prior_ensemble      = prior_ensemble_snap,
-        posterior_ensemble  = model_state.ensemble.copy(),  # (N_STATE, n_geo, n_members)
-        prior_edp           = prior_edp,          # (n_alt, n_geo)
-        posterior_edp       = post_edp,           # (n_alt, n_geo)  alias for clarity
-        posterior_ne_5deg   = post_edp,           # (n_alt, n_geo)
-        posterior_mean_5deg = posterior_mean_5deg, # (N_STATE, n_geo)
-        tec_slices          = tec_slices,
-        prior_rmse          = prior_rmse,
-        post_rmse           = post_rmse,
-        all_prior_resid     = all_prior_resid,
-        all_post_resid      = all_post_resid,
-        arc_prior_mean      = np.array(arc_prior_mean_l),
-        arc_post_mean       = np.array(arc_post_mean_l),
-        arc_prior_rmse      = np.array(arc_prior_rmse_l),
-        arc_post_rmse       = np.array(arc_post_rmse_l),
-        arc_lats            = np.array(arc_lats_l),
-        arc_lons            = np.array(arc_lons_l),
-        arc_labels          = arc_lbl_l,
-        mda_arc_means_list  = mda_arc_means_list,
-        mda_flat_list       = mda_inno_list,
-        grid_lats           = grid_lats_5deg,
-        grid_lons           = grid_lons_5deg,
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# §9b  EKF_Param — Iterative Extended Kalman Filter on parametric IRI state
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _ekf_param_jacobian(
     mean_state_2d: np.ndarray,
     ray_list: list,
@@ -2660,7 +3749,7 @@ def EKF_Param(
 
     Returns
     -------
-    dict with the same keys as run_parametric_enkf and run_gridded_ne_kf for
+    dict with the same keys as run_gridded_ne_kf for
     compatibility with downstream diagnostic plots, plus EKF-specific keys:
         converged, n_iterations, residual_history, update_norm_history.
     """
@@ -3103,8 +4192,8 @@ def _plot_tec_edp_figure(
     style_placed = False
 
     for arc, sl, col in zip(arc_truth_list, tec_slices, occ_colors):
-        const = arc["conid"]
-        label = f"{arc['leo_id']} {const}{arc['prn_id']}"
+        const = _resolve_conid(arc)
+        label = _arc_label(arc)
         tang  = sl["tang_km"]
         ax    = tec_axes.get(const, tec_axes.get("G"))
 
@@ -3132,12 +4221,15 @@ def _plot_tec_edp_figure(
 
     for ax in tec_axes.values():
         if ax.lines:
-            ax.legend(fontsize=5, facecolor="#2b2b2b",
-                      labelcolor="lightgray", loc="best", framealpha=0.7)
+            _capped_legend(ax, fontsize=5, facecolor="#2b2b2b",
+                           labelcolor="lightgray", loc="best", framealpha=0.7)
 
-    ax_globe.legend(handles=globe_handles, fontsize=6,
-                    facecolor="#2b2b2b", labelcolor="lightgray",
-                    loc="lower left", framealpha=0.7, markerscale=1.2)
+    _capped_legend(
+        ax_globe,
+        handles=globe_handles,
+        fontsize=6, facecolor="#2b2b2b", labelcolor="lightgray",
+        loc="lower left", framealpha=0.7, markerscale=1.2,
+    )
 
     fig.suptitle(suptitle, color="white", fontsize=10, y=0.98)
 
@@ -3146,43 +4238,6 @@ def _plot_tec_edp_figure(
                 facecolor=fig.get_facecolor())
     plt.close(fig)
     print(f"  Saved: {save_path}")
-
-
-def plot_enkf_tec_edp(
-    arc_truth_list: list[dict],
-    enkf_result: dict,
-    truth_ne_1deg: np.ndarray,
-    grid_lats_1deg: np.ndarray,
-    grid_lons_1deg: np.ndarray,
-    grid_lats_5deg: np.ndarray,
-    grid_lons_5deg: np.ndarray,
-    alt_grid: np.ndarray,
-    truth_time: pd.Timestamp,
-    save_path: str,
-) -> None:
-    """TEC + globe + EDP summary figure for the ParametricEnKF."""
-    _plot_tec_edp_figure(
-        arc_truth_list,
-        enkf_result["tec_slices"],
-        enkf_result["prior_edp"],
-        enkf_result["posterior_edp"],
-        truth_ne_1deg,
-        grid_lats_1deg, grid_lons_1deg,
-        grid_lats_5deg, grid_lons_5deg,
-        alt_grid,
-        suptitle=(
-            f"ParametricEnKF retrieval — truth ionosphere "
-            f"{truth_time.strftime('%Y-%m-%d %H:%M')} UTC  "
-            f"(+{TRUTH_HOUR_OFFSET} h, F10.7+{TRUTH_F107_DELTA:.0f})\n"
-            f"Prior RMSE {enkf_result['prior_rmse']:.2f} TECU  →  "
-            f"Posterior RMSE {enkf_result['post_rmse']:.2f} TECU"
-        ),
-        save_path=save_path,
-        prior_mean_state=enkf_result["prior_ensemble"].mean(axis=2),
-        post_mean_state=enkf_result["posterior_mean_5deg"],
-    )
-
-
 def plot_kf_tec_edp(
     arc_truth_list: list[dict],
     kf_result: dict,
@@ -3310,10 +4365,55 @@ def plot_edp_spatial_error(
 
     n_alt_plot = len(error_altitudes_sorted)
     n_cols     = 3 if show_truth_col else 2
-    cen_lat    = float(np.mean(grid_lats_5deg))
-    cen_lon    = float(np.mean(grid_lons_5deg))
-    proj       = ccrs.Orthographic(central_longitude=cen_lon,
-                                   central_latitude=cen_lat)
+    # cen_lat    = float(np.mean(grid_lats_5deg))
+    # cen_lon    = float(np.mean(grid_lons_5deg))
+    # proj       = ccrs.Orthographic(central_longitude=cen_lon,))
+    #                                central_latitude=cen_lat)
+    
+    # ── Safe Extent and Projection Calculations ───────────────────────────
+    # Fallback to global defaults if coordinates are missing or all-NaN
+    if len(grid_lats_5deg) == 0 or np.isnan(grid_lats_5deg).all():
+        ext_lat_min, ext_lat_max = -90.0, 90.0
+        cen_lat = 0.0
+    else:
+        ext_lat_min = float(np.nanmin(grid_lats_5deg) - 3.0)
+        ext_lat_max = float(np.nanmax(grid_lats_5deg) + 3.0)
+        cen_lat = float(np.nanmean(grid_lats_5deg)) # Using nanmean just in case
+
+    # Longitude is circular — arithmetic min/max/mean break for grids that
+    # wrap around the pole (Fibonacci nodes near the pole have lons uniformly
+    # spanning [0, 360°]). Use a unit-vector mean to get a sensible centre;
+    # if the coverage is nearly global in longitude, fall back to a
+    # centre-aligned +/-90° window that Orthographic can display.
+    if len(grid_lons_5deg) == 0 or np.isnan(grid_lons_5deg).all():
+        ext_lon_min, ext_lon_max = -180.0, 180.0
+        cen_lon = 0.0
+        _lon_span_wide = True
+    else:
+        _rad = np.radians(grid_lons_5deg[np.isfinite(grid_lons_5deg)])
+        cen_lon = float(np.degrees(np.arctan2(
+            np.mean(np.sin(_rad)), np.mean(np.cos(_rad))
+        )))
+        # Shift longitudes into (cen_lon - 180, cen_lon + 180] so they're
+        # contiguous, then take min/max to get a wrap-safe extent.
+        _shifted = ((grid_lons_5deg - cen_lon + 180.0) % 360.0) - 180.0
+        _fin     = np.isfinite(_shifted)
+        _lon_lo  = float(np.min(_shifted[_fin])) if _fin.any() else -3.0
+        _lon_hi  = float(np.max(_shifted[_fin])) if _fin.any() else  3.0
+        ext_lon_min = cen_lon + _lon_lo - 3.0
+        ext_lon_max = cen_lon + _lon_hi + 3.0
+        _lon_span_wide = (_lon_hi - _lon_lo) > 160.0
+
+    # If lon coverage is nearly global (typical near-pole clusters), the
+    # PlateCarree extent has corners beyond Orthographic's visible hemisphere
+    # and set_extent returns NaN.  Collapse to a hemispheric window in that
+    # case and rely on set_global() below at plot time as the final fallback.
+    if _lon_span_wide:
+        ext_lon_min = cen_lon - 90.0
+        ext_lon_max = cen_lon + 90.0
+
+    # Move projection instantiation here so it uses the safe cen_lon/cen_lat
+    proj = ccrs.Orthographic(central_longitude=cen_lon, central_latitude=cen_lat)
 
     fig_w  = 6 * n_cols
     fig, axes = plt.subplots(
@@ -3331,10 +4431,6 @@ def plot_edp_spatial_error(
         title_str += f"\nTruth: {truth_time.strftime('%Y-%m-%d %H:%M')} UTC"
     fig.suptitle(title_str, fontsize=11, y=1.01)
 
-    ext_lat_min = grid_lats_5deg.min() - 3.0
-    ext_lat_max = grid_lats_5deg.max() + 3.0
-    ext_lon_min = grid_lons_5deg.min() - 3.0
-    ext_lon_max = grid_lons_5deg.max() + 3.0
 
     # Column metadata (order matches show_truth_col branches below)
     if show_truth_col:
@@ -3391,10 +4487,17 @@ def plot_edp_spatial_error(
             ax.add_feature(cfeature.BORDERS,   linewidth=0.3, edgecolor="#444")
             ax.gridlines(draw_labels=False, linewidth=0.3, color="gray", alpha=0.4)
             ax.set_facecolor("#d8d8d8")
-            ax.set_extent(
-                [ext_lon_min, ext_lon_max, ext_lat_min, ext_lat_max],
-                crs=ccrs.PlateCarree(),
-            )
+            try:
+                ax.set_extent(
+                    [ext_lon_min, ext_lon_max, ext_lat_min, ext_lat_max],
+                    crs=ccrs.PlateCarree(),
+                )
+            except (ValueError, Exception):
+                # Corner of the requested PlateCarree box projects to NaN in
+                # Orthographic (extent crosses the visible hemisphere edge —
+                # typical for pole-wrapping clusters).  Fall back to the
+                # full projection view.
+                ax.set_global()
 
             if not np.isfinite(vals).any():
                 ax.set_title(f"{ax_title} — no data", fontsize=8)
@@ -3408,6 +4511,433 @@ def plot_edp_spatial_error(
     plt.tight_layout()
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     fig.savefig(save_path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {save_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §12a  Per-site & regional EDP-RMSE across time windows
+#
+# Both plots below aggregate the per-window ``filter_result`` dicts returned by
+# ``_run_enkf_retrieval_experiment`` — one row per window — into cross-window
+# diagnostics that summarise how well the filters recovered the synthetic
+# truth EDP over the assimilation day.
+#
+# The KF and EKF assimilate on the 5-deg model grid; the truth ionosphere is
+# evaluated on both the 1-deg (site comparison) and 5-deg (regional aggregation)
+# Fibonacci grids.  Both grids are rebuilt per window from the arc tangent
+# tracks, so the "nearest node" lookup runs independently for every window.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _rmse_1d(est: np.ndarray, ref: np.ndarray,
+             mask: np.ndarray | None = None) -> float:
+    """RMSE over a single 1-D vector, ignoring NaNs.
+
+    mask : optional boolean array selecting which elements to include.
+    """
+    est  = np.asarray(est,  dtype=float)
+    ref  = np.asarray(ref,  dtype=float)
+    if mask is not None:
+        est = est[mask]
+        ref = ref[mask]
+    diff = est - ref
+    if not np.isfinite(diff).any():
+        return float("nan")
+    return float(np.sqrt(np.nanmean(diff ** 2)))
+
+
+def _collect_window_records(
+    all_results: dict[str, dict],
+) -> list[dict]:
+    """
+    Extract the successful, filter-produced per-window records from
+    ``all_results`` (as built by ``main()``), sorted chronologically.
+
+    Returned entries carry the filter EDPs, truth EDPs, both grids, and the
+    HHMM label used for axis ticks.  Windows with no filter_result (errored
+    or filters disabled) are skipped.
+    """
+    recs: list[dict] = []
+    for wkey, r in all_results.items():
+        if "error" in r:
+            continue
+        fr = r.get("filter_result") or {}
+        if not fr:
+            continue
+        kf_r  = fr.get("kf_result")
+        ekf_r = fr.get("ekf_param")
+        if kf_r is None and ekf_r is None:
+            continue
+        if fr.get("truth_ne_5deg") is None:
+            continue
+        recs.append(dict(
+            window_key    = wkey,
+            hhmm          = r.get("hhmm", wkey[-4:]),
+            time_dt       = r.get("time_dt"),
+            grid_lats_1deg= fr["grid_lats_1deg"],
+            grid_lons_1deg= fr["grid_lons_1deg"],
+            grid_lats_5deg= fr["grid_lats_5deg"],
+            grid_lons_5deg= fr["grid_lons_5deg"],
+            truth_ne_1deg = fr["truth_ne_1deg"],
+            truth_ne_5deg = fr["truth_ne_5deg"],
+            kf_result     = kf_r,
+            ekf_param     = ekf_r,
+        ))
+    # Chronological sort — window_key is "YYYY-MM-DD_HHMM", so lexical == time.
+    recs.sort(key=lambda d: d["window_key"])
+    return recs
+
+
+def plot_edp_site_rmse_across_windows(
+    all_results: dict[str, dict],
+    alt_grid: np.ndarray,
+    sites: tuple[str, ...] = ISR_SITES,
+    save_path: str = "./Figures/test_param_iono/edp_site_rmse_across_windows.png",
+) -> None:
+    """
+    Per-site prior/posterior EDP RMSE (m⁻³) as a function of assimilation
+    time window, for KF and EKF_Param.
+
+    Layout — one row per site (top: highest-latitude site first)
+    ─────────────────────────────────────────────────────────────
+    Row s  : site s
+             x = window HHMM (chronological)
+             y = EDP RMSE (m⁻³), altitude-averaged at the nearest 1-deg truth
+                 grid point to the site's (lat, lon)
+             Lines:
+               • Prior           (grey, dashed)
+               • KF posterior    (steelblue, solid)
+               • EKF_P posterior (seagreen, solid)
+
+    The prior EDP is taken from the KF's 5-deg model baseline (which is the
+    same IRI mean_5deg used by EKF_Param, so a single prior line suffices).
+    The truth EDP is looked up on the 1-deg truth grid at the point nearest
+    the site coordinates — matching the "nearest grid point in
+    truth_state_1deg / truth_ne_1deg" spec.
+    """
+    recs = _collect_window_records(all_results)
+    if not recs:
+        print(f"  [plot_edp_site_rmse_across_windows] no eligible windows — "
+              f"skipping plot.")
+        return
+
+    n_sites = len(sites)
+    n_win   = len(recs)
+    xs      = np.arange(n_win, dtype=float)
+    hhmm    = [r["hhmm"] for r in recs]
+
+    # Pre-allocate per-site × per-window RMSE arrays for each series.
+    prior_rmse    = np.full((n_sites, n_win), np.nan)
+    kf_post_rmse  = np.full((n_sites, n_win), np.nan)
+    ekf_post_rmse = np.full((n_sites, n_win), np.nan)
+
+    for s_i, site in enumerate(sites):
+        inst = INSTRUMENTS[site]
+        slat, slon = float(inst["lat"]), float(inst["lon"])
+        for w_i, rec in enumerate(recs):
+            g1lat = rec["grid_lats_1deg"]
+            g1lon = rec["grid_lons_1deg"]
+            g5lat = rec["grid_lats_5deg"]
+            g5lon = rec["grid_lons_5deg"]
+            # Nearest 1-deg truth-grid point for the site's truth profile.
+            idx1  = int(np.argmin(_haversine_km(slat, slon, g1lat, g1lon)))
+            # Nearest 5-deg model-grid point for the filter posterior column.
+            idx5  = int(np.argmin(_haversine_km(slat, slon, g5lat, g5lon)))
+            truth_prof = rec["truth_ne_1deg"][:, idx1]
+
+            kf_r  = rec["kf_result"]
+            ekf_r = rec["ekf_param"]
+
+            # F2 peak from the shared IRI prior; restrict RMSE to below-peak altitudes.
+            _prior_src = (kf_r or ekf_r or {}).get("prior_ne_5deg")
+            if _prior_src is not None:
+                _, _hmF2 = extract_robust_f2_peak(np.asarray(_prior_src)[:, idx5], alt_grid)
+            else:
+                _hmF2 = np.nan
+            _below = (alt_grid <= _hmF2) if np.isfinite(_hmF2) else np.ones(len(alt_grid), dtype=bool)
+
+            if kf_r is not None:
+                prior_rmse[s_i, w_i]   = _rmse_1d(kf_r["prior_ne_5deg"][:, idx5],
+                                                   truth_prof, _below)
+                kf_post_rmse[s_i, w_i] = _rmse_1d(kf_r["posterior_ne_5deg"][:, idx5],
+                                                   truth_prof, _below)
+            elif ekf_r is not None:
+                prior_rmse[s_i, w_i]   = _rmse_1d(ekf_r["prior_ne_5deg"][:, idx5],
+                                                   truth_prof, _below)
+            if ekf_r is not None:
+                ekf_post_rmse[s_i, w_i] = _rmse_1d(ekf_r["posterior_ne_5deg"][:, idx5],
+                                                    truth_prof, _below)
+
+    fig, axes = plt.subplots(
+        n_sites, 1,
+        figsize=(max(9.0, 0.55 * n_win + 4.0), 3.4 * n_sites),
+        facecolor="#1e1e1e",
+        sharex=True,
+    )
+    if n_sites == 1:
+        axes = np.array([axes])
+    fig.patch.set_facecolor("#1e1e1e")
+
+    for s_i, site in enumerate(sites):
+        inst  = INSTRUMENTS[site]
+        label = inst.get("label", site)
+        ax    = axes[s_i]
+        ax.set_facecolor("#2b2b2b")
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#555")
+
+        ax.plot(xs, prior_rmse[s_i],    color="gray",     lw=1.4,
+                linestyle="--", marker="o", markersize=4,
+                label="Prior (IRI baseline)")
+        ax.plot(xs, kf_post_rmse[s_i],  color="steelblue", lw=1.6,
+                marker="s", markersize=4, label="KF posterior")
+        ax.plot(xs, ekf_post_rmse[s_i], color="seagreen",  lw=1.6,
+                marker="^", markersize=4, label="EKF_P posterior")
+
+        ax.set_title(
+            f"{site} — {label}  "
+            f"({slat_str(inst)}, altitude-averaged EDP RMSE)",
+            color="white", fontsize=9, fontweight="bold",
+        )
+        ax.set_ylabel("EDP RMSE  (m⁻³)", color="lightgray", fontsize=8)
+        ax.tick_params(colors="lightgray", labelsize=7)
+        ax.grid(True, axis="y", lw=0.3, alpha=0.35, color="#888")
+        ax.legend(fontsize=7, facecolor="#2b2b2b", labelcolor="lightgray",
+                  loc="best", framealpha=0.8)
+
+    axes[-1].set_xticks(xs)
+    axes[-1].set_xticklabels(hhmm, rotation=45, ha="right",
+                             fontsize=7, color="lightgray")
+    axes[-1].set_xlabel("Window (UTC, HHMM)", color="lightgray", fontsize=8)
+
+    fig.suptitle(
+        f"Per-site EDP RMSE across windows — {YYYY}.{DOY:03d}  "
+        f"(prior vs posterior vs 1-deg truth)",
+        color="white", fontsize=11, y=0.995,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.98])
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    fig.savefig(save_path, dpi=130, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print(f"  Saved: {save_path}")
+
+
+def slat_str(inst: dict) -> str:
+    """Compact 'lat°N, lon°E' string for site titles."""
+    lat, lon = float(inst["lat"]), float(inst["lon"])
+    lat_hem  = "N" if lat >= 0 else "S"
+    lon_hem  = "E" if lon >= 0 else "W"
+    return f"{abs(lat):.2f}°{lat_hem}, {abs(lon):.2f}°{lon_hem}"
+
+
+def plot_edp_regional_rmse_across_windows(
+    all_results: dict[str, dict],
+    alt_grid: np.ndarray,
+    save_path: str = "./Figures/test_param_iono/edp_regional_rmse_across_windows.png",
+) -> None:
+    """
+    Regional (whole-grid) EDP-RMSE summary across the day.
+
+    Layout — 1×2
+    ────────────────────────────────────────────────────────────
+    Left  : RMSE vs altitude — for each altitude bin, pooled RMSE over
+            all 1-deg truth grid points AND all windows.
+            Three thick lines: prior / KF post / EKF_P post.
+            Thin per-window lines behind (light alpha, colour-matched) show
+            window-to-window spread.
+
+    Right : Regional RMSE vs time window — one scalar per window (RMSE
+            pooled over all altitudes and all 1-deg grid points).  Three
+            lines with markers, chronological x-axis (HHMM ticks).
+
+    Aggregation notes
+    -----------------
+    Filter posteriors live on the 5-deg model grid.  For each window we
+    nearest-neighbour interpolate every 5-deg posterior column onto the
+    1-deg truth grid (each 1-deg node → its nearest 5-deg node), then
+    subtract the 1-deg truth EDP.  This gives whole-region coverage that
+    matches the truth grid rather than the coarser model grid.
+    """
+    recs = _collect_window_records(all_results)
+    if not recs:
+        print(f"  [plot_edp_regional_rmse_across_windows] no eligible windows — "
+              f"skipping plot.")
+        return
+
+    n_alt = len(alt_grid)
+    n_win = len(recs)
+    hhmm  = [r["hhmm"] for r in recs]
+
+    # Per-window, per-altitude MSE + count for pooled statistics.
+    prior_sqerr_alt   = np.zeros((n_win, n_alt))
+    kf_sqerr_alt      = np.zeros((n_win, n_alt))
+    ekf_sqerr_alt     = np.zeros((n_win, n_alt))
+    prior_count_alt   = np.zeros((n_win, n_alt), dtype=int)
+    kf_count_alt      = np.zeros((n_win, n_alt), dtype=int)
+    ekf_count_alt     = np.zeros((n_win, n_alt), dtype=int)
+
+    # Per-window scalar RMSE (all altitudes × all 1-deg nodes pooled).
+    prior_scalar = np.full(n_win, np.nan)
+    kf_scalar    = np.full(n_win, np.nan)
+    ekf_scalar   = np.full(n_win, np.nan)
+
+    for w_i, rec in enumerate(recs):
+        g1lat = rec["grid_lats_1deg"]
+        g1lon = rec["grid_lons_1deg"]
+        g5lat = rec["grid_lats_5deg"]
+        g5lon = rec["grid_lons_5deg"]
+        truth = rec["truth_ne_1deg"]                        # (n_alt, n_geo_1deg)
+
+        # Nearest-5-deg-node lookup for every 1-deg node.
+        tree5   = cKDTree(np.column_stack([g5lat, g5lon]))
+        _, nn5  = tree5.query(np.column_stack([g1lat, g1lon]))
+
+        kf_r  = rec["kf_result"]
+        ekf_r = rec["ekf_param"]
+
+        # Prior is shared (same IRI baseline).  Prefer KF's, fall back to EKF's.
+        prior_edp_5 = None
+        if kf_r is not None:
+            prior_edp_5 = kf_r["prior_ne_5deg"]
+        elif ekf_r is not None:
+            prior_edp_5 = ekf_r["prior_ne_5deg"]
+
+        if prior_edp_5 is not None:
+            prior_at_1 = prior_edp_5[:, nn5]                # (n_alt, n_geo_1deg)
+            # Per-column F2 peak from prior; restrict RMSE to below-peak altitudes.
+            _n1 = prior_at_1.shape[1]
+            _hmF2_cols = np.array([
+                extract_robust_f2_peak(prior_at_1[:, j], alt_grid)[1]
+                for j in range(_n1)
+            ])
+            _peak_lim = np.where(np.isfinite(_hmF2_cols), _hmF2_cols, np.inf)
+            # below_mask[k, j] = True when alt_grid[k] is below prior F2 peak at node j
+            below_mask = alt_grid[:, None] <= _peak_lim[None, :]   # (n_alt, n_1deg)
+
+            diff = prior_at_1 - truth
+            fin  = np.isfinite(diff) & below_mask
+            prior_sqerr_alt[w_i] = np.where(fin, diff ** 2, 0.0).sum(axis=1)
+            prior_count_alt[w_i] = fin.sum(axis=1)
+            if fin.any():
+                prior_scalar[w_i] = float(np.sqrt(
+                    np.sum(diff ** 2 * fin) / max(int(fin.sum()), 1)))
+        else:
+            below_mask = np.ones((len(alt_grid), len(nn5)), dtype=bool)
+
+        if kf_r is not None:
+            kf_at_1  = kf_r["posterior_ne_5deg"][:, nn5]
+            diff     = kf_at_1 - truth
+            fin      = np.isfinite(diff) & below_mask
+            kf_sqerr_alt[w_i] = np.where(fin, diff ** 2, 0.0).sum(axis=1)
+            kf_count_alt[w_i] = fin.sum(axis=1)
+            if fin.any():
+                kf_scalar[w_i] = float(np.sqrt(
+                    np.sum(diff ** 2 * fin) / max(int(fin.sum()), 1)))
+
+        if ekf_r is not None:
+            ekf_at_1 = ekf_r["posterior_ne_5deg"][:, nn5]
+            diff     = ekf_at_1 - truth
+            fin      = np.isfinite(diff) & below_mask
+            ekf_sqerr_alt[w_i] = np.where(fin, diff ** 2, 0.0).sum(axis=1)
+            ekf_count_alt[w_i] = fin.sum(axis=1)
+            if fin.any():
+                ekf_scalar[w_i] = float(np.sqrt(
+                    np.sum(diff ** 2 * fin) / max(int(fin.sum()), 1)))
+
+    # Pooled RMSE curves (all windows combined, per altitude).
+    def _pooled_alt(sqerr: np.ndarray, cnt: np.ndarray) -> np.ndarray:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            tot_sq  = sqerr.sum(axis=0)
+            tot_cnt = cnt.sum(axis=0)
+            return np.where(tot_cnt > 0, np.sqrt(tot_sq / np.maximum(tot_cnt, 1)),
+                            np.nan)
+
+    prior_rmse_alt = _pooled_alt(prior_sqerr_alt, prior_count_alt)
+    kf_rmse_alt    = _pooled_alt(kf_sqerr_alt,    kf_count_alt)
+    ekf_rmse_alt   = _pooled_alt(ekf_sqerr_alt,   ekf_count_alt)
+
+    # Per-window RMSE curves vs altitude (thin, for spread).
+    def _per_win_alt(sqerr: np.ndarray, cnt: np.ndarray) -> np.ndarray:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(cnt > 0, np.sqrt(sqerr / np.maximum(cnt, 1)), np.nan)
+
+    prior_alt_pw = _per_win_alt(prior_sqerr_alt, prior_count_alt)
+    kf_alt_pw    = _per_win_alt(kf_sqerr_alt,    kf_count_alt)
+    ekf_alt_pw   = _per_win_alt(ekf_sqerr_alt,   ekf_count_alt)
+
+    # ── Figure ───────────────────────────────────────────────────────────────
+    fig, (ax_alt, ax_time) = plt.subplots(
+        1, 2, figsize=(max(15.0, 0.55 * n_win + 8.0), 6.2),
+        facecolor="#1e1e1e",
+        gridspec_kw={"width_ratios": [1.0, 1.4]},
+    )
+    fig.patch.set_facecolor("#1e1e1e")
+    for ax in (ax_alt, ax_time):
+        ax.set_facecolor("#2b2b2b")
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#555")
+        ax.tick_params(colors="lightgray", labelsize=7)
+        ax.grid(True, lw=0.3, alpha=0.35, color="#888")
+
+    # Left panel — RMSE vs altitude
+    for w_i in range(n_win):
+        ax_alt.plot(prior_alt_pw[w_i], alt_grid, color="gray",
+                    lw=0.5, alpha=0.25)
+        ax_alt.plot(kf_alt_pw[w_i],    alt_grid, color="steelblue",
+                    lw=0.5, alpha=0.25)
+        ax_alt.plot(ekf_alt_pw[w_i],   alt_grid, color="seagreen",
+                    lw=0.5, alpha=0.25)
+
+    ax_alt.plot(prior_rmse_alt, alt_grid, color="gray",      lw=2.2,
+                linestyle="--", label="Prior (pooled)")
+    ax_alt.plot(kf_rmse_alt,    alt_grid, color="steelblue", lw=2.2,
+                label="KF post (pooled)")
+    ax_alt.plot(ekf_rmse_alt,   alt_grid, color="seagreen",  lw=2.2,
+                label="EKF_P post (pooled)")
+
+    ax_alt.set_title(
+        f"Regional EDP RMSE vs altitude  ({n_win} windows pooled, "
+        f"1-deg truth grid)",
+        color="white", fontsize=9, fontweight="bold",
+    )
+    ax_alt.set_xlabel("EDP RMSE  (m⁻³)", color="lightgray", fontsize=8)
+    ax_alt.set_ylabel("Altitude  (km)",  color="lightgray", fontsize=8)
+    ax_alt.set_ylim(alt_grid.min(), alt_grid.max())
+    ax_alt.legend(fontsize=7, facecolor="#2b2b2b", labelcolor="lightgray",
+                  loc="best", framealpha=0.8)
+
+    # Right panel — RMSE vs time window
+    xs = np.arange(n_win, dtype=float)
+    ax_time.plot(xs, prior_scalar, color="gray",      lw=1.6,
+                 linestyle="--", marker="o", markersize=4,
+                 label="Prior")
+    ax_time.plot(xs, kf_scalar,    color="steelblue", lw=1.8,
+                 marker="s", markersize=4, label="KF posterior")
+    ax_time.plot(xs, ekf_scalar,   color="seagreen",  lw=1.8,
+                 marker="^", markersize=4, label="EKF_P posterior")
+
+    ax_time.set_title(
+        "Regional EDP RMSE vs time window "
+        "(pooled over altitude × 1-deg grid)",
+        color="white", fontsize=9, fontweight="bold",
+    )
+    ax_time.set_xlabel("Window (UTC, HHMM)", color="lightgray", fontsize=8)
+    ax_time.set_ylabel("EDP RMSE  (m⁻³)",    color="lightgray", fontsize=8)
+    ax_time.set_xticks(xs)
+    ax_time.set_xticklabels(hhmm, rotation=45, ha="right",
+                            fontsize=7, color="lightgray")
+    ax_time.legend(fontsize=7, facecolor="#2b2b2b", labelcolor="lightgray",
+                   loc="best", framealpha=0.8)
+
+    fig.suptitle(
+        f"Regional EDP RMSE summary — {YYYY}.{DOY:03d}",
+        color="white", fontsize=11, y=0.995,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    fig.savefig(save_path, dpi=130, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
     plt.close(fig)
     print(f"  Saved: {save_path}")
 
@@ -3435,8 +4965,13 @@ def plot_parameter_spatial_error(
     (scipy.interpolate.griddata) and displayed with pcolormesh.  The original
     5-deg Fibonacci grid points are overlaid as small black dots for reference.
     """
-    cen_lat = float(np.mean(grid_lats_5deg))
-    cen_lon = float(np.mean(grid_lons_5deg))
+    cen_lat = float(np.nanmean(grid_lats_5deg))
+    # Wrap-safe longitude centre (unit-vector mean) so pole-wrapping clusters
+    # don't collapse to a meaningless arithmetic mean.
+    _rad    = np.radians(grid_lons_5deg[np.isfinite(grid_lons_5deg)])
+    cen_lon = float(np.degrees(np.arctan2(
+        np.mean(np.sin(_rad)), np.mean(np.cos(_rad))
+    ))) if _rad.size else 0.0
     proj    = ccrs.Orthographic(central_longitude=cen_lon, central_latitude=cen_lat)
 
     fig, axes = plt.subplots(
@@ -3450,10 +4985,21 @@ def plot_parameter_spatial_error(
         title_str += f"\nTruth: {truth_time.strftime('%Y-%m-%d %H:%M')} UTC"
     fig.suptitle(title_str, fontsize=11, y=1.005)
 
-    ext_lat_min = grid_lats_5deg.min() - 3.0
-    ext_lat_max = grid_lats_5deg.max() + 3.0
-    ext_lon_min = grid_lons_5deg.min() - 3.0
-    ext_lon_max = grid_lons_5deg.max() + 3.0
+    ext_lat_min = float(np.nanmin(grid_lats_5deg)) - 3.0
+    ext_lat_max = float(np.nanmax(grid_lats_5deg)) + 3.0
+    # Longitude extent using cen_lon-relative shift so a wrapping grid stays
+    # contiguous; collapse to a +/-90° hemispheric window when coverage is
+    # nearly global to keep Orthographic corners inside the visible disc.
+    _shifted = ((grid_lons_5deg - cen_lon + 180.0) % 360.0) - 180.0
+    _fin     = np.isfinite(_shifted)
+    _lon_lo  = float(np.min(_shifted[_fin])) if _fin.any() else -3.0
+    _lon_hi  = float(np.max(_shifted[_fin])) if _fin.any() else  3.0
+    if (_lon_hi - _lon_lo) > 160.0:
+        ext_lon_min = cen_lon - 90.0
+        ext_lon_max = cen_lon + 90.0
+    else:
+        ext_lon_min = cen_lon + _lon_lo - 3.0
+        ext_lon_max = cen_lon + _lon_hi + 3.0
 
     for k, pname in enumerate(PARAM_NAMES):
         pst_vals = posterior_mean_5deg[k, :]    # (n_geo,)
@@ -3469,10 +5015,13 @@ def plot_parameter_spatial_error(
             ax.add_feature(cfeature.BORDERS,   linewidth=0.3, edgecolor="#444")
             ax.gridlines(draw_labels=False, linewidth=0.3, color="gray", alpha=0.4)
             ax.set_facecolor("#d8d8d8")
-            ax.set_extent(
-                [ext_lon_min, ext_lon_max, ext_lat_min, ext_lat_max],
-                crs=ccrs.PlateCarree(),
-            )
+            try:
+                ax.set_extent(
+                    [ext_lon_min, ext_lon_max, ext_lat_min, ext_lat_max],
+                    crs=ccrs.PlateCarree(),
+                )
+            except (ValueError, Exception):
+                ax.set_global()
 
             finite_mask = np.isfinite(vals)
             if not finite_mask.any():
@@ -3497,387 +5046,6 @@ def plot_parameter_spatial_error(
     fig.savefig(save_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {save_path}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# §13b  EnKF Δ log10(NmF2) — filter correction vs. required correction
-# ─────────────────────────────────────────────────────────────────────────────
-
-def plot_enkf_delta_nmf2(
-    prior_edp: np.ndarray,
-    posterior_mean_5deg: np.ndarray,
-    truth_mean_5deg: np.ndarray,
-    grid_lats_5deg: np.ndarray,
-    grid_lons_5deg: np.ndarray,
-    truth_time: pd.Timestamp = None,
-    save_path: str = "./Figures/test_param_iono/enkf_delta_nmf2.png",
-) -> None:
-    """
-    Compare the filter correction to the required correction in log10(NmF2).
-
-    prior_edp : (n_alt, n_geo) — ensemble-mean Ne prior, same as used in the
-        EDP spaghetti plot.  NmF2 is derived as peak Ne along the altitude axis
-        so both plots reference the same prior.
-
-    Col 0  : Actual  Δ = truth − prior            (correction needed)
-    Col 1  : Filter  Δ = posterior − prior         (EnKF update)
-    Col 2  : Residual  = posterior − truth         (remaining error)
-
-    Columns 0 and 1 share a symmetric colorbar so the magnitudes are directly
-    comparable.  Column 2 has its own symmetric scale.
-    """
-    nmf2_prior = np.log10(np.maximum(prior_edp.max(axis=0), 1.0))  # (n_geo,)
-    nmf2_post  = posterior_mean_5deg[0, :]
-    nmf2_truth = truth_mean_5deg[0, :]
-
-    actual_delta  = nmf2_truth - nmf2_prior   # what should have changed
-    filter_delta  = nmf2_post  - nmf2_prior   # what the filter did
-    residual      = nmf2_post  - nmf2_truth   # remaining error after update
-
-    cen_lat = float(np.mean(grid_lats_5deg))
-    cen_lon = float(np.mean(grid_lons_5deg))
-    proj    = ccrs.Orthographic(central_longitude=cen_lon, central_latitude=cen_lat)
-
-    fig, axes = plt.subplots(
-        1, 3,
-        figsize=(18, 5),
-        subplot_kw={"projection": proj},
-    )
-
-    title_str = "EnKF  Δ log₁₀(NmF₂) — filter correction vs. required correction"
-    if truth_time is not None:
-        title_str += f"\nTruth: {truth_time.strftime('%Y-%m-%d %H:%M')} UTC"
-    fig.suptitle(title_str, fontsize=11, y=1.02)
-
-    ext_lat_min = grid_lats_5deg.min() - 3.0
-    ext_lat_max = grid_lats_5deg.max() + 3.0
-    ext_lon_min = grid_lons_5deg.min() - 3.0
-    ext_lon_max = grid_lons_5deg.max() + 3.0
-
-    # Shared symmetric scale for the two Δ panels
-    shared_vals = np.concatenate([
-        actual_delta[np.isfinite(actual_delta)],
-        filter_delta[np.isfinite(filter_delta)],
-    ])
-    v_shared = float(np.nanpercentile(np.abs(shared_vals), 98)) or 1e-4
-
-    # Residual scale
-    res_fin  = residual[np.isfinite(residual)]
-    v_resid  = float(np.nanpercentile(np.abs(res_fin), 98)) if res_fin.size else 1e-4
-    v_resid  = v_resid or 1e-4
-
-    col_specs = [
-        (actual_delta, "Actual Δ = truth − prior",     "RdBu_r", v_shared),
-        (filter_delta, "Filter Δ = posterior − prior", "RdBu_r", v_shared),
-        (residual,     "Residual = posterior − truth", "RdBu_r", v_resid),
-    ]
-
-    for col_i, (vals, label, cmap, v_abs) in enumerate(col_specs):
-        ax = axes[col_i]
-        ax.add_feature(cfeature.COASTLINE, linewidth=0.5, edgecolor="#555")
-        ax.add_feature(cfeature.BORDERS,   linewidth=0.3, edgecolor="#444")
-        ax.gridlines(draw_labels=False, linewidth=0.3, color="gray", alpha=0.4)
-        ax.set_facecolor("#d8d8d8")
-        ax.set_extent(
-            [ext_lon_min, ext_lon_max, ext_lat_min, ext_lat_max],
-            crs=ccrs.PlateCarree(),
-        )
-
-        if not np.isfinite(vals).any():
-            ax.set_title(f"{label} — no data", fontsize=9)
-            continue
-
-        LO, LA, vg = _meshgrid_interp(grid_lats_5deg, grid_lons_5deg, vals)
-        _ax_pcolormesh(ax, LO, LA, vg, cmap, -v_abs, v_abs,
-                       fig, "Δ log₁₀(NmF₂)", grid_lons_5deg, grid_lats_5deg)
-        ax.set_title(label, fontsize=9)
-
-    plt.tight_layout()
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    fig.savefig(save_path, dpi=130, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {save_path}")
-
-
-def plot_nmf2_by_index(
-    prior_mean_5deg: np.ndarray,
-    kf_result: dict,
-    enkf_result: dict,
-    truth_mean_5deg: np.ndarray,
-    grid_lats_5deg: np.ndarray,
-    grid_lons_5deg: np.ndarray,
-    truth_time: pd.Timestamp = None,
-    save_path: str = "./Figures/test_param_iono/nmf2_by_index.png",
-) -> None:
-    """
-    Line plot of log10(NmF2) vs. 5-deg grid-point index.
-
-    Prior, EnKF posterior, and truth use the log10(NmF2) Chapman parameter
-    (index 0) directly.  The KF posterior is in Ne-space, so NmF2 is derived
-    as log10(max-altitude Ne) — the F2 peak of the posterior Ne profile.
-
-    A secondary x-axis shows the lat/lon of each grid node for spatial context.
-    """
-    n_geo = len(grid_lats_5deg)
-    idx   = np.arange(n_geo)
-
-    prior_nmf2 = prior_mean_5deg[0, :]
-    enkf_nmf2  = enkf_result["posterior_mean_5deg"][0, :]
-    truth_nmf2 = truth_mean_5deg[0, :]
-    kf_nmf2    = np.log10(
-        np.maximum(kf_result["posterior_ne_5deg"].max(axis=0), 1.0)
-    )
-
-    fig, ax = plt.subplots(figsize=(max(10, n_geo // 2 + 4), 5))
-
-    ax.plot(idx, prior_nmf2, "o--", color="#888888", lw=1.5, ms=5,
-            label="Prior (IRI baseline)")
-    ax.plot(idx, truth_nmf2, "s-",  color="#e05050", lw=2.0, ms=6,
-            label="Truth")
-    ax.plot(idx, enkf_nmf2,  "^-",  color="#4da6ff", lw=1.8, ms=5,
-            label="EnKF posterior")
-    ax.plot(idx, kf_nmf2,    "D-",  color="#50c870", lw=1.8, ms=5,
-            label="KF posterior (peak Ne)")
-
-    ax.set_xlabel("Grid point index", fontsize=10)
-    ax.set_ylabel("log₁₀(NmF₂)  [log₁₀ m⁻³]", fontsize=10)
-    ax.set_xticks(idx)
-    ax.grid(True, linewidth=0.4, alpha=0.5)
-    ax.legend(fontsize=9, loc="best")
-
-    title_str = "log₁₀(NmF₂) by grid-point index — prior / KF / EnKF / truth"
-    if truth_time is not None:
-        title_str += f"\nTruth: {truth_time.strftime('%Y-%m-%d %H:%M')} UTC"
-    ax.set_title(title_str, fontsize=10)
-
-    # Secondary x-axis: lat / lon labels for each grid node
-    ax2 = ax.twiny()
-    ax2.set_xlim(ax.get_xlim())
-    ax2.set_xticks(idx)
-    ax2.set_xticklabels(
-        [f"{lat:.1f}°,{lon:.1f}°"
-         for lat, lon in zip(grid_lats_5deg, grid_lons_5deg)],
-        fontsize=5, rotation=60, ha="left",
-    )
-    ax2.set_xlabel("Grid (lat, lon)", fontsize=8)
-
-    plt.tight_layout()
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    fig.savefig(save_path, dpi=130, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {save_path}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# §13d  KF / EnKF EDP profile comparison (prior | posterior | ΔNe)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def plot_edp_profiles_kf_enkf(
-    kf_result: dict,
-    enkf_result: dict,
-    truth_ne_5deg: np.ndarray,
-    grid_lats_5deg: np.ndarray,
-    grid_lons_5deg: np.ndarray,
-    alt_grid: np.ndarray,
-    truth_time: pd.Timestamp = None,
-    save_path: str = "./Figures/test_param_iono/edp_profiles_kf_enkf.png",
-) -> None:
-    """
-    Two-row × four-column EDP profile figure, mirroring the structure of
-    ``plot_edp_profiles`` in demo_ground_station_kf.py.
-
-    Row 0 (top)    : Gridded Ne KF
-    Row 1 (bottom) : Parametric EnKF
-
-    Col 0  : Prior Ne(h)
-    Col 1  : Posterior Ne(h)
-    Col 2  : ΔNe(h) = posterior − prior      (filter update)
-    Col 3  : ΔNe(h) = posterior − truth       (residual error vs truth)
-
-    Each panel overlays all grid-point profiles (faint) with the centre grid
-    point bolded and the spatial mean as a dashed black line.  Truth Ne is
-    plotted in green on the Prior and Posterior panels.
-
-    Prior/Posterior x-limits are shared across both rows for direct comparison.
-    Both ΔNe columns share a common symmetric x-limit across all four panels
-    so filter update and residual magnitudes are directly comparable.
-    """
-    _COL_PRI_FAINT  = "#7EB6D9"   # light steel-blue — non-centre prior
-    _COL_PRI_BOLD   = "#1A5276"   # dark blue — centre prior
-    _COL_POST_FAINT = "#F1948A"   # light tomato — non-centre posterior
-    _COL_POST_BOLD  = "#922B21"   # dark red — centre posterior
-    _COL_DELTA      = "#A0522D"   # sienna — ΔNe(post−prior) centre
-    _COL_RESID      = "#6C3483"   # purple — ΔNe(post−truth) centre
-    _COL_TRUTH      = "#27AE60"   # green — truth
-    _COL_MEAN       = "black"
-
-    n_geo = len(grid_lats_5deg)
-
-    # Centre grid point: nearest node to spatial centroid
-    cen_lat = float(np.mean(grid_lats_5deg))
-    cen_lon = float(np.mean(grid_lons_5deg))
-    cen_idx = int(np.argmin(_haversine_km(cen_lat, cen_lon,
-                                          grid_lats_5deg, grid_lons_5deg)))
-
-    row_labels = ["Gridded Ne KF", "Parametric EnKF"]
-    row_prior  = [kf_result["prior_edp"],     enkf_result["prior_edp"]]
-    row_post   = [kf_result["posterior_edp"], enkf_result["posterior_edp"]]
-
-    # ── Global x-limits ───────────────────────────────────────────────────────
-    all_ne = np.concatenate([
-        row_prior[0].ravel(),  row_prior[1].ravel(),
-        row_post[0].ravel(),   row_post[1].ravel(),
-        truth_ne_5deg.ravel(),
-    ])
-    all_ne_pos = all_ne[all_ne > 0]
-    ne_xmax = float(np.nanpercentile(all_ne_pos, 99)) if all_ne_pos.size else 1e12
-    ne_xmin = 0.0
-
-    # Both Δ columns (update + residual) share the same symmetric limit so
-    # magnitudes are directly comparable across the two rightmost columns.
-    all_delta = np.concatenate([
-        (row_post[0] - row_prior[0]).ravel(),
-        (row_post[1] - row_prior[1]).ravel(),
-        (row_post[0] - truth_ne_5deg).ravel(),
-        (row_post[1] - truth_ne_5deg).ravel(),
-    ])
-    delta_abs = float(np.nanpercentile(np.abs(all_delta), 99)) if all_delta.size else 1.0
-    delta_abs = max(delta_abs, 1.0)
-
-    # ── Layout ─────────────────────────────────────────────────────────────────
-    fig, axes = plt.subplots(
-        2, 4,
-        figsize=(19, 9),
-        sharey=True,
-        gridspec_kw={"wspace": 0.08, "hspace": 0.35},
-    )
-
-    title_str = "EDP Profiles — Prior / Posterior / ΔNe(post−prior) / ΔNe(post−truth)  ·  KF vs EnKF"
-    if truth_time is not None:
-        title_str += f"\nTruth: {truth_time.strftime('%Y-%m-%d %H:%M')} UTC"
-    fig.suptitle(title_str, fontsize=11, y=1.01)
-
-    for row in range(2):
-        ax_pri  = axes[row, 0]
-        ax_post = axes[row, 1]
-        ax_del  = axes[row, 2]
-        ax_res  = axes[row, 3]
-
-        prior_edp  = row_prior[row]            # (n_alt, n_geo)
-        post_edp   = row_post[row]
-        delta_edp  = post_edp - prior_edp      # filter update
-        resid_edp  = post_edp - truth_ne_5deg  # residual vs truth
-
-        pri_mean   = prior_edp.mean(axis=1)
-        post_mean  = post_edp.mean(axis=1)
-        delta_mean = delta_edp.mean(axis=1)
-        resid_mean = resid_edp.mean(axis=1)
-
-        # ── Prior ──────────────────────────────────────────────────────────────
-        for g in range(n_geo):
-            if g == cen_idx:
-                continue
-            ax_pri.plot(np.maximum(prior_edp[:, g], 1.0), alt_grid,
-                        color=_COL_PRI_FAINT, lw=0.6, alpha=0.35, zorder=2)
-        ax_pri.plot(np.maximum(prior_edp[:, cen_idx], 1.0), alt_grid,
-                    color=_COL_PRI_BOLD, lw=2.2, alpha=1.0, zorder=4,
-                    label=f"Centre (#{cen_idx})")
-        ax_pri.plot(np.maximum(pri_mean, 1.0), alt_grid,
-                    color=_COL_MEAN, lw=1.4, ls="--", zorder=5, label="Mean")
-        ax_pri.plot(np.maximum(truth_ne_5deg[:, cen_idx], 1.0), alt_grid,
-                    color=_COL_TRUTH, lw=2.0, zorder=6, label="Truth")
-        ax_pri.set_xlim(ne_xmin, ne_xmax)
-        ax_pri.set_title(f"{row_labels[row]}\nPrior Ne(h)", fontsize=8)
-        ax_pri.set_xlabel("Ne  (m⁻³)", fontsize=7)
-        ax_pri.tick_params(labelsize=6)
-        ax_pri.grid(True, alpha=0.3, ls=":")
-        ax_pri.legend(fontsize=6, loc="upper right")
-
-        # ── Posterior ──────────────────────────────────────────────────────────
-        for g in range(n_geo):
-            if g == cen_idx:
-                continue
-            ax_post.plot(np.maximum(post_edp[:, g], 1.0), alt_grid,
-                         color=_COL_POST_FAINT, lw=0.6, alpha=0.35, zorder=2)
-        ax_post.plot(np.maximum(post_edp[:, cen_idx], 1.0), alt_grid,
-                     color=_COL_POST_BOLD, lw=2.2, alpha=1.0, zorder=4,
-                     label=f"Centre (#{cen_idx})")
-        ax_post.plot(np.maximum(post_mean, 1.0), alt_grid,
-                     color=_COL_MEAN, lw=1.4, ls="--", zorder=5, label="Mean")
-        ax_post.plot(np.maximum(truth_ne_5deg[:, cen_idx], 1.0), alt_grid,
-                     color=_COL_TRUTH, lw=2.0, zorder=6, label="Truth")
-        ax_post.set_xlim(ne_xmin, ne_xmax)
-        ax_post.set_title(f"{row_labels[row]}\nPosterior Ne(h)", fontsize=8)
-        ax_post.set_xlabel("Ne  (m⁻³)", fontsize=7)
-        ax_post.tick_params(labelsize=6)
-        ax_post.grid(True, alpha=0.3, ls=":")
-        ax_post.legend(fontsize=6, loc="upper right")
-
-        # ── ΔNe: filter update (post − prior) ──────────────────────────────────
-        for g in range(n_geo):
-            if g == cen_idx:
-                continue
-            ax_del.plot(delta_edp[:, g], alt_grid,
-                        color=_COL_PRI_FAINT, lw=0.6, alpha=0.35, zorder=2)
-        ax_del.plot(delta_edp[:, cen_idx], alt_grid,
-                    color=_COL_DELTA, lw=2.2, alpha=1.0, zorder=4,
-                    label=f"Centre (#{cen_idx})")
-        ax_del.plot(delta_mean, alt_grid,
-                    color=_COL_MEAN, lw=1.4, ls="--", zorder=5, label="Mean Δ")
-        ax_del.axvline(0, color="gray", lw=0.8, ls=":", zorder=1)
-        ax_del.set_xlim(-delta_abs, delta_abs)
-        ax_del.set_title(f"{row_labels[row]}\nΔNe  (post − prior)", fontsize=8)
-        ax_del.set_xlabel("ΔNe  (m⁻³)", fontsize=7)
-        ax_del.tick_params(labelsize=6)
-        ax_del.grid(True, alpha=0.3, ls=":")
-        ax_del.legend(fontsize=6, loc="upper right")
-
-        # ── ΔNe: residual vs truth (post − truth) ──────────────────────────────
-        for g in range(n_geo):
-            if g == cen_idx:
-                continue
-            ax_res.plot(resid_edp[:, g], alt_grid,
-                        color=_COL_POST_FAINT, lw=0.6, alpha=0.35, zorder=2)
-        ax_res.plot(resid_edp[:, cen_idx], alt_grid,
-                    color=_COL_RESID, lw=2.2, alpha=1.0, zorder=4,
-                    label=f"Centre (#{cen_idx})")
-        ax_res.plot(resid_mean, alt_grid,
-                    color=_COL_MEAN, lw=1.4, ls="--", zorder=5, label="Mean Δ")
-        ax_res.axvline(0, color="gray", lw=0.8, ls=":", zorder=1)
-        ax_res.set_xlim(-delta_abs, delta_abs)
-        ax_res.set_title(f"{row_labels[row]}\nΔNe  (post − truth)", fontsize=8)
-        ax_res.set_xlabel("ΔNe  (m⁻³)", fontsize=7)
-        ax_res.tick_params(labelsize=6)
-        ax_res.grid(True, alpha=0.3, ls=":")
-        ax_res.legend(fontsize=6, loc="upper right")
-
-    axes[0, 0].set_ylabel("Altitude  (km)", fontsize=8)
-    axes[1, 0].set_ylabel("Altitude  (km)", fontsize=8)
-    axes[0, 0].set_ylim(bottom=0)   # shared y-axis: applies to every panel
-
-    # Parametric-EnKF row: colour-coded parameter readout at the centre vertex
-    # (the gridded KF row has no Chapman/Epstein state to report).
-    enkf_prior_state = enkf_result.get("prior_ensemble")
-    enkf_post_state  = enkf_result.get("posterior_mean_5deg")
-    if enkf_prior_state is not None and enkf_post_state is not None:
-        _draw_param_boxes(
-            axes[1, 1],
-            [("Prior",     _COL_PRI_BOLD,  enkf_prior_state.mean(axis=2)[:, cen_idx]),
-             ("Posterior", _COL_POST_BOLD, enkf_post_state[:, cen_idx])],
-            loc="upper left",
-        )
-
-    plt.tight_layout()
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {save_path}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# §14  Gridded Ne Kalman Filter — linear KF in direct Ne-space
-# ─────────────────────────────────────────────────────────────────────────────
-
 def run_gridded_ne_kf(
     arc_truth_list: list[dict],
     model_state_prior: "IonosphericState",
@@ -3905,7 +5073,7 @@ def run_gridded_ne_kf(
 
     Returns
     -------
-    dict with the same keys as ``run_parametric_enkf`` for direct comparison.
+    dict with the same keys as ``run_gridded_ne_kf`` for direct comparison.
     """
     n_occ    = len(arc_truth_list)
     n_geo    = len(grid_lats_5deg)
@@ -4250,157 +5418,14 @@ def plot_kf_covariance_panels(
     plt.close(fig)
     print(f"  Saved: {save_path}")
 
-
-def plot_enkf_covariance_panels(
-    prior_ensemble: np.ndarray,
-    post_ensemble: np.ndarray,
-    grid_lats_5deg: np.ndarray,
-    grid_lons_5deg: np.ndarray,
-    truth_time: "pd.Timestamp | None" = None,
-    save_path: str = "./Figures/test_param_iono/enkf_covariance.png",
-) -> None:
-    """
-    Four-panel covariance structure figure for the ParametricEnKF.
-
-    Layout (2 rows × 2 cols):
-      Row 0 — Prior:     8×8 parameter correlation  |  NmF2 spatial correlation globe
-      Row 1 — Posterior: 8×8 parameter correlation  |  NmF2 spatial correlation globe
-
-    The 8×8 panels show the cross-parameter Pearson correlation matrix averaged
-    over all grid points (i.e. the mean covariance among the 8 Chapman/profile
-    parameters at the same location).
-
-    The globe panels show the Pearson correlation of each grid point's
-    log₁₀(NmF₂) to the central grid point's log₁₀(NmF₂), mapped on an
-    orthographic projection centred on the grid region.
-
-    Parameters
-    ----------
-    prior_ensemble : (N_STATE, n_geo, n_members) ensemble BEFORE the EnKF update.
-    post_ensemble  : (N_STATE, n_geo, n_members) ensemble AFTER the EnKF update.
-    """
-    import warnings
-
-    n_params, n_geo, n_members = prior_ensemble.shape
-    nm1 = max(n_members - 1, 1)
-
-    # Centre grid point (nearest to spatial centroid)
-    cen_lat = float(np.mean(grid_lats_5deg))
-    cen_lon = float(np.mean(grid_lons_5deg))
-    cen_idx = int(np.argmin(_haversine_km(cen_lat, cen_lon,
-                                          grid_lats_5deg, grid_lons_5deg)))
-
-    def _param_corr(ens):
-        """8×8 parameter correlation matrix averaged over all grid points."""
-        ens_c = ens - ens.mean(axis=2, keepdims=True)   # centre over members
-        cov = np.zeros((n_params, n_params))
-        for g in range(n_geo):
-            Xg   = ens_c[:, g, :]          # (N_STATE, n_members)
-            cov += Xg @ Xg.T / nm1
-        cov /= n_geo
-        std = np.sqrt(np.maximum(np.diag(cov), 0.0))
-        outer = np.outer(std, std)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            return cov / np.where(outer == 0, 1e-10, outer)
-
-    def _nmf2_spatial_corr(ens):
-        """Pearson correlation of each grid point's log₁₀(NmF₂) to the centre."""
-        ens_c   = ens - ens.mean(axis=2, keepdims=True)
-        ref     = ens_c[0, cen_idx, :]             # (n_members,) — NmF₂ at centre
-        std_ref = float(np.sqrt(max(ref @ ref / nm1, 0.0)))
-        corr    = np.empty(n_geo)
-        for g in range(n_geo):
-            gp      = ens_c[0, g, :]
-            cov_g   = float(ref @ gp / nm1)
-            std_g   = float(np.sqrt(max(gp @ gp / nm1, 0.0)))
-            denom   = std_ref * std_g
-            corr[g] = cov_g / denom if denom > 1e-30 else 0.0
-        return corr
-
-    prior_param_corr = _param_corr(prior_ensemble)
-    post_param_corr  = _param_corr(post_ensemble)
-    prior_nmf2_corr  = _nmf2_spatial_corr(prior_ensemble)
-    post_nmf2_corr   = _nmf2_spatial_corr(post_ensemble)
-
-    clon = float(np.nanmean(grid_lons_5deg))
-    clat = float(np.nanmean(grid_lats_5deg))
-    proj = ccrs.Orthographic(central_longitude=clon, central_latitude=clat)
-
-    title_str = "ParametricEnKF — Prior and Posterior Covariance Structure"
-    if truth_time is not None:
-        title_str += f"\n{truth_time.strftime('%Y-%m-%d %H:%M')} UTC truth"
-
-    fig = plt.figure(figsize=(18, 10))
-    fig.suptitle(title_str + "  ·  ★ = centre vertex", fontsize=12)
-    gs = GridSpec(2, 2, figure=fig,
-                  left=0.06, right=0.97, top=0.90, bottom=0.07,
-                  wspace=0.30, hspace=0.35)
-
-    ticks = list(range(n_params))
-
-    for row, (row_lbl, param_corr, nmf2_corr) in enumerate([
-        ("Prior",     prior_param_corr, prior_nmf2_corr),
-        ("Posterior", post_param_corr,  post_nmf2_corr),
-    ]):
-        # ── 8×8 parameter correlation ─────────────────────────────────────────
-        ax_pp = fig.add_subplot(gs[row, 0])
-        pcm = ax_pp.imshow(param_corr, cmap="coolwarm", vmin=-1, vmax=1)
-        ax_pp.set_xticks(ticks)
-        ax_pp.set_yticks(ticks)
-        ax_pp.set_xticklabels(PARAM_NAMES, rotation=45, ha="right", fontsize=8)
-        ax_pp.set_yticklabels(PARAM_NAMES, fontsize=8)
-        ax_pp.set_title(f"{row_lbl} — 8×8 Parameter Correlation (avg over grid)", fontsize=10)
-        fig.colorbar(pcm, ax=ax_pp, label="Pearson r", fraction=0.046, pad=0.04)
-        for i in range(n_params):
-            for j in range(n_params):
-                val = param_corr[i, j]
-                ax_pp.text(j, i, f"{val:.2f}", ha="center", va="center",
-                           fontsize=6,
-                           color="white" if abs(val) > 0.65 else "black")
-
-        # ── NmF2 spatial correlation globe ────────────────────────────────────
-        ax_gl = fig.add_subplot(gs[row, 1], projection=proj)
-        ax_gl.set_global()
-        ax_gl.add_feature(cfeature.LAND,  facecolor="whitesmoke", zorder=0)
-        ax_gl.add_feature(cfeature.OCEAN, facecolor="aliceblue",  zorder=0)
-        ax_gl.add_feature(cfeature.COASTLINE.with_scale("110m"),
-                          lw=0.4, edgecolor="gray")
-        ax_gl.gridlines(lw=0.2, alpha=0.3)
-
-        sc = ax_gl.scatter(
-            grid_lons_5deg, grid_lats_5deg,
-            c=nmf2_corr, cmap="coolwarm", vmin=-1, vmax=1,
-            s=80, transform=ccrs.Geodetic(), zorder=3,
-        )
-        cb = fig.colorbar(sc, ax=ax_gl, orientation="horizontal",
-                          shrink=0.75, pad=0.04, fraction=0.04)
-        cb.set_label("Pearson r  (log₁₀(NmF₂) vs centre)", fontsize=8)
-
-        ax_gl.plot(
-            float(grid_lons_5deg[cen_idx]), float(grid_lats_5deg[cen_idx]),
-            transform=ccrs.Geodetic(),
-            marker="*", color="gold", ms=14, mec="black", mew=0.8, zorder=8,
-        )
-        ax_gl.set_title(
-            f"{row_lbl} — NmF₂ Spatial Correlation to Centre",
-            fontsize=10,
-        )
-
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    fig.savefig(save_path, dpi=100, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved: {save_path}")
-
-
 # ─────────────────────────────────────────────────────────────────────────────
-# §15  KF vs EnKF comparison figure
+# §15  KF vs EKF_Param comparison figure
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_kf_enkf_comparison(
+def plot_kf_ekf_comparison(
     arc_truth_list: list[dict],
     kf_result: dict,
-    enkf_result: dict,
+    ekf_param_result: dict,
     truth_ne_1deg: np.ndarray,
     grid_lats_1deg: np.ndarray,
     grid_lons_1deg: np.ndarray,
@@ -4411,7 +5436,7 @@ def plot_kf_enkf_comparison(
     save_path: str,
 ) -> None:
     """
-    Side-by-side KF vs EnKF comparison figure.
+    Side-by-side KF vs EKF_Param comparison figure.
 
     Layout — GridSpec(2, 3)
     ────────────────────────────────────────────────────────
@@ -4420,21 +5445,21 @@ def plot_kf_enkf_comparison(
 
     TEC panels
     ----------
-    • Thick solid  : truth TEC (from 1-deg truth ionosphere)
-    • Dashed       : prior model ensemble mean
-    • Dash-dot blue: gridded Ne KF posterior
-    • Dotted orange: ParametricEnKF posterior
+    • Thick solid   : truth TEC (from 1-deg truth ionosphere)
+    • Dashed        : prior model ensemble mean
+    • Dash-dot blue : gridded Ne KF posterior
+    • Dotted green  : EKF_Param posterior
 
     EDP panel
     ---------
     • Grey dashed  : prior Ne profiles (5-deg grid)
     • Blue solid   : KF posterior Ne profiles
-    • Orange solid : EnKF posterior Ne profiles
+    • Green solid  : EKF_Param posterior Ne profiles
     • Red dashed   : truth Ne at 5-deg grid centroid (1-deg grid nearest)
 
     RMSE panel
     ----------
-    Grouped bar chart per arc plus global RMSE (prior / KF / EnKF).
+    Grouped bar chart per arc plus global RMSE (prior / KF / EKF_Param).
     """
     from matplotlib.lines import Line2D
 
@@ -4471,24 +5496,24 @@ def plot_kf_enkf_comparison(
     # ── EDP spaghetti ─────────────────────────────────────────────────────────
     ax_edp = fig.add_subplot(gs[0, 2])
     ax_edp.set_facecolor("#2b2b2b")
-    ax_edp.set_title("EDP — prior / KF / EnKF / truth", color="white", fontsize=8)
+    ax_edp.set_title("EDP — prior / KF / EKF_Param / truth", color="white", fontsize=8)
     ax_edp.set_xlabel("Ne (m⁻³)", color="lightgray", fontsize=7)
     ax_edp.set_ylabel("Altitude (km)", color="lightgray", fontsize=7)
     ax_edp.tick_params(colors="lightgray", labelsize=6)
     for sp in ax_edp.spines.values():
         sp.set_edgecolor("#555")
 
-    kf_prior_edp   = kf_result["prior_edp"]      # (n_alt, n_geo)
-    kf_post_edp    = kf_result["posterior_edp"]   # (n_alt, n_geo)
-    enkf_post_edp  = enkf_result["posterior_edp"] # (n_alt, n_geo)
-    n_geo          = kf_prior_edp.shape[1]
+    kf_prior_edp    = kf_result["prior_edp"]           # (n_alt, n_geo)
+    kf_post_edp     = kf_result["posterior_edp"]        # (n_alt, n_geo)
+    ekf_post_edp    = ekf_param_result["posterior_edp"] # (n_alt, n_geo)
+    n_geo           = kf_prior_edp.shape[1]
 
     for g in range(n_geo):
-        ax_edp.plot(kf_prior_edp[:, g],   alt_grid, color="gray",
+        ax_edp.plot(kf_prior_edp[:, g],  alt_grid, color="gray",
                     linewidth=0.6, alpha=0.4, linestyle="--")
-        ax_edp.plot(kf_post_edp[:, g],    alt_grid, color="steelblue",
+        ax_edp.plot(kf_post_edp[:, g],   alt_grid, color="steelblue",
                     linewidth=0.8, alpha=0.7)
-        ax_edp.plot(enkf_post_edp[:, g],  alt_grid, color="darkorange",
+        ax_edp.plot(ekf_post_edp[:, g],  alt_grid, color="seagreen",
                     linewidth=0.8, alpha=0.7)
 
     # Truth at centroid of 5-deg grid
@@ -4501,111 +5526,104 @@ def plot_kf_enkf_comparison(
                 label="Truth (centroid)")
 
     edp_handles = [
-        Line2D([0], [0], color="gray",       lw=1.2, linestyle="--",
-               label=f"Prior Ne"),
-        Line2D([0], [0], color="steelblue",  lw=1.4, alpha=0.8,
-               label=f"KF posterior"),
-        Line2D([0], [0], color="darkorange", lw=1.4, alpha=0.8,
-               label=f"EnKF posterior"),
-        Line2D([0], [0], color="red",        lw=1.8, linestyle="--",
-               label="Truth Ne (centroid)"),
+        Line2D([0], [0], color="gray",      lw=1.2, linestyle="--", label="Prior Ne"),
+        Line2D([0], [0], color="steelblue", lw=1.4, alpha=0.8,      label="KF posterior"),
+        Line2D([0], [0], color="seagreen",  lw=1.4, alpha=0.8,      label="EKF_Param posterior"),
+        Line2D([0], [0], color="red",       lw=1.8, linestyle="--", label="Truth Ne (centroid)"),
     ]
     ax_edp.legend(handles=edp_handles, fontsize=6,
                   facecolor="#2b2b2b", labelcolor="lightgray",
                   loc="upper right", framealpha=0.8)
     ax_edp.set_ylim(bottom=0)
 
-    # Colour-coded parameter readout for the parametric EnKF (the gridded KF
-    # has no Chapman/Epstein state to report).
-    enkf_prior_state = enkf_result.get("prior_ensemble")
-    enkf_post_state  = enkf_result.get("posterior_mean_5deg")
-    if enkf_prior_state is not None and enkf_post_state is not None:
-        # Nearest 5-deg grid point to the same centroid used for truth above.
+    # Parameter readout for EKF_Param
+    ekf_prior_state = ekf_param_result.get("prior_mean_state")
+    ekf_post_state  = ekf_param_result.get("posterior_mean_5deg")
+    if ekf_prior_state is not None and ekf_post_state is not None:
         cen5_idx = int(np.argmin(_haversine_km(
             cen_lat, cen_lon, grid_lats_5deg, grid_lons_5deg)))
         _draw_param_boxes(
             ax_edp,
-            [("EnKF prior",     "gray",       enkf_prior_state.mean(axis=2)[:, cen5_idx]),
-             ("EnKF posterior", "darkorange", enkf_post_state[:, cen5_idx])],
+            [("EKF prior",     "gray",     ekf_prior_state[:, cen5_idx]),
+             ("EKF posterior", "seagreen", ekf_post_state[:, cen5_idx])],
             loc="lower left",
         )
 
     # ── RMSE comparison bar chart ─────────────────────────────────────────────
     ax_rmse = fig.add_subplot(gs[1, 2])
     ax_rmse.set_facecolor("#2b2b2b")
-    ax_rmse.set_title("Per-arc RMSE: prior / KF / EnKF", color="white", fontsize=8)
+    ax_rmse.set_title("Per-arc RMSE: prior / KF / EKF_Param", color="white", fontsize=8)
     ax_rmse.set_xlabel("Arc", color="lightgray", fontsize=7)
     ax_rmse.set_ylabel("RMSE (TECU)", color="lightgray", fontsize=7)
     ax_rmse.tick_params(colors="lightgray", labelsize=6)
     for sp in ax_rmse.spines.values():
         sp.set_edgecolor("#555")
 
-    arc_labels_kf   = kf_result["arc_labels"]
-    kf_prior_rmse   = kf_result["arc_prior_rmse"]
-    kf_post_rmse    = kf_result["arc_post_rmse"]
-    enkf_post_rmse  = enkf_result["arc_post_rmse"]
-    n_arcs          = len(arc_labels_kf)
+    arc_labels_kf  = kf_result["arc_labels"]
+    kf_prior_rmse  = kf_result["arc_prior_rmse"]
+    kf_post_rmse   = kf_result["arc_post_rmse"]
+    ekf_post_rmse  = ekf_param_result["arc_post_rmse"]
+    n_arcs         = len(arc_labels_kf)
 
     x_pos = np.arange(n_arcs, dtype=float)
     bw    = 0.24
-    ax_rmse.bar(x_pos - bw,   kf_prior_rmse,  width=bw, color="#4c72b0", alpha=0.85,
-                label=f"Prior (KF)")
-    ax_rmse.bar(x_pos,        kf_post_rmse,   width=bw, color="#55a868", alpha=0.85,
-                label=f"KF post")
-    ax_rmse.bar(x_pos + bw,   enkf_post_rmse, width=bw, color="#c44e52", alpha=0.85,
-                label=f"EnKF post")
+    ax_rmse.bar(x_pos - bw, kf_prior_rmse, width=bw, color="#4c72b0", alpha=0.85,
+                label="Prior (KF)")
+    ax_rmse.bar(x_pos,      kf_post_rmse,  width=bw, color="#55a868", alpha=0.85,
+                label="KF post")
+    ax_rmse.bar(x_pos + bw, ekf_post_rmse, width=bw, color="#2ca02c", alpha=0.85,
+                label="EKF_Param post")
     ax_rmse.set_xticks(x_pos)
     ax_rmse.set_xticklabels(arc_labels_kf, rotation=45, ha="right",
                              fontsize=6, color="lightgray")
     ax_rmse.legend(fontsize=6, facecolor="#2b2b2b", labelcolor="lightgray",
                    loc="upper right", framealpha=0.8)
 
-    # Global RMSE as text
-    gkf_rmse   = kf_result["post_rmse"]
-    genkf_rmse = enkf_result["post_rmse"]
-    gpr_rmse   = kf_result["prior_rmse"]
+    gkf_rmse  = kf_result["post_rmse"]
+    gekf_rmse = ekf_param_result["post_rmse"]
+    gpr_rmse  = kf_result["prior_rmse"]
     ax_rmse.text(0.02, 0.97,
-                 f"Global:  Prior {gpr_rmse:.2f}  KF {gkf_rmse:.2f}  EnKF {genkf_rmse:.2f} TECU",
+                 f"Global:  Prior {gpr_rmse:.2f}  KF {gkf_rmse:.2f}  EKF_P {gekf_rmse:.2f} TECU",
                  transform=ax_rmse.transAxes, fontsize=6.5, color="lightgray",
                  va="top", ha="left")
     ax_rmse.grid(axis="y", lw=0.3, alpha=0.4)
 
-    # ── TEC panels: truth / prior / KF / EnKF ────────────────────────────────
+    # ── TEC panels: truth / prior / KF / EKF_Param ────────────────────────────
     style_placed = False
-    kf_slices   = kf_result["tec_slices"]
-    enkf_slices = enkf_result["tec_slices"]
+    kf_slices  = kf_result["tec_slices"]
+    ekf_slices = ekf_param_result["tec_slices"]
 
     for i, (arc, col) in enumerate(zip(arc_truth_list, occ_colors)):
-        const  = arc["conid"]
-        label  = f"{arc['leo_id']} {const}{arc['prn_id']}"
-        tang   = arc["tang_km"]
-        ax     = tec_axes.get(const, tec_axes.get("G"))
-        ksl    = kf_slices[i]
-        esl    = enkf_slices[i]
+        const = _resolve_conid(arc)
+        label = _arc_label(arc)
+        tang  = arc["tang_km"]
+        ax    = tec_axes.get(const, tec_axes.get("G"))
+        ksl   = kf_slices[i]
+        esl   = ekf_slices[i]
 
         ax.plot(ksl["tec_truth"], tang, color=col,
                 linewidth=2.2, zorder=6, label=label)
         ax.plot(ksl["prior_tec"], tang, color=col,
                 linewidth=1.0, linestyle="--", alpha=0.55, zorder=3,
                 label="Prior" if not style_placed else None)
-        ax.plot(ksl["post_tec"], tang, color="steelblue",
+        ax.plot(ksl["post_tec"],  tang, color="steelblue",
                 linewidth=1.4, linestyle="-.", alpha=0.9, zorder=4,
                 label="KF post" if not style_placed else None)
-        ax.plot(esl["post_tec"], tang, color="darkorange",
+        ax.plot(esl["post_tec"],  tang, color="seagreen",
                 linewidth=1.4, linestyle=":", alpha=0.9, zorder=5,
-                label="EnKF post" if not style_placed else None)
+                label="EKF_P post" if not style_placed else None)
         style_placed = True
 
     for ax in tec_axes.values():
         if ax.lines:
-            ax.legend(fontsize=5, facecolor="#2b2b2b",
-                      labelcolor="lightgray", loc="best", framealpha=0.7)
+            _capped_legend(ax, fontsize=5, facecolor="#2b2b2b",
+                           labelcolor="lightgray", loc="best", framealpha=0.7)
 
     fig.suptitle(
-        f"KF vs EnKF comparison — truth {truth_time.strftime('%Y-%m-%d %H:%M')} UTC  "
+        f"KF vs EKF_Param comparison — truth {truth_time.strftime('%Y-%m-%d %H:%M')} UTC  "
         f"(+{TRUTH_HOUR_OFFSET} h, F10.7+{TRUTH_F107_DELTA:.0f})\n"
         f"Prior {gpr_rmse:.2f} TECU  →  KF {gkf_rmse:.2f} TECU  |  "
-        f"EnKF {genkf_rmse:.2f} TECU",
+        f"EKF_Param {gekf_rmse:.2f} TECU",
         color="white", fontsize=10, y=0.98,
     )
 
@@ -4615,522 +5633,57 @@ def plot_kf_enkf_comparison(
     plt.close(fig)
     print(f"  Saved: {save_path}")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# §6e  Ensemble scatter — prior vs. posterior parameter distributions
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Physical units for each of the 8 state parameters (matches PARAM_NAMES order)
-_PARAM_UNITS = [
-    "log₁₀(m⁻³)", "km", "km", "–", "km", "–", "log₁₀(m⁻³)", "km",
-]
-
-def plot_ensemble_scatter(
-    iri_ensemble: np.ndarray,
-    prior_ensemble: np.ndarray,
-    post_ensemble: np.ndarray,
-    iri_mean: np.ndarray,
-    truth_time: "pd.Timestamp | None" = None,
-    save_path: str = "./Figures/test_param_iono/ensemble_scatter.png",
-) -> None:
-    """
-    8×3 scatter figure comparing three stages of the EnKF ensemble for all 8
-    Chapman ionosphere parameters.
-
-    Column 1 — IRI draw (N_MEMBERS): the raw ensemble produced by
-    ``build_model_ensemble`` immediately after the IRI background call in
-    ``main()``.  This shows what $\\mathcal{N}(\\mu_{IRI}, Q_t)$ looks like
-    with the smaller ensemble used for forward-model diagnostics.
-
-    Column 2 — EnKF prior (ENKF_N_MEMBERS): the larger ensemble passed into
-    ``run_parametric_enkf``, captured as ``prior_ensemble_snap`` before any
-    Kalman update.  Should have the same spread as column 1 — if the two
-    columns look different the ensemble generation is inconsistent.
-
-    Column 3 — EnKF posterior (ENKF_N_MEMBERS): the analysis ensemble after
-    all ES-MDA iterations.  Spread should shrink toward the observations.
-
-    Each subplot: x-axis = geographic grid-point index, y-axis = parameter
-    value across all ensemble members.  The IRI background mean (``mean_5deg``)
-    is overlaid as a solid yellow line so the prior centre is always visible.
-
-    Parameters
-    ----------
-    iri_ensemble    : ndarray, shape (N_STATE, n_grid, N_MEMBERS)
-        Raw IRI-seeded ensemble from ``model_state.ensemble`` in ``main()``.
-    prior_ensemble  : ndarray, shape (N_STATE, n_grid, ENKF_N_MEMBERS)
-        EnKF forecast ensemble before the Kalman update
-        (``enkf_result["prior_ensemble"]``).
-    post_ensemble   : ndarray, shape (N_STATE, n_grid, ENKF_N_MEMBERS)
-        EnKF analysis ensemble after the Kalman update
-        (``enkf_result["posterior_ensemble"]``).
-    iri_mean        : ndarray, shape (N_STATE, n_grid)
-        IRI background mean (``mean_5deg``), overlaid on every subplot.
-    truth_time      : pd.Timestamp, optional
-        Assimilation time shown in the figure title.
-    save_path       : str
-        Output path for the PNG.
-    """
-    n_state = iri_ensemble.shape[0]
-    n_grid  = iri_ensemble.shape[1]
-    geo_idx = np.arange(n_grid)
-
-    BG_FIG   = "#1a1a1a"
-    BG_AX    = "#252525"
-    COL_IRI  = "#7ec8e3"   # sky-blue  — raw IRI draw
-    COL_PRI  = "#5b9bd5"   # steel-blue — EnKF prior
-    COL_PST  = "#e07b54"   # coral-orange — EnKF posterior
-    COL_MEAN = "#f5c518"   # bright yellow — IRI mean overlay
-    TXT      = "0.85"
-
-    columns = [
-        (iri_ensemble,   COL_IRI,  "IRI draw"),
-        (prior_ensemble, COL_PRI,  "EnKF prior"),
-        (post_ensemble,  COL_PST,  "EnKF posterior"),
-    ]
-    col_titles = [
-        f"IRI draw  (N = {iri_ensemble.shape[2]})",
-        f"EnKF prior  (N = {prior_ensemble.shape[2]})",
-        f"EnKF posterior  (N = {post_ensemble.shape[2]})",
-    ]
-
-    fig, axes = plt.subplots(
-        n_state, 3,
-        figsize=(19, 2.6 * n_state),
-        facecolor=BG_FIG,
-        gridspec_kw=dict(wspace=0.38, hspace=0.55,
-                         left=0.07, right=0.98, top=0.95, bottom=0.03),
-    )
-
-    time_str = f"  —  {truth_time.strftime('%Y-%m-%d %H:%M UT')}" if truth_time is not None else ""
-    fig.suptitle(
-        f"Ensemble Parameter Scatter  |  IRI draw · EnKF prior · EnKF posterior{time_str}",
-        color=TXT, fontsize=11, y=0.975,
-    )
-
-    for k in range(n_state):
-        param_name = PARAM_NAMES[k]
-        unit       = _PARAM_UNITS[k]
-        ylabel     = f"{param_name}\n({unit})"
-
-        for col, (ensemble, col_color, col_label) in enumerate(columns):
-            n_members = ensemble.shape[2]
-            x_all     = np.repeat(geo_idx, n_members)
-            y_all     = ensemble[k, :, :].ravel(order="C")
-
-            ax = axes[k, col]
-            ax.set_facecolor(BG_AX)
-            for sp in ax.spines.values():
-                sp.set_color("0.35")
-            ax.tick_params(colors=TXT, labelsize=7)
-            ax.xaxis.label.set_color(TXT)
-            ax.yaxis.label.set_color(TXT)
-
-            ax.scatter(
-                x_all, y_all,
-                s=1.5, alpha=0.07, color=col_color,
-                linewidths=0, rasterized=True,
-            )
-
-            ax.plot(
-                geo_idx, iri_mean[k],
-                color=COL_MEAN, lw=1.2, zorder=5,
-            )
-
-            ax.set_xlim(-0.5, n_grid - 0.5)
-            ax.set_xlabel("Grid-point index", color=TXT, fontsize=7)
-            # Only label y-axis on the leftmost column to save space
-            if col == 0:
-                ax.set_ylabel(ylabel, color=TXT, fontsize=7)
-            else:
-                ax.set_ylabel("")
-                ax.tick_params(labelleft=False)
-
-            if k == 0:
-                ax.set_title(col_titles[col], color=TXT, fontsize=9)
-
-            if k == 0 and col == 0:
-                ax.legend(
-                    handles=[
-                        mpatches.Patch(color=COL_IRI,  label="IRI draw",       alpha=0.7),
-                        mpatches.Patch(color=COL_PRI,  label="EnKF prior",     alpha=0.7),
-                        mpatches.Patch(color=COL_PST,  label="EnKF posterior", alpha=0.7),
-                        Line2D([0], [0], color=COL_MEAN, lw=1.5, label="IRI mean"),
-                    ],
-                    fontsize=6, facecolor=BG_AX, labelcolor=TXT,
-                    framealpha=0.8, loc="upper right",
-                )
-
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    fig.savefig(save_path, dpi=150, bbox_inches="tight",
-                facecolor=fig.get_facecolor())
-    plt.close(fig)
-    print(f"  Saved: {save_path}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────
-# §15  scipy non-linear optimisation
-# ─────────────────────────────────────────────────────────────────────────────
-
-class _FakeEdsOcc:
-    """Minimal stand-in for EdsOccultation exposing .geolocation."""
-    def __init__(self, grid_lats: np.ndarray, grid_lons: np.ndarray) -> None:
-        # col0=lon, col1=lat — matches demo_compare_kf_enkf convention
-        self.geolocation = np.column_stack([grid_lons, grid_lats])
-
-
-def _build_scipy_opt_res_kf(
-    parsed_list: list[dict],
-    arc_truth_list: list[dict],
-    prior_edp: np.ndarray,
-    grid_lats_5deg: np.ndarray,
-    grid_lons_5deg: np.ndarray,
-    time_dt: pd.Timestamp,
-) -> dict:
-    """
-    Build the res_kf-style dict expected by _run_parametric_optimization from
-    test_param_iono.py data structures.
-
-    LEO/GNSS positions are decimated using the same stride logic as
-    _build_arc_rays so that cl["tec"] = tec_truth aligns epoch-for-epoch.
-
-    Parameters
-    ----------
-    prior_edp : ndarray, shape (n_alt, n_grid)
-        IRI prior electron-density profiles on the 5-deg model grid.
-        Computed from the IRI mean state independently of any filter result.
-    """
-    clean_list: list[dict] = []
-    for parsed, arc_truth in zip(parsed_list, arc_truth_list):
-        leo_full  = parsed["LEO"]                          # (3, n_eps)
-        gnss_full = parsed["GNSS"]                         # (3, n_eps)
-        tang_full = np.asarray(parsed["tangent_alt_km"])   # (n_eps,)
-        n_eps     = leo_full.shape[1]
-
-        if n_eps > MAX_EPOCHS:
-            stride  = int(np.ceil(n_eps / MAX_EPOCHS))
-            dec_idx = np.arange(0, n_eps, stride)
-            deepest = int(np.argmin(tang_full))
-            if deepest not in dec_idx:
-                dec_idx = np.sort(np.append(dec_idx, deepest))
-        else:
-            dec_idx = np.arange(n_eps)
-
-        clean_list.append(dict(
-            LEO        = leo_full[:, dec_idx],
-            GNSS       = gnss_full[:, dec_idx],
-            tec        = arc_truth["tec_truth"],
-            tangent_km = arc_truth["tang_km"],
-        ))
-
-    return dict(
-        eds_occ      = _FakeEdsOcc(grid_lats_5deg, grid_lons_5deg),
-        clean_list   = clean_list,
-        prior_edp_3d = prior_edp,
-        time_window  = time_dt.strftime("%Y-%m-%d_%H%M"),
-    )
-
-
-def run_scipy_optimization(
-    parsed_list: list[dict],
-    arc_truth_list: list[dict],
-    prior_edp: np.ndarray,
-    grid_lats_5deg: np.ndarray,
-    grid_lons_5deg: np.ndarray,
-    alt_grid: np.ndarray,
-    time_dt: pd.Timestamp,
-    save_dir: str = SAVE_DIR,
-) -> dict[str, dict]:
-    """
-    Run the five scipy non-linear optimisation methods
-    (BFGS, Nelder-Mead, Newton-CG, SLSQP, trust-constr) against the
-    truth sTEC observations from the EnKF retrieval experiment.
-
-    Parameters
-    ----------
-    prior_edp : ndarray, shape (n_alt, n_grid)
-        IRI prior electron-density profiles on the 5-deg model grid.
-        Built from the IRI mean state and passed in directly so this function
-        does not depend on any filter (EnKF / KF) having been run first.
-
-    Returns a dict keyed by method name; each value has the same structure as
-    the res_kf / res_enkf result dicts.
-    """
-    res_kf_opt = _build_scipy_opt_res_kf(
-        parsed_list, arc_truth_list, prior_edp,
-        grid_lats_5deg, grid_lons_5deg, time_dt,
-    )
-    return _run_parametric_optimization(
-        res_kf                = res_kf_opt,
-        alt_grid              = alt_grid,
-        save_dir              = save_dir,
-        group_key             = time_dt.strftime("%Y-%m-%d_%H%M"),
-        sigma_obs_tecu        = SCIPY_OPT_SIGMA_OBS,
-        n_update_rays         = SCIPY_OPT_UPDATE_RAYS,
-        maxiter_unconstrained = SCIPY_OPT_MAXITER_UNC,
-        maxiter_constrained   = SCIPY_OPT_MAXITER_CON,
-        n_workers             = SCIPY_OPT_N_WORKERS,
-    )
-
-
-def plot_scipy_opt_results(
-    arc_truth_list: list[dict],
-    opt_results: dict[str, dict],
-    alt_grid: np.ndarray,
-    time_dt: pd.Timestamp,
-    enkf_result: dict | None = None,
-    save_dir: str = SAVE_DIR,
-    n_tec_shown: int = 3,
-) -> str:
-    """
-    Six-panel comparison of the scipy optimisation methods (optionally versus
-    the EnKF when enkf_result is supplied).
-
-    Layout (3 rows × 2 cols):
-    [0,0]  Prior TEC profiles         [0,1]  Posterior TEC (all methods)
-    [1,0]  Prior EDP spaghetti        [1,1]  Posterior EDP mean by method
-    [2,0]  TEC RMSE bar chart         [2,1]  Grid-mean log10(NmF2) by method
-    """
-    from matplotlib.lines import Line2D
-    from matplotlib.gridspec import GridSpec
-
-    os.makedirs(save_dir, exist_ok=True)
-    n_occ  = len(arc_truth_list)
-    n_alt  = len(alt_grid)
-    shown  = list(range(min(n_tec_shown, n_occ)))
-    cmap_occ = mpl.colormaps.get_cmap("tab10")
-    occ_cols = [cmap_occ(i % 10) for i in shown]
-
-    # Prior EDP comes from the first opt_result (all methods share the same IRI prior).
-    _first_opt = next(iter(opt_results.values()))
-    prior_edp  = np.asarray(_first_opt["prior_edp_3d"])   # (n_alt, n_geo)
-    n_geo      = prior_edp.shape[1] if prior_edp.ndim == 2 else int(prior_edp.size / n_alt)
-    prior_edp  = prior_edp.reshape(n_alt, n_geo)
-
-    style_map: dict[str, tuple[str, str, str]] = {
-        **(_OPT_METHOD_STYLES if enkf_result is None
-           else {"EnKF": ("darkorange", "-.", "s"), **_OPT_METHOD_STYLES}),
-    }
-    all_methods = (
-        list(_OPT_METHOD_STYLES.keys()) if enkf_result is None
-        else ["EnKF"] + list(_OPT_METHOD_STYLES.keys())
-    )
-
-    first_opt_slices = _first_opt["tec_slices"]
-    post_edp_enkf = enkf_result["posterior_edp"] if enkf_result is not None else None
-
-    fig = plt.figure(figsize=(18, 20))
-    _vs_str = " vs EnKF" if enkf_result is not None else ""
-    fig.suptitle(
-        f"scipy Non-Linear Optimisation{_vs_str} — {time_dt:%Y-%m-%d %H:%M}",
-        fontsize=13, y=0.99,
-    )
-    gs = GridSpec(3, 2, figure=fig, wspace=0.35, hspace=0.50,
-                  height_ratios=[1, 1, 0.9])
-    ax_tec_pr = fig.add_subplot(gs[0, 0])
-    ax_tec_po = fig.add_subplot(gs[0, 1], sharey=ax_tec_pr, sharex=ax_tec_pr)
-    ax_edp_pr = fig.add_subplot(gs[1, 0])
-    ax_edp_po = fig.add_subplot(gs[1, 1], sharey=ax_edp_pr, sharex=ax_edp_pr)
-    ax_rmse   = fig.add_subplot(gs[2, 0])
-    ax_nmf2   = fig.add_subplot(gs[2, 1])
-
-    # ── [0,0] Prior TEC ──────────────────────────────────────────────────────
-    ax = ax_tec_pr
-    for si, i in enumerate(shown):
-        arc = arc_truth_list[i]
-        ax.plot(arc["tec_truth"], arc["tang_km"],
-                color=occ_cols[si], lw=2.0,
-                label=f"{arc['conid']}{arc['prn_id']}")
-        sl = first_opt_slices[i]
-        ax.plot(sl["prior_tec"], sl["tangent_km"],
-                color="gray", lw=1.2, ls="--", alpha=0.7,
-                label="Prior" if si == 0 else "_")
-    ax.set_xlabel("TEC (TECU)", fontsize=10)
-    ax.set_ylabel("Tangent Altitude (km)", fontsize=10)
-    ax.set_title("Prior TEC (IRI)", fontsize=10)
-    ax.legend(fontsize=7, loc="upper right", framealpha=0.85)
-    ax.grid(True, alpha=0.3, ls=":")
-
-    # ── [0,1] Posterior TEC ──────────────────────────────────────────────────
-    ax = ax_tec_po
-    for si, i in enumerate(shown):
-        arc = arc_truth_list[i]
-        ax.plot(arc["tec_truth"], arc["tang_km"], color=occ_cols[si], lw=2.0)
-    for mname in all_methods:
-        col, ls, _ = style_map[mname]
-        if mname == "EnKF" and enkf_result is not None:
-            for si, i in enumerate(shown):
-                sl = enkf_result["tec_slices"][i]
-                ax.plot(sl["post_tec"], sl["tang_km"],
-                        color=col, lw=1.4, ls=ls, alpha=0.85)
-        elif mname != "EnKF":
-            for si, i in enumerate(shown):
-                sl = opt_results[mname]["tec_slices"][i]
-                ax.plot(sl["post_tec"], sl["tangent_km"],
-                        color=col, lw=1.4, ls=ls, alpha=0.85)
-    legend_po = (
-        [Line2D([0], [0], color="gray", lw=2.0, label="Truth TEC")] +
-        [Line2D([0], [0], color=style_map[m][0], lw=1.4,
-                ls=style_map[m][1], label=m)
-         for m in all_methods]
-    )
-    ax.legend(handles=legend_po, fontsize=7, loc="upper right", framealpha=0.85)
-    ax.set_xlabel("TEC (TECU)", fontsize=10)
-    ax.set_title("Posterior TEC", fontsize=10)
-    ax.grid(True, alpha=0.3, ls=":")
-
-    # ── [1,0] Prior EDP spaghetti ─────────────────────────────────────────────
-    ax = ax_edp_pr
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        for g in range(n_geo):
-            ax.plot(prior_edp[:, g], alt_grid,
-                    color="steelblue", lw=0.5, alpha=0.3)
-        ax.plot(prior_edp.mean(axis=1), alt_grid,
-                color="steelblue", lw=2.5, label="IRI prior mean")
-    ax.set_xlabel("Electron Density (m⁻³)", fontsize=10)
-    ax.set_ylabel("Altitude (km)", fontsize=10)
-    ax.set_title("Prior EDP (all grid points)", fontsize=10)
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3, ls=":")
-    ax.set_ylim(bottom=0)
-
-    # ── [1,1] Posterior EDP (grid-point mean per method) ─────────────────────
-    ax = ax_edp_po
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        ax.plot(prior_edp.mean(axis=1), alt_grid,
-                color="gray", lw=1.5, ls="--", alpha=0.7, label="Prior")
-        if post_edp_enkf is not None:
-            col_enkf, ls_enkf, _ = style_map["EnKF"]
-            ax.plot(post_edp_enkf.mean(axis=1), alt_grid,
-                    color=col_enkf, lw=2.5, ls=ls_enkf, label="EnKF")
-        for mname, (col, ls, _) in _OPT_METHOD_STYLES.items():
-            post_edp = np.asarray(
-                opt_results[mname]["post_edp_3d"]
-            ).reshape(n_alt, n_geo)
-            ax.plot(post_edp.mean(axis=1), alt_grid,
-                    color=col, lw=1.8, ls=ls, label=mname)
-    ax.set_xlabel("Electron Density (m⁻³)", fontsize=10)
-    ax.set_title("Posterior EDP (grid-point mean)", fontsize=10)
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3, ls=":")
-    ax.set_ylim(bottom=0)
-
-    # Colour-coded parameter readout (grid-point mean state per method).
-    post_entries = []
-    if post_edp_enkf is not None and enkf_result.get("posterior_mean_5deg") is not None:
-        post_entries.append((
-            "EnKF", style_map["EnKF"][0],
-            enkf_result["posterior_mean_5deg"].mean(axis=1),
-        ))
-    for mname, (col, ls, _) in _OPT_METHOD_STYLES.items():
-        pmean = opt_results[mname].get("post_mean_state")
-        if pmean is not None:
-            post_entries.append((mname, col, pmean.mean(axis=1)))
-    _draw_param_boxes(ax, post_entries, loc="lower left")
-
-    # ── [2,0] TEC RMSE bar chart ──────────────────────────────────────────────
-    ax = ax_rmse
-    prior_rmses = (
-        ([float(enkf_result["prior_rmse"])] if enkf_result is not None else []) +
-        [float(opt_results[m]["prior_tec_rmse"]) for m in _OPT_METHOD_STYLES]
-    )
-    post_rmses = (
-        ([float(enkf_result["post_rmse"])] if enkf_result is not None else []) +
-        [float(opt_results[m]["post_tec_rmse"]) for m in _OPT_METHOD_STYLES]
-    )
-    x_pos  = np.arange(len(all_methods))
-    bar_w  = 0.35
-    bar_col = [style_map[m][0] for m in all_methods]
-    ax.bar(x_pos - bar_w / 2, prior_rmses, bar_w,
-           color="lightgray", edgecolor="black", lw=0.8, label="Prior")
-    ax.bar(x_pos + bar_w / 2, post_rmses, bar_w,
-           color=bar_col, edgecolor="black", lw=0.8, label="Posterior", alpha=0.85)
-    for xi, (pr, po) in enumerate(zip(prior_rmses, post_rmses)):
-        ax.text(xi - bar_w / 2, pr + 0.02, f"{pr:.2f}",
-                ha="center", va="bottom", fontsize=7)
-        ax.text(xi + bar_w / 2, po + 0.02, f"{po:.2f}",
-                ha="center", va="bottom", fontsize=7)
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(all_methods, rotation=25, ha="right", fontsize=9)
-    ax.set_ylabel("TEC RMSE (TECU)", fontsize=10)
-    ax.set_title("Prior vs. Posterior TEC RMSE", fontsize=10)
-    ax.legend(fontsize=9)
-    ax.grid(True, axis="y", alpha=0.3, ls=":")
-
-    # ── [2,1] Grid-mean log10(NmF2) per method ───────────────────────────────
-    ax = ax_nmf2
-    prior_nmf2 = float(np.log10(np.maximum(prior_edp.max(axis=0), 1.0)).mean())
-    post_nmf2s = (
-        [float(np.log10(np.maximum(post_edp_enkf.max(axis=0), 1.0)).mean())]
-        if post_edp_enkf is not None else []
-    ) + [
-        float(np.log10(np.maximum(
-            np.asarray(opt_results[m]["post_edp_3d"]).reshape(n_alt, n_geo).max(axis=0),
-            1.0
-        )).mean())
-        for m in _OPT_METHOD_STYLES
-    ]
-    ax.axhline(prior_nmf2, color="gray", lw=1.5, ls="--",
-               label=f"Prior ({prior_nmf2:.2f})")
-    ax.bar(x_pos, post_nmf2s, 0.6, color=bar_col,
-           edgecolor="black", lw=0.8, alpha=0.85)
-    for xi, v in enumerate(post_nmf2s):
-        ax.text(xi, v + 0.003, f"{v:.2f}",
-                ha="center", va="bottom", fontsize=7)
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(all_methods, rotation=25, ha="right", fontsize=9)
-    ax.set_ylabel("Mean log₁₀(NmF2) (m⁻³)", fontsize=10)
-    ax.set_title("Posterior Grid-Mean log₁₀(NmF2)", fontsize=10)
-    ax.legend(fontsize=9)
-    ax.grid(True, axis="y", alpha=0.3, ls=":")
-
-    plt.tight_layout(rect=[0, 0, 1, 0.98])
-    plot_path = os.path.join(save_dir, f"scipy_opt_comparison_{YYYY}_{DOY:03d}.png")
-    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"\n  scipy optimisation comparison plot → {plot_path}")
-    return plot_path
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# §6 (continued)  main() — EnKF retrieval experiment steps
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _run_enkf_retrieval_experiment(
     parsed_list: list[dict],
     meta_list: list[dict],
     mean_5deg: np.ndarray,
-    iri_ensemble: np.ndarray,
     grid_lats_1deg: np.ndarray,
     grid_lons_1deg: np.ndarray,
     grid_lats_5deg: np.ndarray,
     grid_lons_5deg: np.ndarray,
     time_dt: pd.Timestamp,
     save_dir: str = SAVE_DIR,
-) -> None:
+    save_suffix: str = "",
+    mode: str = "ro_igs",
+    igs_sim_geometry: list[dict] | None = None,
+) -> dict:
     """
-    Execute the full filter retrieval experiment (EnKF + gridded Ne KF)
-    and produce all diagnostic plots.
+    Execute the filter retrieval experiment (gridded Ne KF + EKF_Param)
+    and produce all diagnostic plots for one observation mode.
+
+    Parameters
+    ----------
+    mode : {"ro_only", "ro_igs", "igs_only"}
+        Selects which observations to feed the filters:
+          - "ro_only":  arc_truth_list = RO arcs only          (parsed_list).
+          - "ro_igs":   arc_truth_list = RO + simulated IGS.
+          - "igs_only": arc_truth_list = simulated IGS only    (no RO).
+        The caller is responsible for supplying grids/mean_5deg that make
+        sense for the mode — for igs_only, those should be built from IGS
+        pierce points rather than RO tangent tracks.
+    igs_sim_geometry : list[dict] | None
+        Pre-built (geometry-only) simulated IGS arcs from _build_igs_sim_arcs.
+        Required for "ro_igs" and "igs_only"; ignored for "ro_only".
 
     Steps
     -----
-    7  . Build truth ionosphere on the 1×1 Fibonacci grid (+1 h, F10.7+Δ).
-         Also evaluate the truth at the 5×5 model grid for error comparison.
-    8  . Generate synthetic sTEC measurements from the truth state.
-    9  . Build shared prior ensemble (n=ENKF_N_MEMBERS).
-    9a . Run ParametricEnKF (ES-MDA) — assimilate into Chapman-param state.
-    9b . Run Gridded Ne KF (linear, single-step) — assimilate into Ne-space state.
-    10 . Plot: EnKF TEC profiles + globe + EDP spaghetti.
-    11 . Plot: EnKF per-arc innovation diagnostic.
-    11b. Plot: KF per-arc innovation diagnostic.
-    12 . Plot: EnKF 5×2 EDP spatial error.
-    12b. Plot: KF 5×2 EDP spatial error.
-    13 . Plot: 8×2 parameter spatial error (EnKF only — KF has no param state).
-    14 . Plot: KF vs EnKF comparison (TEC, EDP, RMSE bar chart).
+    7   . Build truth ionosphere on the 1×1 Fibonacci grid (+1 h, F10.7+Δ).
+          Also evaluate the truth at the 5×5 model grid for error comparison.
+    8   . Generate synthetic sTEC measurements from the truth state.
+    9b  . Run Gridded Ne KF (linear, single-step) — assimilate into Ne-space state.
+    9c  . Plot: KF covariance panels (alt-alt + horizontal).
+    9f  . Run EKF_Param (iterative EKF on parametric IRI state).
+    10b . Plot: KF TEC profiles + globe + EDP spaghetti.
+    10c . Plot: EKF_Param TEC profiles + globe + EDP spaghetti.
+    11b . Plot: KF per-arc innovation diagnostic.
+    11c . Plot: EKF_Param per-arc innovation diagnostic.
+    12b . Plot: KF 5×3 EDP spatial error.
+    12c . Plot: EKF_Param 5×2 EDP spatial error.
+    14  . Plot: KF vs EKF_Param comparison (TEC, EDP, RMSE bar chart).
     """
+    if mode not in FILTER_MODES:
+        raise ValueError(f"unknown mode={mode!r}; expected one of {FILTER_MODES}")
+    print(f"\n  [mode={mode}]  save_suffix={save_suffix!r}")
     # ── Step 7: truth ionosphere ──────────────────────────────────────────────
     print("\n" + "=" * 60)
     print(f"Step 7: Building truth ionosphere "
@@ -5156,38 +5709,65 @@ def _run_enkf_retrieval_experiment(
     print(f"  Truth 5-deg: {truth_state_5deg.n_grid_points} grid points")
 
     # ── Step 8: truth TEC measurements ───────────────────────────────────────
-    print(f"\nStep 8: Generating truth sTEC from {len(parsed_list)} arcs …")
-    arc_truth_list = generate_truth_tec(
-        parsed_list, truth_state_1deg,
-        grid_lats_1deg, grid_lons_1deg, ALT_GRID,
-    )
+    # Mode selects which arcs enter arc_truth_list; the KF and EKF see it as a
+    # plain arc list without any special handling per mode.
+    arc_truth_list: list[dict] = []
 
-    # IRI prior EDP on the 5-deg model grid — built once here so that scipy
-    # optimisation can run independently of any filter.
-    _prior_scipy_state = IonosphericState(grid_lats_5deg.size, n_members=1)
-    _prior_scipy_state.ensemble = mean_5deg[:, :, np.newaxis].copy()
-    prior_edp_5deg = _parametric_to_edp(
-        _prior_scipy_state, _prior_scipy_state.ensemble, ALT_GRID
-    )
-
-    enkf_result = None
-    kf_result   = None
-
-    # ── Step 9a: EnKF assimilation ────────────────────────────────────────────
-    if RUN_ENKF:
-        print(f"\nStep 9a: Running ParametricEnKF "
-              f"({ENKF_N_MEMBERS} members, ES-MDA {ENKF_N_MDA} iter) …")
-        model_state_enkf = build_model_ensemble(
-            mean_5deg, grid_lats_5deg, grid_lons_5deg,
-            n_members=ENKF_N_MEMBERS, corr_length_km=CORR_LENGTH_KM,
-        )
-        enkf_result = run_parametric_enkf(
-            arc_truth_list, model_state_enkf,
-            grid_lats_5deg, grid_lons_5deg, ALT_GRID,
-            apply_bounds = ENKF_APPLY_BOUNDS,
+    if mode in ("ro_only", "ro_igs"):
+        print(f"\nStep 8: Generating truth sTEC from {len(parsed_list)} RO arcs …")
+        arc_truth_list = generate_truth_tec(
+            parsed_list, truth_state_1deg,
+            grid_lats_1deg, grid_lons_1deg, ALT_GRID,
         )
     else:
-        print("\n  [skip] EnKF disabled (RUN_ENKF = False)")
+        print(f"\nStep 8: [mode=igs_only] skipping RO truth TEC "
+              f"({len(parsed_list)} RO arcs available but not assimilated).")
+
+    # ── Step 8b: augment with simulated IGS ground-station arcs (per mode) ───
+    # Real IGS station coordinates + real GNSS satellite ECEF positions from
+    # the day's broadcast ephemeris, forward-modelled through the same truth
+    # state as the RO arcs.  For "igs_only" this fully replaces the RO block;
+    # for "ro_igs" it appends.
+    if mode in ("ro_igs", "igs_only"):
+        if not igs_sim_geometry:
+            print(f"\nStep 8b: [mode={mode}] no IGS-sim geometry supplied — "
+                  f"arc_truth_list will be empty for this pass.")
+        else:
+            print(f"\nStep 8b: Forward-modelling {len(igs_sim_geometry)} "
+                  f"simulated IGS arcs through the truth state …")
+            igs_arcs = generate_simulated_igs_tec(
+                igs_sim_geometry, truth_state_1deg,
+                grid_lats_1deg, grid_lons_1deg, ALT_GRID,
+            )
+            n_ro_arcs  = len(arc_truth_list)
+            n_ro_rays  = sum(len(a["rays"]) for a in arc_truth_list)
+            arc_truth_list.extend(igs_arcs)
+            n_igs_rays = sum(len(a["rays"]) for a in igs_arcs)
+            print(f"  [IGS-sim] Added {len(igs_arcs)} arcs / {n_igs_rays} rays  "
+                  f"→ arc_truth_list: {n_ro_arcs} RO + {len(igs_arcs)} IGS = "
+                  f"{len(arc_truth_list)} arcs  "
+                  f"({n_ro_rays + n_igs_rays} total rays).")
+
+    if not arc_truth_list:
+        print(f"  [mode={mode}] arc_truth_list is empty — skipping filters "
+              f"for this pass.")
+        return {
+            "mode":             mode,
+            "prior_rmse":       None,
+            "kf_result":        None,
+            "ekf_param":        None,
+            "arc_truth_list":   [],
+            "truth_time":       truth_time,
+            "truth_ne_1deg":    truth_ne_1deg,
+            "truth_ne_5deg":    truth_ne_5deg,
+            "truth_mean_5deg":  truth_mean_5deg,
+            "grid_lats_1deg":   grid_lats_1deg,
+            "grid_lons_1deg":   grid_lons_1deg,
+            "grid_lats_5deg":   grid_lats_5deg,
+            "grid_lons_5deg":   grid_lons_5deg,
+        }
+
+    kf_result   = None
 
     # ── Step 9b: Gridded Ne KF assimilation ──────────────────────────────────
     if RUN_KF:
@@ -5242,42 +5822,7 @@ def _run_enkf_retrieval_experiment(
             grid_lats_5deg = grid_lats_5deg,
             grid_lons_5deg = grid_lons_5deg,
             truth_time     = truth_time,
-            save_path      = os.path.join(save_dir, f"kf_covariance_{YYYY}_{DOY:03d}.png"),
-        )
-
-    # ── Step 9d: EnKF covariance panels ──────────────────────────────────────
-    if enkf_result is not None:
-        print("\nStep 9d: Plotting EnKF covariance panels (8×8 param + NmF2 spatial) …")
-        plot_enkf_covariance_panels(
-            prior_ensemble = enkf_result["prior_ensemble"],
-            post_ensemble  = enkf_result["posterior_ensemble"],
-            grid_lats_5deg = grid_lats_5deg,
-            grid_lons_5deg = grid_lons_5deg,
-            truth_time     = truth_time,
-            save_path      = os.path.join(save_dir, f"enkf_covariance_{YYYY}_{DOY:03d}.png"),
-        )
-
-    # ── Step 9e: ensemble scatter (8×2 prior vs. posterior) ─────────────────
-    if enkf_result is not None:
-        print("\nStep 9e: Plotting ensemble parameter scatter (8×2 prior vs. posterior) …")
-        plot_ensemble_scatter(
-            iri_ensemble   = iri_ensemble,
-            prior_ensemble = enkf_result["prior_ensemble"],
-            post_ensemble  = enkf_result["posterior_ensemble"],
-            iri_mean       = mean_5deg,
-            truth_time     = truth_time,
-            save_path      = os.path.join(save_dir, f"ensemble_scatter_{YYYY}_{DOY:03d}.png"),
-        )
-
-    # ── Step 10: TEC + globe + EDP plot (EnKF) ───────────────────────────────
-    if enkf_result is not None:
-        print("\nStep 10: Plotting EnKF TEC profiles, globe, and EDP spaghetti …")
-        plot_enkf_tec_edp(
-            arc_truth_list, enkf_result, truth_ne_1deg,
-            grid_lats_1deg, grid_lons_1deg,
-            grid_lats_5deg, grid_lons_5deg,
-            ALT_GRID, truth_time,
-            save_path=os.path.join(save_dir, f"enkf_tec_edp_{YYYY}_{DOY:03d}.png"),
+            save_path      = os.path.join(save_dir, f"kf_covariance_{YYYY}_{DOY:03d}{save_suffix}.png"),
         )
 
     # ── Step 10b: TEC + globe + EDP plot (KF) ────────────────────────────────
@@ -5288,7 +5833,7 @@ def _run_enkf_retrieval_experiment(
             grid_lats_1deg, grid_lons_1deg,
             grid_lats_5deg, grid_lons_5deg,
             ALT_GRID, truth_time,
-            save_path=os.path.join(save_dir, f"kf_tec_edp_{YYYY}_{DOY:03d}.png"),
+            save_path=os.path.join(save_dir, f"kf_tec_edp_{YYYY}_{DOY:03d}{save_suffix}.png"),
         )
 
     # ── Step 10c: TEC + globe + EDP plot (EKF_Param) ─────────────────────────
@@ -5312,31 +5857,9 @@ def _run_enkf_retrieval_experiment(
                 f"({ekf_param_result['n_iterations']} iters, "
                 f"{'converged' if ekf_param_result['converged'] else 'not converged'})"
             ),
-            save_path=os.path.join(save_dir, f"ekf_param_tec_edp_{YYYY}_{DOY:03d}.png"),
+            save_path=os.path.join(save_dir, f"ekf_param_tec_edp_{YYYY}_{DOY:03d}{save_suffix}.png"),
             prior_mean_state=ekf_param_result["prior_mean_state"],
             post_mean_state=ekf_param_result["posterior_mean_5deg"],
-        )
-
-    # ── Step 11: arc innovation diagnostic (EnKF) ────────────────────────────
-    if enkf_result is not None:
-        print("\nStep 11: Plotting EnKF per-arc innovation diagnostic …")
-        _plot_arc_innovation_diagnostic(
-            arc_labels          = enkf_result["arc_labels"],
-            arc_prior_mean      = enkf_result["arc_prior_mean"],
-            arc_post_mean       = enkf_result["arc_post_mean"],
-            arc_prior_rmse      = enkf_result["arc_prior_rmse"],
-            arc_post_rmse       = enkf_result["arc_post_rmse"],
-            arc_lats            = enkf_result["arc_lats"],
-            arc_lons            = enkf_result["arc_lons"],
-            all_prior           = enkf_result["all_prior_resid"],
-            all_post_main       = enkf_result["all_post_resid"],
-            group_key           = f"{YYYY}_{DOY:03d}_enkf",
-            save_dir            = save_dir,
-            filter_name         = "ParametricEnKF",
-            prior_rmse          = enkf_result["prior_rmse"],
-            post_rmse           = enkf_result["post_rmse"],
-            mda_arc_means_list  = enkf_result["mda_arc_means_list"],
-            mda_flat_list       = enkf_result["mda_flat_list"],
         )
 
     # ── Step 11b: arc innovation diagnostic (KF) ──────────────────────────────
@@ -5352,7 +5875,7 @@ def _run_enkf_retrieval_experiment(
             arc_lons            = kf_result["arc_lons"],
             all_prior           = kf_result["all_prior_resid"],
             all_post_main       = kf_result["all_post_resid"],
-            group_key           = f"{YYYY}_{DOY:03d}_kf",
+            group_key           = f"{YYYY}_{DOY:03d}{save_suffix}_kf",
             save_dir            = save_dir,
             filter_name         = "GriddedNeKF",
             prior_rmse          = kf_result["prior_rmse"],
@@ -5374,23 +5897,13 @@ def _run_enkf_retrieval_experiment(
             arc_lons           = ekf_param_result["arc_lons"],
             all_prior          = ekf_param_result["all_prior_resid"],
             all_post_main      = ekf_param_result["all_post_resid"],
-            group_key          = f"{YYYY}_{DOY:03d}_ekf_param",
+            group_key          = f"{YYYY}_{DOY:03d}{save_suffix}_ekf_param",
             save_dir           = save_dir,
             filter_name        = "EKF_Param",
             prior_rmse         = ekf_param_result["prior_rmse"],
             post_rmse          = ekf_param_result["post_rmse"],
             mda_arc_means_list = None,
             mda_flat_list      = None,
-        )
-
-    # ── Step 12: EDP spatial error (5×2) — EnKF ──────────────────────────────
-    if enkf_result is not None:
-        print("\nStep 12: Plotting EnKF EDP spatial error (5×2 orthographic) …")
-        plot_edp_spatial_error(
-            truth_ne_5deg, enkf_result["posterior_ne_5deg"],
-            grid_lats_5deg, grid_lons_5deg, ALT_GRID,
-            truth_time=truth_time,
-            save_path=os.path.join(save_dir, f"edp_spatial_error_{YYYY}_{DOY:03d}.png"),
         )
 
     # ── Step 12b: EDP spatial error (5×3) — KF with truth column ─────────────
@@ -5400,8 +5913,7 @@ def _run_enkf_retrieval_experiment(
             truth_ne_5deg, kf_result["posterior_ne_5deg"],
             grid_lats_5deg, grid_lons_5deg, ALT_GRID,
             truth_time=truth_time,
-            show_truth_col=True,
-            save_path=os.path.join(save_dir, f"edp_spatial_error_kf_{YYYY}_{DOY:03d}.png"),
+            save_path=os.path.join(save_dir, f"edp_spatial_error_kf_{YYYY}_{DOY:03d}{save_suffix}.png"),
         )
 
     # ── Step 12c: EDP spatial error — EKF_Param ──────────────────────────────
@@ -5411,56 +5923,16 @@ def _run_enkf_retrieval_experiment(
             truth_ne_5deg, ekf_param_result["posterior_ne_5deg"],
             grid_lats_5deg, grid_lons_5deg, ALT_GRID,
             truth_time=truth_time,
-            save_path=os.path.join(save_dir, f"edp_spatial_error_ekf_param_{YYYY}_{DOY:03d}.png"),
+            save_path=os.path.join(save_dir, f"edp_spatial_error_ekf_param_{YYYY}_{DOY:03d}{save_suffix}.png"),
         )
 
-    # ── Step 13: parameter spatial error (8×2) — EnKF only ───────────────────
-    if enkf_result is not None:
-        print("\nStep 13: Plotting parameter spatial error (8×2 orthographic) …")
-        plot_parameter_spatial_error(
-            truth_mean_5deg, enkf_result["posterior_mean_5deg"],
-            grid_lats_5deg, grid_lons_5deg,
-            truth_time=truth_time,
-            save_path=os.path.join(save_dir, f"param_spatial_error_{YYYY}_{DOY:03d}.png"),
-        )
-
-    # ── Step 13b: EnKF Δ log10(NmF2) — filter vs. required correction ────────
-    if enkf_result is not None:
-        print("\nStep 13b: Plotting EnKF Δ log10(NmF2) correction comparison …")
-        plot_enkf_delta_nmf2(
-            enkf_result["prior_edp"], enkf_result["posterior_mean_5deg"], truth_mean_5deg,
-            grid_lats_5deg, grid_lons_5deg,
-            truth_time=truth_time,
-            save_path=os.path.join(save_dir, f"enkf_delta_nmf2_{YYYY}_{DOY:03d}.png"),
-        )
-
-    # ── Step 13c: log10(NmF2) vs. grid-point index ───────────────────────────
-    if kf_result is not None and enkf_result is not None:
-        print("\nStep 13c: Plotting log10(NmF2) by grid-point index …")
-        plot_nmf2_by_index(
-            mean_5deg, kf_result, enkf_result, truth_mean_5deg,
-            grid_lats_5deg, grid_lons_5deg,
-            truth_time=truth_time,
-            save_path=os.path.join(save_dir, f"nmf2_by_index_{YYYY}_{DOY:03d}.png"),
-        )
-
-    # ── Step 13d: EDP profiles — prior / posterior / ΔNe (KF top, EnKF bottom) ─
-    if kf_result is not None and enkf_result is not None:
-        print("\nStep 13d: Plotting EDP profile comparison (KF vs EnKF) …")
-        plot_edp_profiles_kf_enkf(
-            kf_result, enkf_result, truth_ne_5deg,
-            grid_lats_5deg, grid_lons_5deg, ALT_GRID,
-            truth_time=truth_time,
-            save_path=os.path.join(save_dir, f"edp_profiles_kf_enkf_{YYYY}_{DOY:03d}.png"),
-        )
-
-    # ── Step 14: KF vs EnKF comparison plot ──────────────────────────────────
-    if kf_result is not None and enkf_result is not None:
-        print("\nStep 14: Plotting KF vs EnKF comparison …")
-        plot_kf_enkf_comparison(
+    # ── Step 14: KF vs EKF_Param comparison plot ─────────────────────────────
+    if kf_result is not None and ekf_param_result is not None:
+        print("\nStep 14: Plotting KF vs EKF_Param comparison …")
+        plot_kf_ekf_comparison(
             arc_truth_list    = arc_truth_list,
             kf_result         = kf_result,
-            enkf_result       = enkf_result,
+            ekf_param_result  = ekf_param_result,
             truth_ne_1deg     = truth_ne_1deg,
             grid_lats_1deg    = grid_lats_1deg,
             grid_lons_1deg    = grid_lons_1deg,
@@ -5469,51 +5941,23 @@ def _run_enkf_retrieval_experiment(
             alt_grid          = ALT_GRID,
             truth_time        = truth_time,
             save_path         = os.path.join(
-                save_dir, f"kf_vs_enkf_comparison_{YYYY}_{DOY:03d}.png"
+                save_dir, f"kf_vs_ekf_param_comparison_{YYYY}_{DOY:03d}{save_suffix}.png"
             ),
         )
 
-    # ── Step 15: scipy non-linear optimisation (5 methods) ────────────────────
-    if RUN_SCIPY_OPT:
-        print(f"\nStep 15: Running scipy non-linear optimisation "
-              f"({len(_OPT_METHOD_STYLES)} methods) …")
-        opt_results = run_scipy_optimization(
-            parsed_list    = parsed_list,
-            arc_truth_list = arc_truth_list,
-            prior_edp      = prior_edp_5deg,
-            grid_lats_5deg = grid_lats_5deg,
-            grid_lons_5deg = grid_lons_5deg,
-            alt_grid       = ALT_GRID,
-            time_dt        = time_dt,
-            save_dir       = save_dir,
-        )
-
-        print("\nStep 15b: Plotting scipy optimisation comparison …")
-        plot_scipy_opt_results(
-            arc_truth_list = arc_truth_list,
-            opt_results    = opt_results,
-            alt_grid       = ALT_GRID,
-            time_dt        = time_dt,
-            enkf_result    = enkf_result,   # None when RUN_ENKF=False — omits EnKF comparison
-            save_dir       = save_dir,
-        )
-    else:
-        opt_results = {}
-        print("\n  [skip] scipy optimisation disabled (RUN_SCIPY_OPT = False)")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("  Filter comparison summary")
     print("=" * 60)
-    _ref = kf_result or enkf_result or ekf_param_result
+    _ref = kf_result or ekf_param_result
+    prior_rmse = None
     if _ref is not None:
-        print(f"  Prior  RMSE:  {_ref['prior_rmse']:.3f} TECU")
+        prior_rmse = float(_ref["prior_rmse"])
+        print(f"  Prior  RMSE:  {prior_rmse:.3f} TECU")
     if kf_result is not None:
         print(f"  KF     RMSE:  {kf_result['post_rmse']:.3f} TECU"
               f"  (Δ = {kf_result['post_rmse'] - kf_result['prior_rmse']:+.3f})")
-    if enkf_result is not None:
-        print(f"  EnKF   RMSE:  {enkf_result['post_rmse']:.3f} TECU"
-              f"  (Δ = {enkf_result['post_rmse'] - enkf_result['prior_rmse']:+.3f})")
     if ekf_param_result is not None:
         conv_tag = f"converged in {ekf_param_result['n_iterations']} iter" \
                    if ekf_param_result['converged'] \
@@ -5521,15 +5965,428 @@ def _run_enkf_retrieval_experiment(
         print(f"  EKF_P  RMSE:  {ekf_param_result['post_rmse']:.3f} TECU"
               f"  (Δ = {ekf_param_result['post_rmse'] - ekf_param_result['prior_rmse']:+.3f})"
               f"  [{conv_tag}]")
-    if opt_results:
-        print("─" * 60)
-        for mname, res in opt_results.items():
-            pr = res["prior_tec_rmse"]
-            po = res["post_tec_rmse"]
-            print(f"  {mname:<14}  prior={pr:.3f}  post={po:.3f}"
-                  f"  (Δ = {po - pr:+.3f})")
     print(f"\n✓ Retrieval experiment complete.  Figures in: {save_dir}")
+
+    # Per-window metrics returned to the caller for later comparison plots.
+    # arc_truth_list carries per-arc geometry + labels; truth_ne_{1,5}deg
+    # and the two grids feed plot_edp_site_rmse_across_windows and
+    # plot_edp_regional_rmse_across_windows in main().
+    return {
+        "mode":             mode,
+        "prior_rmse":       prior_rmse,
+        "kf_result":        kf_result,
+        "ekf_param":        ekf_param_result,
+        "arc_truth_list":   arc_truth_list,
+        "truth_time":       truth_time,
+        "truth_ne_1deg":    truth_ne_1deg,
+        "truth_ne_5deg":    truth_ne_5deg,
+        "truth_mean_5deg":  truth_mean_5deg,   # (N_STATE, n_geo) 8-param truth state
+        "grid_lats_1deg":   grid_lats_1deg,
+        "grid_lons_1deg":   grid_lons_1deg,
+        "grid_lats_5deg":   grid_lats_5deg,
+        "grid_lons_5deg":   grid_lons_5deg,
+    }
+
+
+def _resolve_sweep_base_path(yyyy: int, doy: int) -> "str | None":
+    """Return the podTc2 day directory for (yyyy, doy), or None if absent.
+
+    Tries both zero-padded ("2025.001") and bare ("2025.1") DOY spellings so
+    the sweep works regardless of how the day folders are named on disk.
+    """
+    for doy_str in (f"{doy:03d}", str(doy)):
+        p = f"{SWEEP_PODTC2_ROOT}/{yyyy}.{doy_str}/"
+        if os.path.isdir(p):
+            return p
+    return None
+
+
+def _sweep_prepare_window(window: dict) -> "dict | None":
+    """
+    Build the truth ionosphere, RO/IGS arc truth lists, model prior, and grids
+    for one time window — everything run_occ_count_sweep needs.  Mirrors the
+    per-window setup of _process_time_window / _run_enkf_retrieval_experiment
+    but stops short of the plotting-heavy filter suite.
+
+    Returns None if the window has no parsable RO arcs.
+    """
+    time_dt = window["time_dt"]
+    records = window["records"]
+
+    # Parse RO arc files.
+    parsed_list: list[dict] = []
+    for rec in records:
+        try:
+            data = parse_podTc2_nc_file(rec["path"])
+            data["conid"]  = rec["conid"]
+            data["prn_id"] = rec["prn_id"]
+            data["leo_id"] = rec["leo_id"]
+            parsed_list.append(data)
+        except Exception as exc:
+            warnings.warn(f"Could not parse {rec['path']}: {exc}")
+    if not parsed_list:
+        return None
+
+    # Fibonacci grids (anchored on the RO tangent tracks).
+    tp_lats_all, tp_lons_all = _arc_tangent_tracks(parsed_list)
+    grid_lats_1deg, grid_lons_1deg = _make_fibonacci_grid(
+        tp_lats_all, tp_lons_all, spacing_deg=1.0)
+    grid_lats_5deg, grid_lons_5deg = _make_fibonacci_grid(
+        tp_lats_all, tp_lons_all, spacing_deg=5.0)
+
+    # 5-deg IRI background mean → model prior ensemble (nominal solar conditions).
+    mean_5deg, _ = build_iri_state_grid_cached(
+        time_dt, grid_lats_5deg, grid_lons_5deg, ALT_GRID,
+        spacing_deg=5.0,
+        lat_min=float(grid_lats_5deg.min()), lat_max=float(grid_lats_5deg.max()),
+        lon_min=float(grid_lons_5deg.min()), lon_max=float(grid_lons_5deg.max()),
+    )
+    model_state = build_model_ensemble(
+        mean_5deg, grid_lats_5deg, grid_lons_5deg,
+        n_members=ENKF_N_MEMBERS, corr_length_km=CORR_LENGTH_KM,
+    )
+
+    # Shifted-IRI truth (matches the real retrieval experiment: +TRUTH_HOUR_OFFSET
+    # hours, F10.7 + TRUTH_F107_DELTA) on the 1-deg grid.
+    truth_time, truth_sdf = _truth_solar_conditions(time_dt)
+    truth_state_1deg, truth_ne_1deg, _ = build_truth_iri_grid(
+        truth_time, truth_sdf, grid_lats_1deg, grid_lons_1deg, ALT_GRID,
+        label="1-deg truth (sweep)",
+    )
+
+    # RO arcs forward-modelled through the truth state.
+    all_ro_arcs = generate_truth_tec(
+        parsed_list, truth_state_1deg, grid_lats_1deg, grid_lons_1deg, ALT_GRID)
+
+    # Simulated IGS arcs (optional), forward-modelled through the same truth.
+    igs_arcs: list[dict] = []
+    if USE_SIMULATED_IGS:
+        igs_stations = _load_igs_sim_stations(
+            IGS_SIM_STATIONS_JSON, IGS_SIM_STATIONS, roi_max_km=ISR_ROI_MAX_KM)
+        if igs_stations:
+            ephem = _load_broadcast_ephemeris(time_dt)
+            if ephem is not None:
+                igs_geom = _build_igs_sim_arcs(
+                    igs_stations, time_dt, ephem, window_minutes=WINDOW_MINUTES)
+                if igs_geom:
+                    igs_arcs = generate_simulated_igs_tec(
+                        igs_geom, truth_state_1deg,
+                        grid_lats_1deg, grid_lons_1deg, ALT_GRID)
+
+    return dict(
+        model_state     = model_state,
+        grid_lats_5deg  = grid_lats_5deg,
+        grid_lons_5deg  = grid_lons_5deg,
+        grid_lats_1deg  = grid_lats_1deg,
+        grid_lons_1deg  = grid_lons_1deg,
+        truth_ne_1deg   = truth_ne_1deg,
+        truth_time      = truth_time,
+        all_ro_arcs     = all_ro_arcs,
+        igs_arcs        = igs_arcs,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §sweep-plots  N_OCC sweep results plotting
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SWEEP_THRESHOLDS_MHZ = (0.5, 0.2, 0.1)
+
+
+def _sweep_thr_str(thr: float) -> str:
+    return str(thr).replace(".", "")
+
+
+def plot_occ_sweep_results(
+    csv_path: str = SWEEP_RESULTS_CSV,
+    save_dir: str = SWEEP_SAVE_DIR,
+) -> None:
+    """
+    Read *csv_path* (the row-per-N_OCC/mode/site output of run_occ_count_sweep,
+    accumulated across dates by main_sweep) and render cross-date, cross-mode
+    summary figures of retrieval accuracy vs. N_OCC:
+
+        occ_sweep_foF2_vs_nocc.png          — median |foF2 error| vs. N_OCC
+        occ_sweep_foE_vs_nocc.png           — median |foE error|  vs. N_OCC
+        occ_sweep_profile_rmse_vs_nocc.png  — median profile fp RMSE vs. N_OCC
+        occ_sweep_threshold_fractions.png   — fraction-within-threshold vs. N_OCC
+        occ_sweep_hf_propagation.png        — truth vs. posterior foF2/foE scatter
+
+    All figures use posterior (post-assimilation) metrics, since the sweep's
+    purpose is to show how N_OCC affects retrieval skill; each panel is one
+    observation mode (ro_only / ro_igs / igs_only).
+    """
+    if not os.path.exists(csv_path):
+        print(f"[plot_occ_sweep_results] CSV not found: {csv_path}")
+        return
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        print(f"[plot_occ_sweep_results] CSV is empty: {csv_path}")
+        return
+    os.makedirs(save_dir, exist_ok=True)
+
+    modes   = list(FILTER_MODES)
+    seasons = sorted(df["date_label"].dropna().unique().tolist()) if "date_label" in df else []
+    season_cmap   = plt.get_cmap("tab10")
+    season_colors = {s: season_cmap(i % 10) for i, s in enumerate(seasons)}
+
+    def _median_by_season(mode: str, col: str, abs_val: bool = False) -> dict:
+        sub = df[df["mode"] == mode]
+        out = {}
+        if sub.empty or col not in sub.columns:
+            return out
+        for season, g in sub.groupby("date_label"):
+            s = g.groupby("n_occ")[col].apply(
+                lambda v: float(np.nanmedian(np.abs(v))) if abs_val
+                          else float(np.nanmedian(v))
+            ).sort_index()
+            out[season] = s
+        return out
+
+    def _line_panel(ax, mode: str, col: str, abs_val: bool, ylabel: str,
+                     hlines: tuple = ()) -> None:
+        series_by_season = _median_by_season(mode, col, abs_val=abs_val)
+        for h in hlines:
+            ax.axhline(h, color="k", ls="--", lw=0.8, alpha=0.5)
+        if not series_by_season:
+            ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                    transform=ax.transAxes, color="0.5")
+        else:
+            for season, s in series_by_season.items():
+                ax.plot(s.index, s.values, marker="o", ms=4,
+                        color=season_colors.get(season, "0.3"), label=season)
+        ax.set_title(mode)
+        ax.set_xlabel("N_OCC")
+        ax.set_ylabel(ylabel)
+        ax.grid(alpha=0.3)
+
+    def _three_panel_line_fig(col: str, abs_val: bool, ylabel: str,
+                               suptitle: str, fname: str) -> None:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), sharey=True)
+        for ax, mode in zip(axes, modes):
+            _line_panel(ax, mode, col, abs_val=abs_val, ylabel=ylabel,
+                        hlines=_SWEEP_THRESHOLDS_MHZ)
+        handles, labels = axes[0].get_legend_handles_labels()
+        if handles:
+            axes[0].legend(handles, labels, fontsize=7, loc="upper right")
+        fig.suptitle(suptitle)
+        fig.tight_layout()
+        fig.savefig(os.path.join(save_dir, fname), dpi=150)
+        plt.close(fig)
+
+    # ── Figure 1: N_OCC vs foF2 error ─────────────────────────────────────
+    _three_panel_line_fig(
+        "post_foF2_err", abs_val=True, ylabel="median |foF2 error| (MHz)",
+        suptitle="N_OCC vs. posterior foF2 error (median across ISR sites)",
+        fname="occ_sweep_foF2_vs_nocc.png",
+    )
+
+    # ── Figure 2: N_OCC vs foE error ──────────────────────────────────────
+    _three_panel_line_fig(
+        "post_foE_err", abs_val=True, ylabel="median |foE error| (MHz)",
+        suptitle="N_OCC vs. posterior foE error (median across ISR sites)",
+        fname="occ_sweep_foE_vs_nocc.png",
+    )
+
+    # ── Figure 3: N_OCC vs profile fp RMSE ────────────────────────────────
+    _three_panel_line_fig(
+        "post_fp_rmse", abs_val=False, ylabel="median profile fp RMSE (MHz)",
+        suptitle="N_OCC vs. posterior profile plasma-frequency RMSE "
+                  "(median across ISR sites)",
+        fname="occ_sweep_profile_rmse_vs_nocc.png",
+    )
+
+    # ── Figure 4: threshold fractions (3 modes × 3 thresholds) ────────────
+    fig, axes = plt.subplots(len(modes), len(_SWEEP_THRESHOLDS_MHZ),
+                              figsize=(13, 3.6 * len(modes)),
+                              sharex=True, sharey=True, squeeze=False)
+    metric_style = [("foF2", "-"), ("foE", "--"), ("profile", ":")]
+    for row, mode in enumerate(modes):
+        sub_mode = df[df["mode"] == mode]
+        for col_i, thr in enumerate(_SWEEP_THRESHOLDS_MHZ):
+            ax = axes[row][col_i]
+            if sub_mode.empty:
+                ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                        transform=ax.transAxes, color="0.5")
+            else:
+                for metric, ls in metric_style:
+                    colname = f"within_{_sweep_thr_str(thr)}mhz_{metric}_post"
+                    if colname not in sub_mode.columns:
+                        continue
+                    frac = sub_mode.groupby("n_occ")[colname].mean().sort_index()
+                    ax.plot(frac.index, frac.values, ls, marker="o", ms=3,
+                            label=metric)
+            if row == 0:
+                ax.set_title(f"±{thr} MHz")
+            if col_i == 0:
+                ax.set_ylabel(f"{mode}\nfraction within threshold")
+            if row == len(modes) - 1:
+                ax.set_xlabel("N_OCC")
+            ax.set_ylim(-0.05, 1.05)
+            ax.grid(alpha=0.3)
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    if handles:
+        axes[0][0].legend(handles, labels, fontsize=7, loc="lower right")
+    fig.suptitle("Fraction of cases within frequency threshold vs. N_OCC "
+                 "(posterior)")
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_dir, "occ_sweep_threshold_fractions.png"),
+                dpi=150)
+    plt.close(fig)
+
+    # ── Figure 5: HF propagation perspective (truth vs. posterior scatter) ─
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    n_occ_vals = pd.to_numeric(df["n_occ"], errors="coerce").dropna()
+    if len(n_occ_vals):
+        norm = mpl.colors.Normalize(vmin=float(n_occ_vals.min()),
+                                     vmax=float(n_occ_vals.max()))
+    else:
+        norm = mpl.colors.Normalize(vmin=0, vmax=1)
+    scat_cmap  = plt.get_cmap("viridis")
+    scat_proxy = None
+    req_cols = ("truth_foF2", "post_foF2", "truth_foE", "post_foE")
+    for ax, mode in zip(axes, modes):
+        sub = df[df["mode"] == mode]
+        if sub.empty or not all(c in sub.columns for c in req_cols):
+            ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                    transform=ax.transAxes, color="0.5")
+            ax.set_title(mode)
+            continue
+        scat_proxy = ax.scatter(sub["truth_foF2"], sub["post_foF2"],
+                                 c=sub["n_occ"], cmap=scat_cmap, norm=norm,
+                                 marker="o", s=22, edgecolor="none",
+                                 label="foF2", alpha=0.8)
+        ax.scatter(sub["truth_foE"], sub["post_foE"],
+                   c=sub["n_occ"], cmap=scat_cmap, norm=norm,
+                   marker="^", s=22, edgecolor="none",
+                   label="foE", alpha=0.8)
+        vals = pd.concat([sub["truth_foF2"], sub["post_foF2"],
+                           sub["truth_foE"], sub["post_foE"]]).dropna()
+        if not vals.empty:
+            lo, hi = float(vals.min()), float(vals.max())
+            pad = 0.05 * max(hi - lo, 1e-6)
+            ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad],
+                    "k--", lw=1.0, label="perfect retrieval")
+        ax.set_title(mode)
+        ax.set_xlabel("truth frequency (MHz)")
+        ax.set_ylabel("posterior frequency (MHz)")
+        ax.legend(fontsize=7, loc="upper left")
+        ax.grid(alpha=0.3)
+    if scat_proxy is not None:
+        fig.colorbar(scat_proxy, ax=axes, label="N_OCC", shrink=0.85)
+    fig.suptitle("HF propagation perspective: posterior vs. truth foF2/foE, "
+                 "colored by N_OCC")
+    fig.savefig(os.path.join(save_dir, "occ_sweep_hf_propagation.png"),
+                dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"[plot_occ_sweep_results] wrote 5 figures to {save_dir}")
+
+
+def main_sweep() -> None:
+    """
+    Entry point for the N_OCC sweep across multiple dates/seasons.
+    Invoked with:  python test_param_iono.py --sweep
+    Saves per-(date, window, N_OCC, mode, ISR-site) rows to SWEEP_RESULTS_CSV.
+    """
+    os.makedirs(SWEEP_SAVE_DIR, exist_ok=True)
+    os.makedirs(IRI_CACHE_DIR, exist_ok=True)
+    csv_dir = os.path.dirname(SWEEP_RESULTS_CSV)
+    if csv_dir:
+        os.makedirs(csv_dir, exist_ok=True)
+
+    print("=" * 60)
+    print("N_OCC sweep")
+    print(f"  dates      : {[f'{y}.{d:03d} ({lbl})' for y, d, lbl in SWEEP_DATES]}")
+    print(f"  N_OCC grid : {SWEEP_N_OCC_VALUES}")
+    print(f"  modes      : {FILTER_MODES}")
+    print(f"  output CSV : {SWEEP_RESULTS_CSV}")
+    print("=" * 60)
+
+    all_rows: list[dict] = []
+
+    for (yyyy, doy, label) in SWEEP_DATES:
+        base_path = _resolve_sweep_base_path(yyyy, doy)
+        if base_path is None:
+            print(f"\n[skip] {yyyy}.{doy:03d} ({label}) — directory not found "
+                  f"under {SWEEP_PODTC2_ROOT}.")
+            continue
+
+        print("\n" + "#" * 70)
+        print(f"#  {yyyy}.{doy:03d} ({label})  —  {base_path}")
+        print("#" * 70)
+
+        try:
+            windows = scan_and_select_files_per_window(base_path)
+        except Exception as exc:
+            print(f"[skip] scan failed for {base_path}: "
+                  f"{type(exc).__name__}: {exc}")
+            continue
+        if not windows:
+            print(f"[skip] no windows retained for {yyyy}.{doy:03d}.")
+            continue
+
+        for wi, window in enumerate(windows):
+            print("\n" + "-" * 66)
+            print(f"  Window {wi+1}/{len(windows)}: {window['window_key']} "
+                  f"({len(window['records'])} arcs)")
+            print("-" * 66)
+            try:
+                prep = _sweep_prepare_window(window)
+            except Exception as exc:
+                print(f"  ✗ window prep FAILED: {type(exc).__name__}: {exc}")
+                continue
+            if prep is None:
+                print("  [skip] no parsable RO arcs.")
+                continue
+
+            try:
+                rows = run_occ_count_sweep(
+                    window          = window,
+                    model_state     = prep["model_state"],
+                    grid_lats       = prep["grid_lats_5deg"],
+                    grid_lons       = prep["grid_lons_5deg"],
+                    alt_grid        = ALT_GRID,
+                    all_ro_arcs     = prep["all_ro_arcs"],
+                    igs_arcs        = prep["igs_arcs"],
+                    truth_ne_1deg   = prep["truth_ne_1deg"],
+                    grid_lats_truth = prep["grid_lats_1deg"],
+                    grid_lons_truth = prep["grid_lons_1deg"],
+                    truth_time      = prep["truth_time"],
+                )
+            except Exception as exc:
+                print(f"  ✗ sweep FAILED: {type(exc).__name__}: {exc}")
+                continue
+
+            for r in rows:
+                r["date_label"] = label
+            all_rows.extend(rows)
+            print(f"  ✓ window contributed {len(rows)} rows "
+                  f"({len(all_rows)} total).")
+
+            # Persist incrementally so a mid-run crash still leaves partial data.
+            pd.DataFrame(all_rows).to_csv(SWEEP_RESULTS_CSV, index=False)
+
+    if not all_rows:
+        print("\nNo sweep rows produced — nothing written.")
+        return
+
+    df = pd.DataFrame(all_rows)
+    df.to_csv(SWEEP_RESULTS_CSV, index=False)
+    print("\n" + "=" * 60)
+    print(f"✓ N_OCC sweep complete: {len(df)} rows → {SWEEP_RESULTS_CSV}")
+    print("=" * 60)
+
+    print("\nPlotting sweep results …")
+    try:
+        plot_occ_sweep_results(SWEEP_RESULTS_CSV, SWEEP_SAVE_DIR)
+    except Exception as exc:
+        print(f"  [warn] plot_occ_sweep_results failed: "
+              f"{type(exc).__name__}: {exc}")
 
 
 if __name__ == "__main__":
-    main()
+    if "--sweep" in sys.argv:
+        main_sweep()
+    else:
+        main()

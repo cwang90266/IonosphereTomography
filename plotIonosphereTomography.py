@@ -64,15 +64,38 @@ def _print_saved(msg: str) -> None:
 # co-located at the same site/time window, so spaghetti/overlay plots must
 # not blend them into one undifferentiated "ISR truth" line style.
 _ISR_KINDAT_STYLE = {
-    "6400": ("ISR fitted (6400)",        "-"),
-    "6300": ("ISR power profile (6300)", "--"),
-    "jro":  ("ISR fitted (JRO)",         "-"),
+    "6400":      ("ISR fitted (6400)",        "-"),
+    "6300":      ("ISR power profile (6300)", "--"),
+    "jro":       ("ISR fitted (JRO)",         "-"),
+    "simulated": ("Simulated truth EDP",      "-"),
 }
 _ISR_KINDAT_FALLBACK = ("ISR truth (kindat unknown — reload cache)", ":")
 
 
 def _isr_kindat_style(kindat: str | None) -> tuple[str, str]:
     return _ISR_KINDAT_STYLE.get(kindat, _ISR_KINDAT_FALLBACK)
+
+
+# ── Plasma-frequency / Ne conversion ─────────────────────────────────────────
+# Ne [m⁻³] = _NE_TO_FP_SCALE × fₚ² [MHz²]   (standard ionospheric relation)
+_NE_TO_FP_SCALE = 1.24e10
+_FP_BAND_MHZ    = 0.5          # ±0.5 MHz truth-band half-width
+
+
+def _ne_to_fp(ne: np.ndarray) -> np.ndarray:
+    """Electron density (m⁻³) → plasma frequency (MHz)."""
+    return np.sqrt(np.maximum(np.asarray(ne, float), 0.0) / _NE_TO_FP_SCALE)
+
+
+def _fp_to_ne(fp: np.ndarray) -> np.ndarray:
+    """Plasma frequency (MHz) → electron density (m⁻³)."""
+    return _NE_TO_FP_SCALE * np.asarray(fp, float) ** 2
+
+
+def _truth_fp_band(ne_truth: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return (Ne_lo, Ne_hi) bounding a ±_FP_BAND_MHZ band around ne_truth."""
+    fp = _ne_to_fp(ne_truth)
+    return _fp_to_ne(np.maximum(fp - _FP_BAND_MHZ, 0.0)), _fp_to_ne(fp + _FP_BAND_MHZ)
 
 
 _FILTER_LABELS = {"gridded_kf": "KF", "parametric_ekf": "EKF"}
@@ -1719,12 +1742,14 @@ def _plot_isr_edp_spaghetti(
 def _group_edp_rmse_vs_isr(
     result: dict,
     edps_by_site: dict[str, list],
-) -> tuple[float, float] | None:
+) -> tuple[float, float, float, float] | None:
     """
-    Mean (prior_rmse, post_rmse) in absolute Ne (m⁻³) for one filter result,
-    averaged across every ISR profile in *edps_by_site* (all sites combined)
-    -- a single number per config for _plot_group_summary_metrics, in
-    contrast to _plot_isr_edp_spaghetti's per-site, per-scan detail view.
+    Mean (prior_ne_rmse, post_ne_rmse, prior_fp_rmse, post_fp_rmse) for one
+    filter result, averaged across every ISR profile in *edps_by_site* (all
+    sites combined).  Ne values are in m⁻³; fp values are in MHz.
+
+    Only altitudes below the prior F2 peak are included (same gate mask used
+    by compute_isr_metrics).  Returns None when no valid gates remain.
     """
     if any(k not in result for k in
            ("prior_edp_3d", "post_edp_3d", "alt_grid", "eds_occ")):
@@ -1738,6 +1763,7 @@ def _group_edp_rmse_vs_isr(
     tree = cKDTree(mesh_pts)
 
     prior_vals, post_vals = [], []
+    prior_fp_vals, post_fp_vals = [], []
     for profiles in edps_by_site.values():
         if not profiles:
             continue
@@ -1747,10 +1773,15 @@ def _group_edp_rmse_vs_isr(
         prior_col = prior_edp_3d[:, idx]
         post_col  = post_edp_3d[:, idx]
 
+        # F2 peak altitude from the prior column; restrict RMSE to below-peak altitudes.
+        _, prior_hmF2 = extract_robust_f2_peak(prior_col, alt_grid)
+
         for p in profiles:
             isr_alt = np.asarray(p["alt_km"], dtype=float)
             isr_ne  = np.asarray(p["ne_m3"],  dtype=float)
-            valid = (isr_ne > 1e8) & np.isfinite(isr_ne)
+            below_peak = (isr_alt <= prior_hmF2) if np.isfinite(prior_hmF2) \
+                         else np.ones(len(isr_alt), dtype=bool)
+            valid = (isr_ne > 1e8) & np.isfinite(isr_ne) & below_peak
             if valid.sum() < ISR_MIN_VALID_GATES:
                 continue
             prior_at_isr = np.interp(isr_alt, alt_grid, prior_col)
@@ -1759,10 +1790,17 @@ def _group_edp_rmse_vs_isr(
                 (prior_at_isr[valid] - isr_ne[valid]) ** 2))))
             post_vals.append(float(np.sqrt(np.mean(
                 (post_at_isr[valid] - isr_ne[valid]) ** 2))))
+            # MHz (plasma-frequency) RMSE
+            fp_truth = _ne_to_fp(isr_ne[valid])
+            prior_fp_vals.append(float(np.sqrt(np.mean(
+                (_ne_to_fp(prior_at_isr[valid]) - fp_truth) ** 2))))
+            post_fp_vals.append(float(np.sqrt(np.mean(
+                (_ne_to_fp(post_at_isr[valid])  - fp_truth) ** 2))))
 
     if not prior_vals:
         return None
-    return float(np.mean(prior_vals)), float(np.mean(post_vals))
+    return (float(np.mean(prior_vals)),    float(np.mean(post_vals)),
+            float(np.mean(prior_fp_vals)), float(np.mean(post_fp_vals)))
 
 
 def _plot_group_summary_metrics(
@@ -1815,19 +1853,23 @@ def _plot_group_summary_metrics(
     labels  = [f"{om}\n{_FILTER_LABELS.get(ft, ft)}" for om, ft in configs]
     colours = [_CONFIG_STYLES.get(cfg, ("tab:blue", "-"))[0] for cfg in configs]
 
-    edp_prior, edp_post, tec_prior, tec_post = [], [], [], []
+    edp_prior, edp_post, edp_prior_mhz, edp_post_mhz = [], [], [], []
+    tec_prior, tec_post = [], []
     for obs_mode, filter_type in configs:
         result = filter_results.get(obs_mode, {}).get(filter_type)
         if result is None:
-            edp_prior.append(np.nan); edp_post.append(np.nan)
-            tec_prior.append(np.nan); tec_post.append(np.nan)
+            edp_prior.append(np.nan);     edp_post.append(np.nan)
+            edp_prior_mhz.append(np.nan); edp_post_mhz.append(np.nan)
+            tec_prior.append(np.nan);     tec_post.append(np.nan)
             continue
 
         edp_metric = _group_edp_rmse_vs_isr(result, edps_by_site)
         if edp_metric is None:
-            edp_prior.append(np.nan); edp_post.append(np.nan)
+            edp_prior.append(np.nan);     edp_post.append(np.nan)
+            edp_prior_mhz.append(np.nan); edp_post_mhz.append(np.nan)
         else:
-            edp_prior.append(edp_metric[0]); edp_post.append(edp_metric[1])
+            edp_prior.append(edp_metric[0]);     edp_post.append(edp_metric[1])
+            edp_prior_mhz.append(edp_metric[2]); edp_post_mhz.append(edp_metric[3])
 
         tec_prior.append(float(result.get("prior_tec_rmse", np.nan)))
         tec_post.append(float(result.get(
@@ -1894,13 +1936,23 @@ def _plot_group_summary_metrics(
         # profile) since both can be co-located at the same site/window —
         # see _ISR_KINDAT_STYLE.
         kindat_counts: dict[str, int] = {}
+        _band_label_added = False
         for isr_alt, isr_ne, kindat in valid_site_profiles:
             _, kd_ls = _isr_kindat_style(kindat)
+            # ±0.5 MHz shaded band around truth (converted to Ne)
+            ne_lo, ne_hi = _truth_fp_band(isr_ne)
+            ax_curve.fill_betweenx(isr_alt, ne_lo, ne_hi,
+                                   alpha=0.18, color="black", zorder=0,
+                                   label="±0.5 MHz band" if not _band_label_added else None)
+            _band_label_added = True
             ax_curve.plot(isr_ne, isr_alt, color="black", ls=kd_ls,
                           lw=0.8, alpha=0.35, zorder=1)
             kindat_counts[kindat] = kindat_counts.get(kindat, 0) + 1
 
         curve_legend = []
+        if _band_label_added:
+            curve_legend.append(Line2D([0], [0], color="black", lw=6, alpha=0.18,
+                                        label="±0.5 MHz band"))
         for kd in sorted(kindat_counts, key=str):
             kd_label, kd_ls = _isr_kindat_style(kd)
             curve_legend.append(Line2D([0], [0], color="black", ls=kd_ls, lw=1.4, alpha=0.6,
@@ -1909,6 +1961,8 @@ def _plot_group_summary_metrics(
         lat = float(site_profiles[0]["lat"]) if site_profiles else None
         lon = float(site_profiles[0]["lon"]) if site_profiles else None
         param_entries = []
+        # Collect per-config EDP columns for the MHz duplicate figure.
+        _site_config_curves: list[tuple] = []
 
         for obs_mode, filter_type in configs:
             result = filter_results.get(obs_mode, {}).get(filter_type)
@@ -1927,9 +1981,12 @@ def _plot_group_summary_metrics(
             tree = cKDTree(mesh_pts)
             _dist, idx = tree.query([lat, lon])
 
-            ax_curve.plot(prior_edp_3d[:, idx], alt_grid_cfg, color=colour, ls=ls,
+            prior_col = prior_edp_3d[:, idx]
+            post_col  = post_edp_3d[:, idx]
+
+            ax_curve.plot(prior_col, alt_grid_cfg, color=colour, ls=ls,
                           lw=1.3, alpha=0.45, zorder=2)
-            ax_curve.plot(post_edp_3d[:, idx],  alt_grid_cfg, color=colour, ls=ls,
+            ax_curve.plot(post_col,  alt_grid_cfg, color=colour, ls=ls,
                           lw=2.0, alpha=0.95, zorder=3)
             curve_legend.append(Line2D(
                 [0], [0], color=colour, ls=ls, lw=2.0,
@@ -1942,12 +1999,22 @@ def _plot_group_summary_metrics(
                         f"EKF {obs_mode}", colour, np.asarray(post_state)[:, idx],
                     ))
 
+            _site_config_curves.append((
+                colour, ls, prior_col, post_col, alt_grid_cfg,
+                f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}",
+            ))
+
         ax_curve.set_title(f"{site}: EDP vs. ISR truth ({len(valid_site_profiles)} scan(s))")
         if curve_legend:
             ax_curve.legend(handles=curve_legend, fontsize=7, loc="upper left")
         if param_entries:
             from demo_compare_kf_enkf import _draw_param_boxes
             _draw_param_boxes(ax_curve, param_entries, loc="lower right", fontsize=6.0)
+
+        # Stash per-site data for the MHz duplicate figure below.
+        if panel_idx == 0:
+            _mhz_site_data: list[tuple] = []
+        _mhz_site_data.append((site, valid_site_profiles, _site_config_curves, lat, lon))
 
     ax_edp.bar(x - width / 2, edp_prior, width, color=colours, alpha=0.45, label="Prior")
     ax_edp.bar(x + width / 2, edp_post,  width, color=colours, alpha=0.95, label="Posterior")
@@ -1978,6 +2045,88 @@ def _plot_group_summary_metrics(
     fig.savefig(out_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
     _print_saved(f"  Group summary metrics plot saved → {out_path}")
+
+    # ── Duplicate figure in plasma-frequency (MHz) units ──────────────────────
+    _mhz_data = locals().get("_mhz_site_data", [])
+    fig_mhz = plt.figure(figsize=(6.5 * n_curve_panels + 7.5, 11))
+    gs_mhz = fig_mhz.add_gridspec(nrows=2, ncols=n_curve_panels + 1,
+                                   width_ratios=[1.0] * n_curve_panels + [1.15])
+    curve_axes_mhz = [fig_mhz.add_subplot(gs_mhz[:, i]) for i in range(n_curve_panels)]
+    ax_edp_mhz = fig_mhz.add_subplot(gs_mhz[0, n_curve_panels])
+    ax_tec_mhz = fig_mhz.add_subplot(gs_mhz[1, n_curve_panels])
+
+    if not _mhz_data:
+        ax_c = curve_axes_mhz[0]
+        ax_c.set_xlim(0, 20);  ax_c.set_ylim(0, 800)
+        ax_c.grid(True, alpha=0.3)
+        ax_c.set_xlabel("fₚ  (MHz)");  ax_c.set_ylabel("Altitude  (km)")
+        ax_c.text(0.5, 0.5, "No ISR truth in window", transform=ax_c.transAxes,
+                  ha="center", va="center", color="lightgray", fontsize=12, style="italic")
+        ax_c.set_title("EDP vs. ISR truth  (MHz)")
+
+    for _pi, (site, _vsp, _cc, _lat, _lon) in enumerate(_mhz_data):
+        ax_c = curve_axes_mhz[_pi]
+        ax_c.set_xlim(0, 20);  ax_c.set_ylim(0, 800)
+        ax_c.grid(True, alpha=0.3)
+        ax_c.set_xlabel("fₚ  (MHz)")
+        if _pi == 0:
+            ax_c.set_ylabel("Altitude  (km)")
+
+        _band_added = False
+        _kd_counts: dict = {}
+        for _alt, _ne, _kd in _vsp:
+            _, _kd_ls = _isr_kindat_style(_kd)
+            _fp = _ne_to_fp(_ne)
+            ax_c.fill_betweenx(_alt, _fp - _FP_BAND_MHZ, _fp + _FP_BAND_MHZ,
+                               alpha=0.18, color="black", zorder=0)
+            ax_c.plot(_fp, _alt, color="black", ls=_kd_ls, lw=0.8, alpha=0.35, zorder=1)
+            _kd_counts[_kd] = _kd_counts.get(_kd, 0) + 1
+            _band_added = True
+
+        _leg_mhz = []
+        if _band_added:
+            _leg_mhz.append(Line2D([0], [0], color="black", lw=6, alpha=0.18,
+                                    label="±0.5 MHz band"))
+        for _kd in sorted(_kd_counts, key=str):
+            _kd_lbl, _kd_ls = _isr_kindat_style(_kd)
+            _leg_mhz.append(Line2D([0], [0], color="black", ls=_kd_ls, lw=1.4, alpha=0.6,
+                                    label=f"{_kd_lbl} ({_kd_counts[_kd]} scans)"))
+        for _colour, _ls, _prior_col, _post_col, _alt_g, _lbl in _cc:
+            ax_c.plot(_ne_to_fp(_prior_col), _alt_g, color=_colour, ls=_ls,
+                      lw=1.3, alpha=0.45, zorder=2)
+            ax_c.plot(_ne_to_fp(_post_col),  _alt_g, color=_colour, ls=_ls,
+                      lw=2.0, alpha=0.95, zorder=3)
+            _leg_mhz.append(Line2D([0], [0], color=_colour, ls=_ls, lw=2.0, label=_lbl))
+
+        ax_c.set_title(f"{site}: EDP vs. ISR truth  ({len(_vsp)} scan(s))  [MHz]")
+        if _leg_mhz:
+            ax_c.legend(handles=_leg_mhz, fontsize=7, loc="upper left")
+
+    ax_edp_mhz.bar(x - width / 2, edp_prior_mhz, width, color=colours, alpha=0.45, label="Prior")
+    ax_edp_mhz.bar(x + width / 2, edp_post_mhz,  width, color=colours, alpha=0.95, label="Posterior")
+    ax_edp_mhz.set_xticks(x)
+    ax_edp_mhz.set_xticklabels(labels, fontsize=8)
+    ax_edp_mhz.set_ylabel("EDP RMSE vs. ISR truth  (MHz)")
+    ax_edp_mhz.set_title(f"EDP vs. ISR truth  ({n_profiles} scan(s), all sites)  [MHz]")
+    ax_edp_mhz.grid(True, axis="y", alpha=0.3)
+    ax_edp_mhz.legend(fontsize=9)
+
+    ax_tec_mhz.bar(x - width / 2, tec_prior, width, color=colours, alpha=0.45, label="Prior")
+    ax_tec_mhz.bar(x + width / 2, tec_post,  width, color=colours, alpha=0.95, label="Posterior")
+    ax_tec_mhz.set_xticks(x)
+    ax_tec_mhz.set_xticklabels(labels, fontsize=8)
+    ax_tec_mhz.set_ylabel("TEC RMSE  (TECU)")
+    ax_tec_mhz.set_title("TEC prior/posterior RMSE")
+    ax_tec_mhz.grid(True, axis="y", alpha=0.3)
+    ax_tec_mhz.legend(fontsize=9)
+
+    fig_mhz.suptitle(f"Group summary (MHz) — {group_key}", fontsize=12)
+    fig_mhz.tight_layout()
+    out_path_mhz = save_dir / f"group_summary_{group_key}_MHz.png"
+    fig_mhz.savefig(out_path_mhz, dpi=130, bbox_inches="tight")
+    plt.close(fig_mhz)
+    _print_saved(f"  Group summary (MHz) plot saved → {out_path_mhz}")
+
     return str(out_path)
 
 
@@ -2031,11 +2180,14 @@ def plot_isr_truth_comparison(
     if valid.sum() < ISR_MIN_VALID_GATES:
         return None
 
-    prior_curves: dict = {}   # (obs_mode, filter_type) -> (ne_at_isr_alt, rmse)
-    post_curves:  dict = {}
-    peak_errs:    dict = {}   # (obs_mode, filter_type) -> dict of NmF2/hmF2 errors
-    tec_panels:   dict = {}   # (obs_mode, filter_type) -> nearest-arc TEC comparison data
-    param_states: dict = {}   # (obs_mode, filter_type) -> (prior_pvec, post_pvec), parametric_ekf only
+    prior_curves:     dict = {}   # (obs_mode, filter_type) -> (ne_at_isr_alt, ne_rmse)
+    post_curves:      dict = {}
+    prior_curves_mhz: dict = {}  # (obs_mode, filter_type) -> (fp_at_isr_alt, fp_rmse)
+    post_curves_mhz:  dict = {}
+    peak_errs:        dict = {}   # (obs_mode, filter_type) -> dict of NmF2/hmF2 errors
+    peak_errs_mhz:    dict = {}   # same but NmF2 error in MHz (Δfₚ)
+    tec_panels:       dict = {}   # (obs_mode, filter_type) -> nearest-arc TEC comparison data
+    param_states:     dict = {}   # (obs_mode, filter_type) -> (prior_pvec, post_pvec), parametric_ekf only
 
     for obs_mode in OBS_MODES:
         for filter_type in FILTER_TYPES:
@@ -2116,9 +2268,18 @@ def plot_isr_truth_comparison(
             post_rmse = float(np.sqrt(np.mean(
                 (post_at_isr[valid] - isr_ne[valid]) ** 2)))
 
+            # MHz (plasma-frequency) equivalents for the duplicate figure.
+            fp_truth      = _ne_to_fp(isr_ne[valid])
+            prior_fp_rmse = float(np.sqrt(np.mean(
+                (_ne_to_fp(prior_at_isr[valid]) - fp_truth) ** 2)))
+            post_fp_rmse  = float(np.sqrt(np.mean(
+                (_ne_to_fp(post_at_isr[valid])  - fp_truth) ** 2)))
+
             key = (obs_mode, filter_type)
             prior_curves[key] = (prior_at_isr, prior_rmse)
             post_curves[key]  = (post_at_isr,  post_rmse)
+            prior_curves_mhz[key] = (_ne_to_fp(prior_at_isr), prior_fp_rmse)
+            post_curves_mhz[key]  = (_ne_to_fp(post_at_isr),  post_fp_rmse)
 
             if filter_type == "parametric_ekf":
                 prior_state = result.get("prior_mean_state")
@@ -2140,6 +2301,13 @@ def plot_isr_truth_comparison(
                 prior_nm_err = np.nan
                 post_nm_err  = np.nan
 
+            # NmF2 error in MHz: Δfₚ = fₚ(est) − fₚ(truth)
+            isr_fp_nm = float(_ne_to_fp(np.asarray([isr_nm]))) if np.isfinite(isr_nm) else np.nan
+            prior_nm_err_mhz = (float(_ne_to_fp(np.asarray([pr_nm]))) - isr_fp_nm) \
+                if np.isfinite(isr_fp_nm) else np.nan
+            post_nm_err_mhz  = (float(_ne_to_fp(np.asarray([po_nm]))) - isr_fp_nm) \
+                if np.isfinite(isr_fp_nm) else np.nan
+
             if np.isfinite(isr_hm):
                 prior_hm_err = pr_hm - isr_hm
                 post_hm_err  = po_hm - isr_hm
@@ -2151,6 +2319,10 @@ def plot_isr_truth_comparison(
                 prior_nm_err=prior_nm_err, post_nm_err=post_nm_err,
                 prior_hm_err=prior_hm_err, post_hm_err=post_hm_err,
             )
+            peak_errs_mhz[key] = dict(
+                prior_nm_err=prior_nm_err_mhz, post_nm_err=post_nm_err_mhz,
+                prior_hm_err=prior_hm_err,     post_hm_err=post_hm_err,
+            )
 
     _plot_isr_tec_vs_obs(
         tec_panels, group_key, inst_name, t_utc, solar, isr_lat, isr_lon, save_dir,
@@ -2159,101 +2331,129 @@ def plot_isr_truth_comparison(
     if not prior_curves:
         return None
 
+    isr_kd_label, _ = _isr_kindat_style(isr_profile.get("kindat"))
+
+    # Pre-compute truth band (Ne units) once for the existing Ne figure.
+    ne_lo_band, ne_hi_band = _truth_fp_band(isr_ne[valid])
+    isr_fp = _ne_to_fp(isr_ne)   # full-altitude MHz truth for the MHz figure
+
+    def _draw_edp_panels(ax_pr, ax_po, *, in_mhz: bool) -> None:
+        """Populate the prior and posterior EDP panels in either Ne or MHz units."""
+        src_prior = prior_curves_mhz if in_mhz else prior_curves
+        src_post  = post_curves_mhz  if in_mhz else post_curves
+        xlabel    = "fₚ  (MHz)" if in_mhz else "Ne  (m⁻³)"
+
+        for key, (curve, rmse) in src_prior.items():
+            obs_mode, filter_type = key
+            colour, ls = _CONFIG_STYLES.get(key, ("gray", "-"))
+            lbl = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}  RMSE={rmse:.3f}" \
+                  if in_mhz else \
+                  f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}  RMSE={rmse:.2e}"
+            ax_pr.plot(curve, isr_alt, color=colour, ls=ls, lw=1.6, label=lbl)
+
+        for key, (curve, rmse) in src_post.items():
+            obs_mode, filter_type = key
+            colour, ls = _CONFIG_STYLES.get(key, ("gray", "-"))
+            lbl = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}  RMSE={rmse:.3f}" \
+                  if in_mhz else \
+                  f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}  RMSE={rmse:.2e}"
+            ax_po.plot(curve, isr_alt, color=colour, ls=ls, lw=1.6, label=lbl)
+
+        if param_states:
+            from demo_compare_kf_enkf import _draw_param_boxes
+            prior_entries, post_entries = [], []
+            for (obs_mode, filter_type), (prior_pvec, post_pvec) in param_states.items():
+                colour = _CONFIG_STYLES.get((obs_mode, filter_type), ("gray", "-"))[0]
+                prior_entries.append((f"EKF {obs_mode}", colour, prior_pvec))
+                post_entries.append((f"EKF {obs_mode}",  colour, post_pvec))
+            _draw_param_boxes(ax_pr, prior_entries, loc="lower right", fontsize=6.0)
+            _draw_param_boxes(ax_po, post_entries,  loc="lower right", fontsize=6.0)
+
+        for ax, title in ((ax_pr, "Prior"), (ax_po, "Posterior")):
+            if in_mhz:
+                # ±0.5 MHz band is trivial in MHz space.
+                fp_valid = isr_fp[valid]
+                ax.fill_betweenx(isr_alt[valid], fp_valid - _FP_BAND_MHZ,
+                                 fp_valid + _FP_BAND_MHZ,
+                                 alpha=0.25, color="black", label="±0.5 MHz band")
+                ax.plot(isr_fp, isr_alt, color="black", lw=2.8, label=isr_kd_label)
+                ax.set_xlim(0, max(float(np.nanmax(isr_fp)) * 1.25, 2.0))
+            else:
+                # ±0.5 MHz band converted to Ne (asymmetric in log space).
+                ax.fill_betweenx(isr_alt[valid], ne_lo_band, ne_hi_band,
+                                 alpha=0.25, color="black", label="±0.5 MHz band")
+                ax.plot(isr_ne, isr_alt, color="black", lw=2.8, label=isr_kd_label)
+                ax.set_xscale("log")
+                ax.set_xlim(1e9, 1e13)
+            ax.set_ylim(0, 800)
+            ax.grid(True, which="both", alpha=0.3)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel("Altitude  (km)")
+            ax.set_title(f"{title} EDP vs. ISR truth")
+            ax.legend(fontsize=7, loc="upper left")
+
+    def _draw_rmse_scatter(ax, *, in_mhz: bool) -> None:
+        src_prior = prior_curves_mhz if in_mhz else prior_curves
+        src_post  = post_curves_mhz  if in_mhz else post_curves
+        bar_keys   = list(src_prior.keys())
+        prior_r    = [src_prior[k][1] for k in bar_keys]
+        post_r     = [src_post[k][1]  for k in bar_keys]
+        unit_lbl   = "MHz" if in_mhz else "Ne, m⁻³"
+        _marker_for = {"gridded_kf": "o", "parametric_ekf": "s"}
+
+        lim_hi = max(prior_r + post_r) * 1.15 if (prior_r or post_r) else 1.0
+        lims = [0.0, lim_hi]
+        ax.fill_between(lims, lims, [0, 0], color="green", alpha=0.06, zorder=0)
+        ax.fill_between(lims, lims, [lim_hi, lim_hi], color="red", alpha=0.06, zorder=0)
+        ax.plot(lims, lims, color="black", lw=1.0, ls="--", alpha=0.6, label="No change", zorder=1)
+        for key, pr, po in zip(bar_keys, prior_r, post_r):
+            obs_mode, filter_type = key
+            colour, _ls = _CONFIG_STYLES.get(key, ("gray", "-"))
+            marker = _marker_for.get(filter_type, "o")
+            label  = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}"
+            ax.scatter(pr, po, color=colour, marker=marker, s=90,
+                       edgecolors="black", linewidths=0.8, label=label, zorder=3)
+        ax.set_xlim(lims);  ax.set_ylim(lims)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel(f"RMSE of EDP — prior  ({unit_lbl})")
+        ax.set_ylabel(f"RMSE of EDP — posterior  ({unit_lbl})")
+        ax.set_title("RMSE of EDP vs. ISR truth: prior vs. posterior")
+        if not in_mhz:
+            ax.ticklabel_format(style="sci", axis="both", scilimits=(0, 0))
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7, loc="best")
+
+    def _draw_peak_scatter(ax, errs: dict) -> None:
+        for key, pe in errs.items():
+            obs_mode, filter_type = key
+            colour, _ls = _CONFIG_STYLES.get(key, ("gray", "-"))
+            label = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}"
+            ax.scatter(pe["prior_nm_err"], pe["prior_hm_err"],
+                       facecolors="none", edgecolors=colour, s=70, lw=1.6)
+            ax.scatter(pe["post_nm_err"],  pe["post_hm_err"],
+                       facecolors=colour,  edgecolors=colour, s=70, label=label)
+        ax.axhline(0, color="gray", lw=0.8, ls="--")
+        ax.axvline(0, color="gray", lw=0.8, ls="--")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7, loc="best")
+
+    # ── Ne figure ─────────────────────────────────────────────────────────────
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
     ax_prior, ax_post = axes[0, 0], axes[0, 1]
     ax_bar, ax_scatter = axes[1, 0], axes[1, 1]
 
-    # ── Panel [0,0] / [0,1] — prior / posterior EDP profiles ──────────────────
-    for key, (curve, rmse) in prior_curves.items():
-        obs_mode, filter_type = key
-        colour, ls = _CONFIG_STYLES.get(key, ("gray", "-"))
-        label = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}  RMSE={rmse:.2e}"
-        ax_prior.plot(curve, isr_alt, color=colour, ls=ls, lw=1.6, label=label)
-
-    for key, (curve, rmse) in post_curves.items():
-        obs_mode, filter_type = key
-        colour, ls = _CONFIG_STYLES.get(key, ("gray", "-"))
-        label = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}  RMSE={rmse:.2e}"
-        ax_post.plot(curve, isr_alt, color=colour, ls=ls, lw=1.6, label=label)
-
-    if param_states:
-        from demo_compare_kf_enkf import _draw_param_boxes
-        prior_entries, post_entries = [], []
-        for (obs_mode, filter_type), (prior_pvec, post_pvec) in param_states.items():
-            colour = _CONFIG_STYLES.get((obs_mode, filter_type), ("gray", "-"))[0]
-            prior_entries.append((f"EKF {obs_mode}", colour, prior_pvec))
-            post_entries.append((f"EKF {obs_mode}",  colour, post_pvec))
-        _draw_param_boxes(ax_prior, prior_entries, loc="lower right", fontsize=6.0)
-        _draw_param_boxes(ax_post,  post_entries,  loc="lower right", fontsize=6.0)
-
-    isr_kd_label, _ = _isr_kindat_style(isr_profile.get("kindat"))
-    for ax, title in ((ax_prior, "Prior"), (ax_post, "Posterior")):
-        ax.plot(isr_ne, isr_alt, color="black", lw=2.8, label=isr_kd_label)
-        ax.set_xscale("log")
-        ax.set_xlim(1e9, 1e13)
-        ax.set_ylim(0, 800)
-        ax.grid(True, which="both", alpha=0.3)
-        ax.set_xlabel("Ne  (m⁻³)")
-        ax.set_ylabel("Altitude  (km)")
-        ax.set_title(f"{title} EDP vs. ISR truth")
-        ax.legend(fontsize=7, loc="upper left")
-
-    # ── Panel [1,0] — RMSE of EDP: prior vs. posterior scatter ─────────────────
-    # Points below the y=x line have post < prior RMSE, i.e. the filter
-    # improved the EDP fit to ISR truth; points above it got worse.
-    bar_keys     = list(prior_curves.keys())
-    prior_rmses  = [prior_curves[k][1] for k in bar_keys]
-    post_rmses   = [post_curves[k][1]  for k in bar_keys]
-    _marker_for  = {"gridded_kf": "o", "parametric_ekf": "s"}
-
-    lim_hi = max(prior_rmses + post_rmses) * 1.15 if (prior_rmses or post_rmses) else 1.0
-    lims = [0.0, lim_hi]
-    ax_bar.fill_between(lims, lims, [0, 0], color="green", alpha=0.06, zorder=0)
-    ax_bar.fill_between(lims, lims, [lim_hi, lim_hi], color="red", alpha=0.06, zorder=0)
-    ax_bar.plot(lims, lims, color="black", lw=1.0, ls="--", alpha=0.6,
-                label="No change", zorder=1)
-
-    for key, pr, po in zip(bar_keys, prior_rmses, post_rmses):
-        obs_mode, filter_type = key
-        colour, _ls = _CONFIG_STYLES.get(key, ("gray", "-"))
-        marker = _marker_for.get(filter_type, "o")
-        label  = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}"
-        ax_bar.scatter(pr, po, color=colour, marker=marker, s=90,
-                       edgecolors="black", linewidths=0.8, label=label, zorder=3)
-
-    ax_bar.set_xlim(lims)
-    ax_bar.set_ylim(lims)
-    ax_bar.set_aspect("equal", adjustable="box")
-    ax_bar.set_xlabel("RMSE of EDP — prior  (Ne, m⁻³)")
-    ax_bar.set_ylabel("RMSE of EDP — posterior  (Ne, m⁻³)")
-    ax_bar.set_title("RMSE of EDP vs. ISR truth: prior vs. posterior")
-    ax_bar.ticklabel_format(style="sci", axis="both", scilimits=(0, 0))
-    ax_bar.grid(True, alpha=0.3)
-    ax_bar.legend(fontsize=7, loc="best")
-
-    # ── Panel [1,1] — NmF2 / hmF2 scatter ──────────────────────────────────────
-    for key, pe in peak_errs.items():
-        obs_mode, filter_type = key
-        colour, _ls = _CONFIG_STYLES.get(key, ("gray", "-"))
-        label = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}"
-        ax_scatter.scatter(pe["prior_nm_err"], pe["prior_hm_err"],
-                            facecolors="none", edgecolors=colour, s=70, lw=1.6)
-        ax_scatter.scatter(pe["post_nm_err"], pe["post_hm_err"],
-                            facecolors=colour, edgecolors=colour, s=70, label=label)
-
-    ax_scatter.axhline(0, color="gray", lw=0.8, ls="--")
-    ax_scatter.axvline(0, color="gray", lw=0.8, ls="--")
+    _draw_edp_panels(ax_prior, ax_post, in_mhz=False)
+    _draw_rmse_scatter(ax_bar, in_mhz=False)
+    _draw_peak_scatter(ax_scatter, peak_errs)
     ax_scatter.set_xlabel("NmF2 error (%)")
     ax_scatter.set_ylabel("hmF2 error (km)")
     ax_scatter.set_title("F2-peak error  (○ prior, ● posterior)")
-    ax_scatter.legend(fontsize=7, loc="best")
-    ax_scatter.grid(True, alpha=0.3)
 
-    fig.suptitle(
+    _suptitle = (
         f"{INSTRUMENTS[inst_name]['label']}  ·  {t_utc}  ·  {isr_kd_label}  ·  "
-        f"F10.7={solar['f107']:.0f}  Ap={solar['ap']}",
-        fontsize=13, fontweight="bold",
+        f"F10.7={solar['f107']:.0f}  Ap={solar['ap']}"
     )
+    fig.suptitle(_suptitle, fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
 
     save_dir = Path(save_dir)
@@ -2262,6 +2462,26 @@ def plot_isr_truth_comparison(
     fig.savefig(out_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
     _print_saved(f"  ISR truth comparison saved → {out_path}")
+
+    # ── MHz duplicate figure ──────────────────────────────────────────────────
+    fig_mhz, axes_mhz = plt.subplots(2, 2, figsize=(15, 12))
+    ax_pr_m, ax_po_m = axes_mhz[0, 0], axes_mhz[0, 1]
+    ax_bar_m, ax_sc_m = axes_mhz[1, 0], axes_mhz[1, 1]
+
+    _draw_edp_panels(ax_pr_m, ax_po_m, in_mhz=True)
+    _draw_rmse_scatter(ax_bar_m, in_mhz=True)
+    _draw_peak_scatter(ax_sc_m, peak_errs_mhz)
+    ax_sc_m.set_xlabel("NmF2 error  (MHz, Δfₚ)")
+    ax_sc_m.set_ylabel("hmF2 error (km)")
+    ax_sc_m.set_title("F2-peak error  (○ prior, ● posterior)  [MHz]")
+
+    fig_mhz.suptitle(_suptitle + "  [MHz]", fontsize=13, fontweight="bold")
+    fig_mhz.tight_layout(rect=[0, 0, 1, 0.95])
+    out_path_mhz = save_dir / f"isr_truth_{group_key}_{inst_name}_MHz.png"
+    fig_mhz.savefig(out_path_mhz, dpi=130, bbox_inches="tight")
+    plt.close(fig_mhz)
+    _print_saved(f"  ISR truth comparison (MHz) saved → {out_path_mhz}")
+
     return str(out_path)
 
 

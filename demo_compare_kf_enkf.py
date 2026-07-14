@@ -147,7 +147,7 @@ _TRANSFORMER = pyproj.Transformer.from_crs(
 def _build_gnss_to_leo_ray(
     gnss_pt_km: np.ndarray,
     leo_pt_km: np.ndarray,
-    n_pts: int = 80,
+    n_pts: int = 800,
     alt_min_km: float = 80.0,
     alt_max_km: float = 1000.0,
 ) -> np.ndarray:

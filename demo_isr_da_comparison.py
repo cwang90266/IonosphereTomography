@@ -65,6 +65,29 @@ from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
 from demo import _build_hourly_global_edp, extract_robust_f2_peak
 from EDPSamples.edp_samples import EDPSamples, get_IRI2020_EDP
 
+# ── Plasma-frequency helpers ─────────────────────────────────────────────────
+
+def ne_to_mhz(ne_m3) -> float | np.ndarray:
+    """Electron density [m⁻³] → plasma frequency [MHz]. foF2 ≈ 8.98 MHz at 1e12 m⁻³."""
+    return 8.978e-6 * np.sqrt(np.maximum(np.asarray(ne_m3, dtype=float), 0.0))
+
+
+def extract_e_layer_peak(ne_arr: np.ndarray, alt_arr: np.ndarray,
+                          e_alt_min: float = 90.0,
+                          e_alt_max: float = 150.0) -> tuple[float, float]:
+    """
+    Return (NmE [m⁻³], hmE [km]) — the E-layer peak in the 90–150 km band.
+    Returns (nan, nan) if no valid data in band.
+    """
+    mask = (alt_arr >= e_alt_min) & (alt_arr <= e_alt_max) & np.isfinite(ne_arr) & (ne_arr > 1e6)
+    if mask.sum() == 0:
+        return np.nan, np.nan
+    band_ne  = ne_arr[mask]
+    band_alt = alt_arr[mask]
+    idx = int(np.argmax(band_ne))
+    return float(band_ne[idx]), float(band_alt[idx])
+
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT        = Path(__file__).parent
 PODTC_BASE  = Path("/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2")
@@ -351,7 +374,7 @@ def _build_hour_edp_cache(t_centre: pd.Timestamp) -> dict:
 
 def _build_igs_eds_occ(t_centre: pd.Timestamp, grid_lats: np.ndarray,
                         grid_lons: np.ndarray, alt_grid: np.ndarray,
-                        n_mc: int = 50) -> "SimpleNamespace":
+                        n_mc: int = 500) -> "SimpleNamespace":
     """
     Build an EDPSamples-compatible IRI Monte Carlo ensemble evaluated exactly
     at the IGS regular grid's own points (grid_lats/grid_lons from build_grid).
@@ -1245,10 +1268,15 @@ def compute_isr_metrics(day_info: dict, filter_results: dict, edps: list[dict]) 
                 isr_alt = np.asarray(edp["alt_km"])
                 isr_ne  = np.asarray(edp["ne_m3"])
 
+                # F2 peak altitude from the prior column; restrict RMSE to below-peak altitudes.
+                _, prior_hmF2 = extract_robust_f2_peak(prior_col, alt_grid)
+                below_peak = (isr_alt <= prior_hmF2) if np.isfinite(prior_hmF2) \
+                             else np.ones(len(isr_alt), dtype=bool)
+
                 prior_at_isr = np.interp(isr_alt, alt_grid, prior_col)
                 post_at_isr  = np.interp(isr_alt, alt_grid, post_col)
 
-                valid = (isr_ne > 1e8) & np.isfinite(isr_ne)
+                valid = (isr_ne > 1e8) & np.isfinite(isr_ne) & below_peak
                 if valid.sum() < ISR_MIN_VALID_GATES:
                     continue
 
@@ -1275,6 +1303,52 @@ def compute_isr_metrics(day_info: dict, filter_results: dict, edps: list[dict]) 
                     prior_hmF2_err_km = np.nan
                     post_hmF2_err_km  = np.nan
 
+                # ── Frequency-domain metrics ─────────────────────────────────
+                # foF2 = critical frequency of the F2 layer as seen from the ground [MHz]
+                # foE  = blanketing frequency of the E layer [MHz]
+                # These are the HF propagation quantities that operators care about.
+
+                prior_foF2 = float(ne_to_mhz(pr_nm)) if np.isfinite(pr_nm) else np.nan
+                post_foF2  = float(ne_to_mhz(po_nm)) if np.isfinite(po_nm) else np.nan
+                isr_foF2   = float(ne_to_mhz(isr_nm)) if np.isfinite(isr_nm) else np.nan
+
+                prior_foF2_err = prior_foF2 - isr_foF2   # signed [MHz]
+                post_foF2_err  = post_foF2  - isr_foF2
+
+                # E-layer peak from ISR profile (interpolated filter profile at ISR altitudes)
+                isr_nme, isr_hme     = extract_e_layer_peak(isr_ne,         isr_alt)
+                prior_nme, prior_hme = extract_e_layer_peak(prior_at_isr,   isr_alt)
+                post_nme,  post_hme  = extract_e_layer_peak(post_at_isr,    isr_alt)
+
+                prior_foE = float(ne_to_mhz(prior_nme)) if np.isfinite(prior_nme) else np.nan
+                post_foE  = float(ne_to_mhz(post_nme))  if np.isfinite(post_nme)  else np.nan
+                isr_foE   = float(ne_to_mhz(isr_nme))   if np.isfinite(isr_nme)   else np.nan
+
+                prior_foE_err = prior_foE - isr_foE
+                post_foE_err  = post_foE  - isr_foE
+
+                # Full-profile RMSE in plasma frequency [MHz] — the "entire profile" metric
+                valid_fp = valid  # reuse existing gate (ne > 1e8, finite, below hmF2)
+                isr_fp_arr   = ne_to_mhz(isr_ne)
+                prior_fp_arr = ne_to_mhz(prior_at_isr)
+                post_fp_arr  = ne_to_mhz(post_at_isr)
+                prior_profile_fp_rmse = float(np.sqrt(np.mean((prior_fp_arr[valid_fp] - isr_fp_arr[valid_fp])**2))) \
+                                         if valid_fp.any() else np.nan
+                post_profile_fp_rmse  = float(np.sqrt(np.mean((post_fp_arr[valid_fp]  - isr_fp_arr[valid_fp])**2))) \
+                                         if valid_fp.any() else np.nan
+
+                # Threshold flags
+                MHZ_THRESHOLDS = [0.5, 0.2, 0.1]
+                threshold_fields: dict = {}
+                for thr in MHZ_THRESHOLDS:
+                    ts = str(thr).replace(".", "")
+                    threshold_fields[f"prior_foF2_within_{ts}mhz"] = bool(np.isfinite(prior_foF2_err) and abs(prior_foF2_err) <= thr)
+                    threshold_fields[f"post_foF2_within_{ts}mhz"]  = bool(np.isfinite(post_foF2_err)  and abs(post_foF2_err)  <= thr)
+                    threshold_fields[f"prior_foE_within_{ts}mhz"]  = bool(np.isfinite(prior_foE_err)  and abs(prior_foE_err)  <= thr)
+                    threshold_fields[f"post_foE_within_{ts}mhz"]   = bool(np.isfinite(post_foE_err)   and abs(post_foE_err)   <= thr)
+                    threshold_fields[f"prior_profile_within_{ts}mhz"] = bool(np.isfinite(prior_profile_fp_rmse) and prior_profile_fp_rmse <= thr)
+                    threshold_fields[f"post_profile_within_{ts}mhz"]  = bool(np.isfinite(post_profile_fp_rmse)  and post_profile_fp_rmse  <= thr)
+
                 rows.append({
                     "date":                date,
                     "group_key":           group_key,
@@ -1300,6 +1374,20 @@ def compute_isr_metrics(day_info: dict, filter_results: dict, edps: list[dict]) 
                     "post_NmF2_err_pct":   post_NmF2_err_pct,
                     "prior_hmF2_err_km":   prior_hmF2_err_km,
                     "post_hmF2_err_km":    post_hmF2_err_km,
+                    # Frequency-domain metrics (HF propagation quantities) [MHz].
+                    "isr_foF2":               isr_foF2,
+                    "prior_foF2":             prior_foF2,
+                    "post_foF2":              post_foF2,
+                    "prior_foF2_err_mhz":     prior_foF2_err,
+                    "post_foF2_err_mhz":      post_foF2_err,
+                    "isr_foE":                isr_foE,
+                    "prior_foE":              prior_foE,
+                    "post_foE":               post_foE,
+                    "prior_foE_err_mhz":      prior_foE_err,
+                    "post_foE_err_mhz":       post_foE_err,
+                    "prior_profile_fp_rmse_mhz": prior_profile_fp_rmse,
+                    "post_profile_fp_rmse_mhz":  post_profile_fp_rmse,
+                    **threshold_fields,
                     "n_isr_gates_valid":   int(valid.sum()),
                     "ekf_converged":       ekf_converged,
                     "ekf_n_iterations":    ekf_n_iterations,
@@ -1394,11 +1482,42 @@ def summarize_statistics(metrics_rows: list[dict] | None = None) -> pd.DataFrame
             f"{mean_nmf2_err:>16.2f}  {mean_hmf2_err:>17.2f}"
         )
 
+    # ── Threshold-based performance tables ────────────────────────────────────
+    for metric_label, prior_col, post_col in [
+        ("foF2 (critical freq)",    "prior_foF2_within_{}mhz", "post_foF2_within_{}mhz"),
+        ("foE  (blanketing freq)",  "prior_foE_within_{}mhz",  "post_foE_within_{}mhz"),
+        ("Profile fp RMSE",         "prior_profile_within_{}mhz", "post_profile_within_{}mhz"),
+    ]:
+        lines.append(f"\n  {metric_label} — fraction of cases within threshold:")
+        lines.append(f"  {'obs_mode':<10} {'filter_type':<14} {'n':>4}  "
+                     + "  ".join(f"{'prior|post @'+str(t)+'MHz':>20}" for t in [0.5, 0.2, 0.1]))
+        for (obs_mode, filter_type), grp in combined.groupby(["obs_mode", "filter_type"]):
+            n = len(grp)
+            thr_parts = []
+            for thr in [0.5, 0.2, 0.1]:
+                ts = str(thr).replace(".", "")
+                pc = prior_col.format(ts)
+                po = post_col.format(ts)
+                if pc in grp.columns and po in grp.columns:
+                    prior_frac = grp[pc].mean()
+                    post_frac  = grp[po].mean()
+                    thr_parts.append(f"{prior_frac:>8.1%}|{post_frac:<8.1%}")
+                else:
+                    thr_parts.append("        N/A      ")
+            lines.append(f"  {obs_mode:<10} {filter_type:<14} {n:>4}  " + "  ".join(thr_parts))
+
     summary_text = "\n".join(lines)
     print(summary_text)
 
     stats_path = SAVE_DIR / "statistics_summary.txt"
     stats_path.write_text(summary_text + "\n")
+
+    if SAVE_DIR.exists():
+        try:
+            plot_isr_freq_metrics(ISR_METRICS_CSV, SAVE_DIR)
+        except Exception:
+            print("[ISR-DA] Frequency-domain plotting failed; continuing without it.")
+            traceback.print_exc()
 
     return combined
 
@@ -1450,6 +1569,180 @@ def _isr_profiles_for_window(edps: list[dict], t_centre: pd.Timestamp) -> list[d
     return matched
 
 
+def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None:
+    """
+    Read the accumulated ISR-metrics CSV (see compute_isr_metrics /
+    _append_metrics_csv) and render the HF-propagation (foF2/foE) summary
+    figures into *save_dir*:
+
+      1. isr_foF2_improvement_boxplot.png
+      2. isr_foE_improvement_boxplot.png
+      3. isr_threshold_fractions.png
+      4. isr_foF2_scatter_by_mode.png
+      5. isr_hf_propagation_timeseries.png
+
+    No-ops (with a printed message) if the CSV is missing/empty or predates
+    the frequency-domain columns.
+    """
+    metrics_csv = Path(metrics_csv)
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    if not metrics_csv.exists():
+        print(f"[ISR-DA] {metrics_csv} not found; skipping frequency-metric plots.")
+        return
+
+    df = pd.read_csv(metrics_csv, parse_dates=["t_centre"])
+    if df.empty or "post_foF2_err_mhz" not in df.columns:
+        print("[ISR-DA] No frequency-domain metrics available; skipping frequency-metric plots.")
+        return
+
+    thresholds = [0.5, 0.2, 0.1]
+    combos = [(om, ft) for om in OBS_MODES for ft in FILTER_TYPES]
+    obs_mode_colors = dict(zip(OBS_MODES, plt.cm.tab10.colors))
+
+    # ── Figures 1 & 2: foF2 / foE improvement boxplots ─────────────────────
+    for metric, fname in [("foF2", "isr_foF2_improvement_boxplot.png"),
+                           ("foE",  "isr_foE_improvement_boxplot.png")]:
+        prior_col = f"prior_{metric}_err_mhz"
+        post_col  = f"post_{metric}_err_mhz"
+        if prior_col not in df.columns or post_col not in df.columns:
+            continue
+
+        fig, axes = plt.subplots(1, len(ISR_SITES), figsize=(6 * len(ISR_SITES), 5), squeeze=False)
+        axes = axes[0]
+        for ax, site in zip(axes, ISR_SITES):
+            site_df = df[df["instrument"] == site]
+            positions, box_data, box_colors, tick_labels = [], [], [], []
+            pos = 0
+            for obs_mode, filter_type in combos:
+                grp = site_df[(site_df["obs_mode"] == obs_mode) & (site_df["filter_type"] == filter_type)]
+                box_data.append(grp[prior_col].abs().dropna().values)
+                positions.append(pos)
+                box_colors.append("lightgrey")
+                box_data.append(grp[post_col].abs().dropna().values)
+                positions.append(pos + 1)
+                box_colors.append("tab:blue")
+                tick_labels.append((pos + 0.5, f"{obs_mode}\n{filter_type}"))
+                pos += 3
+
+            bp = ax.boxplot(box_data, positions=positions, widths=0.8, patch_artist=True)
+            for patch, color in zip(bp["boxes"], box_colors):
+                patch.set_facecolor(color)
+
+            for thr in thresholds:
+                ax.axhline(thr, color="tab:red", ls="--", lw=0.8, alpha=0.6)
+                ax.text(positions[-1] + 1.2, thr, f"{thr} MHz", fontsize=7, color="tab:red", va="center")
+
+            ax.set_xticks([p for p, _ in tick_labels])
+            ax.set_xticklabels([lbl for _, lbl in tick_labels], fontsize=8)
+            ax.set_ylabel(f"|{metric} error| [MHz]")
+            ax.set_title(f"{site}: {metric} error (grey=prior, blue=post)")
+
+        fig.suptitle(f"ISR {metric} retrieval error by obs_mode / filter_type")
+        fig.tight_layout()
+        fig.savefig(save_dir / fname, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    # ── Figure 3: fraction-within-threshold bar chart ──────────────────────
+    metric_bar_specs = ["foF2", "foE", "profile"]
+    bar_labels = [f"{m} {phase}" for m in metric_bar_specs for phase in ("prior", "post")]
+    n_bars = len(bar_labels)
+    thr_cols_exist = all(
+        f"{phase}_{m}_within_{str(t).replace('.', '')}mhz" in df.columns
+        for m in metric_bar_specs for phase in ("prior", "post") for t in thresholds)
+
+    if thr_cols_exist:
+        fig, axes = plt.subplots(1, len(thresholds), figsize=(6 * len(thresholds), 5), sharey=True)
+        width = 0.8 / n_bars
+        x0 = np.arange(len(combos)) * (n_bars * width + 1.0)
+
+        for ax, thr in zip(axes, thresholds):
+            ts = str(thr).replace(".", "")
+            bar_idx = 0
+            for m in metric_bar_specs:
+                for phase in ("prior", "post"):
+                    col = f"{phase}_{m}_within_{ts}mhz"
+                    vals = [df[(df["obs_mode"] == om) & (df["filter_type"] == ft)][col].mean()
+                            for om, ft in combos]
+                    ax.bar(x0 + bar_idx * width, vals, width=width,
+                           label=bar_labels[bar_idx] if ax is axes[0] else None,
+                           color=plt.cm.tab20(bar_idx / n_bars))
+                    bar_idx += 1
+            ax.set_xticks(x0 + (n_bars * width) / 2 - width / 2)
+            ax.set_xticklabels([f"{om}\n{ft}" for om, ft in combos], fontsize=7)
+            ax.set_ylim(0, 1)
+            ax.set_title(f"within {thr} MHz")
+            ax.set_ylabel("fraction of cases")
+
+        axes[0].legend(fontsize=7, loc="upper right")
+        fig.suptitle("Fraction of ISR comparisons within frequency threshold")
+        fig.tight_layout()
+        fig.savefig(save_dir / "isr_threshold_fractions.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    # ── Figure 4: foF2 scatter, truth vs. posterior, parametric_ekf only ───
+    ekf_df = df[df["filter_type"] == "parametric_ekf"]
+    if not ekf_df.empty and {"isr_foF2", "post_foF2"}.issubset(ekf_df.columns):
+        fig, axes = plt.subplots(1, len(OBS_MODES), figsize=(6 * len(OBS_MODES), 5.5), squeeze=False)
+        axes = axes[0]
+        sm = None
+        for ax, obs_mode in zip(axes, OBS_MODES):
+            grp = ekf_df[ekf_df["obs_mode"] == obs_mode].dropna(subset=["isr_foF2", "post_foF2"])
+            if grp.empty:
+                ax.set_title(f"{obs_mode} (no data)")
+                continue
+            c = grp["n_ro_occultations"] if "n_ro_occultations" in grp.columns else None
+            sc = ax.scatter(grp["isr_foF2"], grp["post_foF2"], c=c, cmap="viridis",
+                             s=30, edgecolor="k", linewidth=0.3)
+            lo = min(grp["isr_foF2"].min(), grp["post_foF2"].min())
+            hi = max(grp["isr_foF2"].max(), grp["post_foF2"].max())
+            ax.plot([lo, hi], [lo, hi], color="grey", ls="--", lw=1.0, label="perfect retrieval")
+            ax.set_xlabel("ISR truth foF2 [MHz]")
+            ax.set_ylabel("Posterior foF2 [MHz]")
+            ax.set_title(obs_mode)
+            ax.legend(fontsize=7)
+            if c is not None:
+                sm = sc
+        if sm is not None:
+            fig.colorbar(sm, ax=axes.tolist(), label="n_ro_occultations", fraction=0.03, pad=0.02)
+        fig.suptitle("parametric_ekf: ISR truth vs. posterior foF2")
+        fig.savefig(save_dir / "isr_foF2_scatter_by_mode.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    # ── Figure 5: HF propagation perspective (time series) ─────────────────
+    if {"isr_foF2", "post_foF2", "isr_foE", "post_foE"}.issubset(df.columns):
+        ekf_ts_df = df[df["filter_type"] == "parametric_ekf"].sort_values("t_centre")
+        fig, axes = plt.subplots(len(ISR_SITES), 1, figsize=(11, 4.5 * len(ISR_SITES)), squeeze=False)
+        axes = axes[:, 0]
+        for ax, site in zip(axes, ISR_SITES):
+            site_df = ekf_ts_df[ekf_ts_df["instrument"] == site]
+            if site_df.empty:
+                ax.set_title(f"{site} (no data)")
+                continue
+            truth = site_df.drop_duplicates(subset=["t_centre"]).sort_values("t_centre")
+            ax.plot(truth["t_centre"], truth["isr_foF2"], color="black", lw=1.6,
+                     marker="o", ms=3, label="truth foF2")
+            ax.plot(truth["t_centre"], truth["isr_foE"], color="black", lw=1.2, ls="--",
+                     marker="o", ms=3, label="truth foE")
+            for obs_mode in OBS_MODES:
+                mode_df = site_df[site_df["obs_mode"] == obs_mode].sort_values("t_centre")
+                if mode_df.empty:
+                    continue
+                color = obs_mode_colors[obs_mode]
+                ax.plot(mode_df["t_centre"], mode_df["post_foF2"], color=color, lw=1.3,
+                         marker="s", ms=3, label=f"{obs_mode} post foF2")
+                ax.plot(mode_df["t_centre"], mode_df["post_foE"], color=color, lw=1.0, ls="--",
+                         marker="s", ms=3, label=f"{obs_mode} post foE")
+            ax.set_ylabel("Frequency [MHz]")
+            ax.set_title(f"{site}: HF propagation frequencies (parametric EKF)")
+            ax.legend(fontsize=6, ncol=3)
+        axes[-1].set_xlabel("time (t_centre)")
+        fig.tight_layout()
+        fig.savefig(save_dir / "isr_hf_propagation_timeseries.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    print(f"[ISR-DA] Frequency-domain figures saved to {save_dir}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1464,10 +1757,16 @@ def main() -> None:
     parser.add_argument("--no-plot", action="store_true",
                         help="Skip figure generation.")
     parser.add_argument("--days", type=int, default=None,
-                        help="Limit processing to the first N priority days.")
+                        help="Limit processing to the first N priority days "
+                             "(after --start-date filtering, if given).")
     parser.add_argument("--tier", type=int, choices=[1, 2, 3], default=None,
                         help="Only process days of this priority tier "
                              "(1=TRO+ESR, 2=either, 3=JRO only). Default: all tiers.")
+    parser.add_argument("--start-date", type=str, default=None,
+                        help="Begin processing at this date, YYYY-MM-DD (e.g. "
+                             "2025-08-27), in chronological order -- overrides "
+                             "the default tier-then-date priority ordering so "
+                             "earlier/lower-tier days aren't skipped ahead of it.")
     parser.add_argument("--list-days", action="store_true",
                         help="Print priority-day summary and exit.")
     parser.add_argument("--status", action="store_true",
@@ -1481,6 +1780,11 @@ def main() -> None:
         return
 
     priority_days = select_priority_days(force=args.force)
+
+    if args.start_date is not None:
+        start = pd.Timestamp(args.start_date).date()
+        priority_days = [d for d in priority_days if d["date"] >= start]
+        priority_days.sort(key=lambda e: e["date"])  # chronological, ignore tier ordering
 
     if args.list_days:
         tier_counts = {1: 0, 2: 0, 3: 0}
