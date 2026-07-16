@@ -44,6 +44,14 @@ from demo import extract_robust_f2_peak
 
 ISR_MIN_VALID_GATES = 5
 
+# Arc-innovation diagnostic (Panel A / the per-arc bar chart) gets cluttered
+# for ro_igs/igs_only once IGS ground-station arcs are mixed in with (or
+# stand in for) the RO occultations -- IGS stations contribute many more
+# arcs per window than RO. Cap how many IGS arcs are drawn, keeping ALL RO
+# arcs and only a representative subset of IGS arcs (see
+# _select_representative_arc_indices below).
+ARC_INNOV_MAX_IGS_ARCS = 20
+
 # Per-group processing can write dozens of figures (6 obs_mode/filter_type
 # configs x several plot types x however many ISR scans fall in the window),
 # each of which used to print its own "<figure> saved -> path" line -- set
@@ -1270,6 +1278,35 @@ def _plot_igs_covariance_panels(
     _print_saved(f"  Saved IGS-only covariance plot → {plot_path}")
     return plot_path
 
+
+def _select_representative_arc_indices(
+    idx:            np.ndarray,
+    arc_prior_rmse: np.ndarray,
+    arc_post_rmse:  np.ndarray,
+    n_keep:         int,
+) -> np.ndarray:
+    """
+    Pick up to *n_keep* of *idx* (indices into the full arc arrays) that are
+    representative of the full prior/posterior TEC-error distribution, for
+    thinning out crowded arc-innovation panels (see ARC_INNOV_MAX_IGS_ARCS).
+
+    Sorts the candidate arcs by a combined prior+post RMSE score and takes
+    evenly spaced picks along that ranking (quantile sampling), rather than
+    a random subset or a top-N-by-error cut -- this keeps the best-fit,
+    worst-fit, and everything-in-between arcs all represented in proportion,
+    instead of biasing the displayed subset toward only the largest errors.
+
+    Returns *idx* unchanged (as an array) if len(idx) <= n_keep.
+    """
+    idx = np.asarray(idx)
+    if len(idx) <= n_keep:
+        return idx
+    score = np.asarray(arc_prior_rmse)[idx] + np.asarray(arc_post_rmse)[idx]
+    order = np.argsort(score)                       # ascending combined error
+    pick_pos = np.unique(np.round(np.linspace(0, len(idx) - 1, n_keep)).astype(int))
+    return idx[order[pick_pos]]
+
+
 def _plot_group_all_modes(
     group_key: str,
     filter_results: dict,
@@ -1338,6 +1375,43 @@ def _plot_group_all_modes(
                         clean_list=clean_list,
                         sat_ids=result.get("sat_ids", []),
                     )
+
+                    # ── Thin the per-arc panels for ro_igs/igs_only ─────────
+                    # IGS ground stations contribute far more arcs per window
+                    # than the RO occultations, so mixing them into (or, for
+                    # igs_only, entirely filling) the per-arc bar/scatter/map
+                    # panels drowns out the RO arcs and overcrowds the chart.
+                    # Keep every RO arc, but thin IGS arcs down to a subset
+                    # that's representative of the full prior/posterior TEC
+                    # error spread (see _select_representative_arc_indices).
+                    if obs_mode in ("ro_igs", "igs_only"):
+                        _is_igs = np.array(
+                            [cl.get("obs_source") == "IGS_ground" for cl in clean_list]
+                        )
+                        _ro_idx  = np.where(~_is_igs)[0]
+                        _igs_idx = np.where(_is_igs)[0]
+                        _igs_keep = _select_representative_arc_indices(
+                            _igs_idx,
+                            arc_stats["arc_prior_rmse"],
+                            arc_stats["arc_post_rmse"],
+                            ARC_INNOV_MAX_IGS_ARCS,
+                        )
+                        if len(_igs_keep) < len(_igs_idx):
+                            _keep = np.sort(np.concatenate([_ro_idx, _igs_keep]))
+                            print(f"  [diag] {group_key}/{obs_mode}/{filter_type}: "
+                                  f"arc-innovation panels thinned to "
+                                  f"{len(_ro_idx)} RO + {len(_igs_keep)}/"
+                                  f"{len(_igs_idx)} representative IGS arcs "
+                                  f"(of {len(clean_list)} total)")
+                            arc_stats = dict(arc_stats)  # don't mutate the shared dict
+                            for _key in ("arc_labels", "arc_prior_mean", "arc_post_mean",
+                                         "arc_prior_rmse", "arc_post_rmse",
+                                         "arc_lats", "arc_lons"):
+                                _val = arc_stats[_key]
+                                arc_stats[_key] = ([_val[k] for k in _keep]
+                                                    if isinstance(_val, list)
+                                                    else np.asarray(_val)[_keep])
+
                     _plot_arc_innovation_diagnostic(
                         arc_labels     = arc_stats["arc_labels"],
                         arc_prior_mean = arc_stats["arc_prior_mean"],

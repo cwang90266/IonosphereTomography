@@ -5,9 +5,10 @@ ionosphere forward model in enkf_update.py / observation_operator.py.
 
 Workflow
 --------
-1. Scan the day directory for podTc2 occultation files once, bin qualifying
-   arcs into WINDOW_MINUTES-wide windows (keyed on TEC-max epoch), then apply
-   the ISR ROI gate + round-robin constellation selection per window. Windows
+1. Scan the day directory for podTc2 occultation files once, define windows
+   as the local minima of occultation availability (from
+   demo_occultation_availability.availability_minima_windows), then apply the
+   ISR ROI gate + round-robin constellation selection per window. Windows
    with fewer than MIN_ARCS_PER_WINDOW arcs are dropped.
 2. For every retained window (main() loops over them), rebuild the geometry-
    dependent Fibonacci grids from that window's arcs, then run the full
@@ -38,6 +39,9 @@ from __future__ import annotations
 import sys
 import os
 import json
+import argparse
+import logging
+import time as _time
 from pathlib import Path
 from collections import defaultdict
 
@@ -66,6 +70,7 @@ import cartopy.feature as cfeature
 import pyproj
 import netCDF4
 from scipy.spatial import cKDTree
+from scipy.signal import find_peaks
 from tqdm import tqdm
 
 from TEC_model.podTc_file_processing import parse_podTc2_nc_file
@@ -91,6 +96,15 @@ from demo_compare_kf_enkf import (
 from demo_group import CONSTELLATION_CONFIG, _CONST_FALLBACK_CMAP
 from demo_isr_initial_conditions import INSTRUMENTS
 from demo import extract_robust_f2_peak
+
+logger = logging.getLogger("test_param_iono")
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
+    )
+    logger.addHandler(_handler)
+logger.setLevel(logging.INFO)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -194,6 +208,400 @@ def compute_retrieval_freq_metrics(
     return out
 
 
+def _interp_edp_field_to_station(
+    edp_field: dict,
+    station_lat: float,
+    station_lon: float,
+) -> np.ndarray:
+    """
+    IDW-interpolate a gridded Ne field to a single (lat, lon) point.
+
+    edp_field : dict with keys "ne" (n_alt, n_geo), "grid_lats" (n_geo,),
+                "grid_lons" (n_geo,) — the same bundling convention used
+                elsewhere for prior_edp/posterior_edp + grid_lats/grid_lons.
+
+    Returns (n_alt,) Ne profile at the station location.
+    """
+    w = _idw_weights(
+        station_lat, station_lon,
+        np.asarray(edp_field["grid_lats"], dtype=float),
+        np.asarray(edp_field["grid_lons"], dtype=float),
+    )
+    return np.asarray(edp_field["ne"], dtype=float) @ w
+
+
+def analyze_edp_error_at_stations(
+    truth_edp_dict: dict,
+    prior_edp_dict: dict,
+    post_kf_dict: dict,
+    post_ekf_dict: dict,
+    stations_list: list[str],
+    alt_grid: np.ndarray,
+    stations_json: str | None = None,
+    verbose: bool = False,
+) -> dict:
+    """
+    Compare truth vs. prior/KF/EKF gridded Ne fields at named IGS station
+    locations, IDW-interpolating each field to the station (lat, lon).
+
+    truth_edp_dict/prior_edp_dict/post_kf_dict/post_ekf_dict : dicts with
+        keys "ne" (n_alt, n_geo), "grid_lats" (n_geo,), "grid_lons" (n_geo,).
+        Each field carries its own grid, since truth and model grids may
+        differ in resolution.
+    stations_list : e.g. ["TRO1", "WUTH", "NYA1"] — 4-char IGSNetwork.json
+        prefixes (see IGS_SIM_STATIONS).
+    alt_grid : (n_alt,) km, shared by all four fields.
+
+    Returns
+    -------
+    {
+      station_code: {
+        "prior" | "kf" | "ekf_param": {
+          "ne_abs_error": (n_alt,) [m^-3],
+          "fp_abs_error": (n_alt,) [MHz],
+          "mae_below_f2_peak": float,   # mean |Ne error| below truth hmF2
+          "fp_mae_below_f2_peak": float,  # mean |f_p error| below truth hmF2
+          "rmse": float,                # Ne-space RMSE, full profile
+          "integral": float,            # trapz(|Ne error|, alt_grid)
+          "f2_peak_error_ne": float,    # |NmF2_est - NmF2_truth| [m^-3]
+          "f2_peak_error_fp": float,    # |foF2_est - foF2_truth| [MHz]
+        }, ...
+      }, ...
+    }
+    """
+    alt_grid = np.asarray(alt_grid, dtype=float)
+    if stations_json is None:
+        stations_json = IGS_SIM_STATIONS_JSON
+    stations = _load_igs_sim_stations(stations_json, stations_list, roi_max_km=np.inf)
+    stations_by_code = {s["code"]: s for s in stations}
+
+    filter_fields = dict(prior=prior_edp_dict, kf=post_kf_dict, ekf_param=post_ekf_dict)
+
+    out: dict = {}
+    for code in stations_list:
+        code_u = code.upper()
+        if code_u not in stations_by_code:
+            print(f"  [analyze_edp_error_at_stations] Station {code} not resolved — skipped.")
+            continue
+        st = stations_by_code[code_u]
+
+        truth_ne = _interp_edp_field_to_station(truth_edp_dict, st["lat"], st["lon"])
+        truth_nmf2, truth_hmf2 = extract_robust_f2_peak(truth_ne, alt_grid)
+        truth_fp = ne_to_mhz(truth_ne)
+        below_peak_mask = alt_grid <= truth_hmf2
+
+        station_out: dict = {}
+        for filt_name, edp_dict in filter_fields.items():
+            field_ne = _interp_edp_field_to_station(edp_dict, st["lat"], st["lon"])
+            field_fp = ne_to_mhz(field_ne)
+
+            valid = np.isfinite(field_ne) & np.isfinite(truth_ne)
+            ne_abs_error = np.full_like(field_ne, np.nan)
+            ne_abs_error[valid] = np.abs(field_ne[valid] - truth_ne[valid])
+            fp_abs_error = np.full_like(field_fp, np.nan)
+            fp_abs_error[valid] = np.abs(field_fp[valid] - truth_fp[valid])
+
+            mae_below_peak = (float(np.mean(ne_abs_error[valid & below_peak_mask]))
+                               if np.any(valid & below_peak_mask) else np.nan)
+            fp_mae_below_peak = (float(np.mean(fp_abs_error[valid & below_peak_mask]))
+                                   if np.any(valid & below_peak_mask) else np.nan)
+            rmse = (float(np.sqrt(np.mean(ne_abs_error[valid] ** 2)))
+                     if np.any(valid) else np.nan)
+            integral = (float(_trapz(ne_abs_error[valid], alt_grid[valid]))
+                        if np.count_nonzero(valid) > 1 else np.nan)
+
+            field_nmf2, _ = extract_robust_f2_peak(field_ne, alt_grid)
+            f2_peak_error_ne = float(abs(field_nmf2 - truth_nmf2))
+            f2_peak_error_fp = float(abs(ne_to_mhz(field_nmf2) - ne_to_mhz(truth_nmf2)))
+
+            station_out[filt_name] = dict(
+                ne_abs_error=ne_abs_error,
+                fp_abs_error=fp_abs_error,
+                mae_below_f2_peak=mae_below_peak,
+                fp_mae_below_f2_peak=fp_mae_below_peak,
+                rmse=rmse,
+                integral=integral,
+                f2_peak_error_ne=f2_peak_error_ne,
+                f2_peak_error_fp=f2_peak_error_fp,
+            )
+
+            if verbose:
+                print(f"  [{code_u}] {filt_name:9s}  RMSE={rmse:.3e} m^-3  "
+                      f"MAE(<hmF2)={mae_below_peak:.3e} m^-3  "
+                      f"NmF2_err={f2_peak_error_ne:.3e} m^-3  "
+                      f"foF2_err={f2_peak_error_fp:.3f} MHz")
+
+        out[code_u] = station_out
+
+    return out
+
+
+def _get_reflection_height(
+    fp_profile: np.ndarray,
+    alt_grid: np.ndarray,
+    freq_mhz: float,
+) -> float:
+    """
+    Find the maximum altitude where plasma frequency >= frequency (reflection height).
+
+    For a typical ionospheric profile with a peak at hmF2, this is the altitude in
+    the F-region where a wave at freq_mhz would be reflected back to ground.
+    Returns np.nan if the frequency is too high (no reflection).
+    """
+    mask = np.asarray(fp_profile, dtype=float) >= float(freq_mhz)
+    if not np.any(mask):
+        return np.nan
+    return float(np.max(alt_grid[mask]))
+
+
+def analyze_hf_reflection_heights(
+    truth_edp_dict: dict,
+    prior_edp_dict: dict,
+    post_kf_dict: dict,
+    post_ekf_dict: dict,
+    frequencies_mhz: list[float] | None = None,
+    alt_grid: np.ndarray | None = None,
+    verbose: bool = False,
+) -> dict:
+    """
+    Analyze HF radio reflection heights for gridded Ne fields at multiple frequencies.
+
+    For each frequency in the HF band, find the maximum altitude where the plasma
+    frequency f_p >= frequency at each grid point. Compute error metrics against truth.
+
+    truth_edp_dict/prior_edp_dict/post_kf_dict/post_ekf_dict : dicts with
+        keys "ne" (n_alt, n_geo), "grid_lats", "grid_lons".
+    frequencies_mhz : list of frequencies in MHz; default [1, 3, 5, 7, 10, 15, 20].
+    alt_grid : (n_alt,) km, shared by all fields.
+
+    Returns
+    -------
+    {
+      frequency_mhz: {
+        "prior" | "kf" | "ekf_param": {
+          "mean_height_error_km": float,   # mean |h_est - h_truth|
+          "std_height_error_km": float,
+          "miss_count": int,               # truth reflects, estimate doesn't
+          "false_alarm_count": int,        # estimate reflects, truth doesn't
+          "bias_km": float,                # mean(h_est - h_truth) [signed]
+        }, ...
+      }, ...
+    }
+    """
+    if frequencies_mhz is None:
+        frequencies_mhz = [1.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0]
+    frequencies_mhz = np.asarray(frequencies_mhz, dtype=float)
+    alt_grid = np.asarray(alt_grid, dtype=float)
+
+    truth_ne = np.asarray(truth_edp_dict["ne"], dtype=float)
+    prior_ne = np.asarray(prior_edp_dict["ne"], dtype=float)
+    kf_ne    = np.asarray(post_kf_dict["ne"], dtype=float)
+    ekf_ne   = np.asarray(post_ekf_dict["ne"], dtype=float)
+
+    truth_fp = ne_to_mhz(truth_ne)  # (n_alt, n_geo)
+    prior_fp = ne_to_mhz(prior_ne)
+    kf_fp    = ne_to_mhz(kf_ne)
+    ekf_fp   = ne_to_mhz(ekf_ne)
+
+    n_geo = truth_fp.shape[1]
+    filter_fps = dict(prior=prior_fp, kf=kf_fp, ekf_param=ekf_fp)
+
+    out: dict = {}
+    for freq in frequencies_mhz:
+        freq_dict = {}
+
+        for filt_name, fp_grid in filter_fps.items():
+            truth_heights = np.array([
+                _get_reflection_height(truth_fp[:, i], alt_grid, freq) for i in range(n_geo)
+            ])
+            est_heights = np.array([
+                _get_reflection_height(fp_grid[:, i], alt_grid, freq) for i in range(n_geo)
+            ])
+
+            valid = np.isfinite(truth_heights) & np.isfinite(est_heights)
+            h_error = np.full_like(truth_heights, np.nan)
+            h_error[valid] = np.abs(est_heights[valid] - truth_heights[valid])
+
+            h_bias = np.full_like(truth_heights, np.nan)
+            h_bias[valid] = est_heights[valid] - truth_heights[valid]
+
+            miss = np.isfinite(truth_heights) & ~np.isfinite(est_heights)
+            false_alarm = ~np.isfinite(truth_heights) & np.isfinite(est_heights)
+
+            freq_dict[filt_name] = dict(
+                mean_height_error_km=float(np.nanmean(h_error)) if np.any(valid) else np.nan,
+                std_height_error_km=float(np.nanstd(h_error)) if np.any(valid) else np.nan,
+                miss_count=int(np.sum(miss)),
+                false_alarm_count=int(np.sum(false_alarm)),
+                bias_km=float(np.nanmean(h_bias)) if np.any(valid) else np.nan,
+            )
+
+            if verbose:
+                print(f"  [{freq:5.1f} MHz] {filt_name:9s}  "
+                      f"h_error={freq_dict[filt_name]['mean_height_error_km']:6.2f} km  "
+                      f"bias={freq_dict[filt_name]['bias_km']:6.2f} km  "
+                      f"miss={freq_dict[filt_name]['miss_count']}  "
+                      f"false_alarm={freq_dict[filt_name]['false_alarm_count']}")
+
+        out[float(freq)] = freq_dict
+
+    return out
+
+
+def analyze_critical_frequencies(
+    truth_edp_dict: dict,
+    prior_edp_dict: dict,
+    post_kf_dict: dict,
+    post_ekf_dict: dict,
+    alt_grid: np.ndarray,
+    stations_list: list[str] | None = None,
+    stations_json: str | None = None,
+    verbose: bool = False,
+) -> dict:
+    """
+    Extract critical frequencies (foF2, foE) for gridded Ne fields (and optionally
+    at named stations) and compute errors vs. truth.
+
+    truth_edp_dict/prior_edp_dict/post_kf_dict/post_ekf_dict : dicts with
+        keys "ne" (n_alt, n_geo), "grid_lats", "grid_lons".
+    alt_grid : (n_alt,) km.
+    stations_list : optional; e.g., ["TRO1", "WUTH", "NYA1"] to add per-station results.
+
+    Returns
+    -------
+    {
+      "foF2": {
+        "prior" | "kf" | "ekf_param": {
+          "mean_error_mhz": float,        # mean(est - truth)
+          "std_error_mhz": float,
+          "mean_rel_error_pct": float,    # mean((est - truth) / truth * 100)
+          "rmse_mhz": float,
+        }, ...
+      },
+      "foE": { ... same structure ... },
+      "per_station": {                    # if stations_list provided
+        station_code: {
+          "foF2_error_mhz": float,
+          "foE_error_mhz": float,
+          "foF2_rel_error_pct": float,
+          "foE_rel_error_pct": float,
+        }, ...
+      }
+    }
+    """
+    alt_grid = np.asarray(alt_grid, dtype=float)
+
+    truth_ne = np.asarray(truth_edp_dict["ne"], dtype=float)
+    prior_ne = np.asarray(prior_edp_dict["ne"], dtype=float)
+    kf_ne    = np.asarray(post_kf_dict["ne"], dtype=float)
+    ekf_ne   = np.asarray(post_ekf_dict["ne"], dtype=float)
+
+    n_geo = truth_ne.shape[1]
+
+    def extract_crit_freqs_grid(ne_grid):
+        nmf2 = np.full(n_geo, np.nan)
+        nme = np.full(n_geo, np.nan)
+        for i in range(n_geo):
+            nmf2[i], _ = extract_robust_f2_peak(ne_grid[:, i], alt_grid)
+            nme[i], _ = extract_e_layer_peak(ne_grid[:, i], alt_grid)
+        return nmf2, nme
+
+    truth_nmf2, truth_nme = extract_crit_freqs_grid(truth_ne)
+    prior_nmf2, prior_nme = extract_crit_freqs_grid(prior_ne)
+    kf_nmf2, kf_nme       = extract_crit_freqs_grid(kf_ne)
+    ekf_nmf2, ekf_nme     = extract_crit_freqs_grid(ekf_ne)
+
+    truth_fof2 = ne_to_mhz(truth_nmf2)
+    truth_foe  = ne_to_mhz(truth_nme)
+    prior_fof2 = ne_to_mhz(prior_nmf2)
+    prior_foe  = ne_to_mhz(prior_nme)
+    kf_fof2    = ne_to_mhz(kf_nmf2)
+    kf_foe     = ne_to_mhz(kf_nme)
+    ekf_fof2   = ne_to_mhz(ekf_nmf2)
+    ekf_foe    = ne_to_mhz(ekf_nme)
+
+    filter_f2s = dict(prior=prior_fof2, kf=kf_fof2, ekf_param=ekf_fof2)
+    filter_es  = dict(prior=prior_foe,  kf=kf_foe,  ekf_param=ekf_foe)
+
+    out: dict = {}
+
+    for crit_type, truth_crit, filter_crits in [
+        ("foF2", truth_fof2, filter_f2s),
+        ("foE", truth_foe, filter_es),
+    ]:
+        crit_dict = {}
+        for filt_name, est_crit in filter_crits.items():
+            valid = np.isfinite(truth_crit) & np.isfinite(est_crit)
+            error = np.full_like(truth_crit, np.nan)
+            error[valid] = est_crit[valid] - truth_crit[valid]
+            rel_error = np.full_like(truth_crit, np.nan)
+            rel_error[valid] = (error[valid] / truth_crit[valid]) * 100.0
+
+            crit_dict[filt_name] = dict(
+                mean_error_mhz=float(np.nanmean(error)) if np.any(valid) else np.nan,
+                std_error_mhz=float(np.nanstd(error)) if np.any(valid) else np.nan,
+                mean_rel_error_pct=float(np.nanmean(rel_error)) if np.any(valid) else np.nan,
+                rmse_mhz=(float(np.sqrt(np.nanmean(error[valid] ** 2)))
+                          if np.any(valid) else np.nan),
+            )
+
+            if verbose:
+                print(f"  [{crit_type:5s}] {filt_name:9s}  "
+                      f"mean_err={crit_dict[filt_name]['mean_error_mhz']:6.3f} MHz  "
+                      f"rel_err={crit_dict[filt_name]['mean_rel_error_pct']:6.2f} %  "
+                      f"rmse={crit_dict[filt_name]['rmse_mhz']:6.3f} MHz")
+
+        out[crit_type] = crit_dict
+
+    if stations_list is not None:
+        if stations_json is None:
+            stations_json = IGS_SIM_STATIONS_JSON
+        stations = _load_igs_sim_stations(stations_json, stations_list, roi_max_km=np.inf)
+        stations_by_code = {s["code"]: s for s in stations}
+
+        per_station = {}
+        for code in stations_list:
+            code_u = code.upper()
+            if code_u not in stations_by_code:
+                continue
+            st = stations_by_code[code_u]
+
+            def extract_crit_freqs_station(edp_dict):
+                prof = _interp_edp_field_to_station(edp_dict, st["lat"], st["lon"])
+                nmf2, _ = extract_robust_f2_peak(prof, alt_grid)
+                nme, _ = extract_e_layer_peak(prof, alt_grid)
+                return ne_to_mhz(nmf2), ne_to_mhz(nme)
+
+            t_f2, t_e = extract_crit_freqs_station(truth_edp_dict)
+            p_f2, p_e = extract_crit_freqs_station(prior_edp_dict)
+            kf_f2, kf_e = extract_crit_freqs_station(post_kf_dict)
+            ekf_f2, ekf_e = extract_crit_freqs_station(post_ekf_dict)
+
+            per_station[code_u] = dict(
+                foF2_error_prior_mhz=float(p_f2 - t_f2) if np.isfinite(p_f2) and np.isfinite(t_f2) else np.nan,
+                foF2_error_kf_mhz=float(kf_f2 - t_f2) if np.isfinite(kf_f2) and np.isfinite(t_f2) else np.nan,
+                foF2_error_ekf_mhz=float(ekf_f2 - t_f2) if np.isfinite(ekf_f2) and np.isfinite(t_f2) else np.nan,
+                foE_error_prior_mhz=float(p_e - t_e) if np.isfinite(p_e) and np.isfinite(t_e) else np.nan,
+                foE_error_kf_mhz=float(kf_e - t_e) if np.isfinite(kf_e) and np.isfinite(t_e) else np.nan,
+                foE_error_ekf_mhz=float(ekf_e - t_e) if np.isfinite(ekf_e) and np.isfinite(t_e) else np.nan,
+                foF2_rel_error_prior_pct=(float((p_f2 - t_f2) / t_f2 * 100) if np.isfinite(p_f2) and np.isfinite(t_f2) and t_f2 > 0 else np.nan),
+                foF2_rel_error_kf_pct=(float((kf_f2 - t_f2) / t_f2 * 100) if np.isfinite(kf_f2) and np.isfinite(t_f2) and t_f2 > 0 else np.nan),
+                foF2_rel_error_ekf_pct=(float((ekf_f2 - t_f2) / t_f2 * 100) if np.isfinite(ekf_f2) and np.isfinite(t_f2) and t_f2 > 0 else np.nan),
+                foE_rel_error_prior_pct=(float((p_e - t_e) / t_e * 100) if np.isfinite(p_e) and np.isfinite(t_e) and t_e > 0 else np.nan),
+                foE_rel_error_kf_pct=(float((kf_e - t_e) / t_e * 100) if np.isfinite(kf_e) and np.isfinite(t_e) and t_e > 0 else np.nan),
+                foE_rel_error_ekf_pct=(float((ekf_e - t_e) / t_e * 100) if np.isfinite(ekf_e) and np.isfinite(t_e) and t_e > 0 else np.nan),
+            )
+
+            if verbose:
+                print(f"  [{code_u}] foF2: prior_err={per_station[code_u]['foF2_error_prior_mhz']:.3f} MHz, "
+                      f"kf_err={per_station[code_u]['foF2_error_kf_mhz']:.3f} MHz, "
+                      f"ekf_err={per_station[code_u]['foF2_error_ekf_mhz']:.3f} MHz")
+
+        out["per_station"] = per_station
+
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # §0  Configuration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -206,7 +614,7 @@ def compute_retrieval_freq_metrics(
 RUN_KF        = True   # Gridded Ne linear Kalman Filter (Ne-space, single-step)
 RUN_EKF_PARAM = True   # Iterative Extended KF on parametric IRI state
 
-DOY           = 265
+DOY           = 239
 YYYY          = 2025
 BASE_PATH     = (f"/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/"
                  f"{YYYY}.{DOY}/")
@@ -272,14 +680,35 @@ IGS_SIM_BRDC_DIR        = "./Data/RINEX_Cache"
 FILTER_MODES = ("ro_only", "ro_igs", "igs_only")
 
 # ── Multi-window sweep across the day ────────────────────────────────────────
-# The pipeline is executed once per discrete time window across the target day.
-# WINDOW_MINUTES controls the binning width (30 matches demo_group.py). Given
-# the ISR ROI gate typically leaves only ~30 arcs/day, most 30-min windows are
-# sparse; MIN_ARCS_PER_WINDOW filters out windows too thin for meaningful
-# assimilation. Coarsen WINDOW_MINUTES (e.g. 60 or 180) to process fewer,
-# denser windows.
-WINDOW_MINUTES        = 60   # per-window bin width (minutes)
+# The pipeline is executed once per window across the target day. Windows are
+# NO LONGER fixed-width time bins: scan_and_select_files_per_window() now
+# partitions the day using availability_minima_windows() (see
+# demo_occultation_availability.py), which finds the local minima of a rolling
+# 1-hour occultation count and uses those minima as window edges. This yields
+# variable-width windows that fall along natural lulls in occultation
+# availability rather than an arbitrary clock grid. WINDOW_MINUTES is retained
+# only for backward-compatible call signatures and no longer drives binning.
+# Given the ISR ROI gate typically leaves only ~30 arcs/day, many
+# minima-defined windows are still sparse; MIN_ARCS_PER_WINDOW filters out
+# windows too thin for meaningful assimilation.
+WINDOW_MINUTES        = 60   # unused by binning; kept for signature compatibility
 MIN_ARCS_PER_WINDOW   = 16    # skip windows with fewer ROI-passing arcs
+
+# ── §0c  Checkpoint and restart configuration ────────────────────────────────
+# Enable checkpointing to save per-window, per-bin results for recovery if the
+# script crashes or needs to be restarted. Checkpoints are keyed by (window_key,
+# occultation_count) so you can sweep OCC_COUNT_BINS without recomputing earlier
+# bins.
+OCC_COUNT_BINS = [None, 55, 45, 35, 25, 15, 5]
+  # None = use all available arcs in window; then decreasing bin counts
+
+ENABLE_CHECKPOINT = True
+CHECKPOINT_DIR = "./Data/checkpoints/"  # stores per-window, per-bin results
+ENABLE_RESTART = True  # auto-load checkpoints if script crashes
+
+# Set by --skip-plots on the CLI; suppresses all figure generation so a run
+# can collect KF/EKF metrics without paying matplotlib/cartopy rendering cost.
+SKIP_PLOTS = False
 
 # Altitude grid for Ne integration (log-spaced 60–800 km)
 ALT_GRID = np.logspace(np.log10(60.0), np.log10(800.0), num=55, dtype=float)
@@ -396,6 +825,54 @@ def _round_robin_by_constellation(
     return selected
 
 
+# Used to study the effect of measurement density (number of assimilated
+# occultations) on filter performance — see OCC_COUNT_BINS / the checkpoint
+# sweep in main(), which reruns each window at a range of bin_count values.
+def select_arcs_by_count_bin(
+    arc_list: list[dict],
+    bin_count: int | None,
+    window_key: str,
+) -> tuple[list[dict], dict]:
+    """
+    Randomly subsample *arc_list* down to *bin_count* arcs.
+
+    bin_count=None means "use all available arcs" (no subsampling — the
+    OCC_COUNT_BINS convention for the densest bin).  If arc_list already has
+    fewer than bin_count arcs there is nothing to subsample, so the full list
+    is returned unchanged.  Otherwise exactly bin_count arcs are drawn without
+    replacement using a seed derived from window_key (hash(window_key)), so
+    re-running the same window/bin reproduces the same subset — important for
+    checkpoint/restart consistency across OCC_COUNT_BINS.
+
+    Returns
+    -------
+    selected : list[dict]
+        The chosen arcs (or all of arc_list, per the rules above).
+    meta : dict
+        "requested_count"  : bin_count as passed in.
+        "actual_count"     : len(selected).
+        "selected_indices" : indices into arc_list that were kept, ascending.
+    """
+    n = len(arc_list)
+
+    if bin_count is None or bin_count >= n:
+        selected_indices = list(range(n))
+        selected = list(arc_list)
+    else:
+        seed = hash(window_key) % (2**32)
+        rng = np.random.default_rng(seed)
+        selected_indices = sorted(int(i) for i in
+                                   rng.choice(n, size=bin_count, replace=False))
+        selected = [arc_list[i] for i in selected_indices]
+
+    meta = dict(
+        requested_count  = bin_count,
+        actual_count     = len(selected),
+        selected_indices = selected_indices,
+    )
+    return selected, meta
+
+
 def scan_and_select_files_per_window(
     base_path: str,
     alt_min: float        = ALT_MIN_TEC,
@@ -405,15 +882,23 @@ def scan_and_select_files_per_window(
     file_suffix: str      = ".0001_nc",
     time_window_min: int  = WINDOW_MINUTES,
     min_arcs_per_window: int = MIN_ARCS_PER_WINDOW,
-) -> list[dict]:
+    minima_window_hours: float = 1.0,
+    minima_step_minutes: float = 5.0,
+    minima_min_sep_minutes: float = 60.0,
+    minima_prominence: float = 3.0,
+) -> tuple[list[dict], dict[str, int]]:
     """
     Scan *base_path* for podTc2 netCDF files, filter to those whose tangent
     altitude range overlaps [alt_min, alt_max] km AND whose full arc probes
-    below *alt_min_tangent* km, then bin into *time_window_min*-minute windows
-    keyed on the TEC-max epoch datetime.  For each window: apply the ISR ROI
-    gate and select up to *max_files* records via round-robin over GNSS
-    constellations.  Windows with fewer than *min_arcs_per_window* ROI-passing
-    arcs are dropped.
+    below *alt_min_tangent* km, then partition the day into windows using
+    availability_minima_windows() (demo_occultation_availability.py): window
+    edges are the local minima of a rolling *minima_window_hours*-hour
+    occultation count, so windows fall along natural lulls in availability
+    rather than a fixed clock grid.  NOTE: windows are therefore no longer
+    fixed-width time bins — their widths vary day to day with occultation
+    availability.  For each window: apply the ISR ROI gate and select up to
+    *max_files* records via round-robin over GNSS constellations.  Windows
+    with fewer than *min_arcs_per_window* ROI-passing arcs are dropped.
 
     Parameters
     ----------
@@ -422,21 +907,31 @@ def scan_and_select_files_per_window(
         Ensures the ray path probes deep enough into the lower ionosphere /
         upper mesosphere.  Default 90 km.
     time_window_min : int
-        Bin width in minutes.  30 matches demo_group.py's convention.
+        Unused by the minima-based binning; retained only so existing call
+        sites and configs stay signature-compatible.
     min_arcs_per_window : int
         Minimum number of ROI-passing arcs required for a window to be
         retained.  KF/EKF assimilation needs several arcs for meaningful
         geometric coverage; sparser windows are silently dropped.
+    minima_window_hours, minima_step_minutes, minima_min_sep_minutes,
+    minima_prominence : float
+        Passed straight through to availability_minima_windows() to control
+        the rolling-count width, evaluation grid, minimum separation between
+        detected minima, and required peak prominence.
 
     Returns
     -------
     windows : list of dicts, one per retained window, sorted chronologically.
         Each dict has keys:
-            window_key : "YYYY-MM-DD_HHMM"  (window start, floored to the bin)
+            window_key : "YYYY-MM-DD_HHMM"  (window start, i.e. the minima edge)
             hhmm       : "HHMM"             (for filename suffixing)
             time_dt    : pd.Timestamp       (window start; also the IRI
                                              evaluation time for this window)
             records    : list[dict]         (selected arc records)
+    occ_counts_per_window : dict[str, int]
+        window_key -> total occultation count in that window (before the ROI
+        gate/round-robin selection), for downstream binning of windows by
+        raw occultation availability.
     """
     records = []
     for fname in sorted(os.listdir(base_path)):
@@ -530,35 +1025,56 @@ def scan_and_select_files_per_window(
     if not records:
         raise RuntimeError(f"No qualifying podTc2 files found in {base_path}")
 
-    # Bin records by TEC-max epoch into time_window_min windows.  Keying on
-    # tec_max_dt (rather than file start) colocates arcs whose ionospheric
-    # peak falls in the same bin.
-    def _window_slot_start(t: pd.Timestamp) -> pd.Timestamp:
-        total_min = t.hour * 60 + t.minute
-        floored   = (total_min // time_window_min) * time_window_min
-        h, m      = divmod(floored, 60)
-        return pd.Timestamp(t.year, t.month, t.day, int(h), int(m))
+    # Partition the day using the local minima of the rolling occultation
+    # count, rather than a fixed-width clock grid.  The target day is taken
+    # as the modal calendar date among the arcs' TEC-max epochs (handles the
+    # rare arc whose tec_max_dt spills a few seconds past midnight).
+    tec_max_times = pd.Series([r["tec_max_dt"] for r in records])
+    day = pd.Timestamp(tec_max_times.dt.normalize().mode().iloc[0])
 
-    groups: dict[pd.Timestamp, list] = defaultdict(list)
-    for r in records:
-        groups[_window_slot_start(r["tec_max_dt"])].append(r)
+    # Deferred: demo_occultation_availability imports demo_isr_da_comparison,
+    # which imports this module, so a top-level import here would cycle.
+    from demo_occultation_availability import availability_minima_windows
+    minima_windows, grid, counts, minima_idx = availability_minima_windows(
+        tec_max_times, day,
+        window_hours    = minima_window_hours,
+        step_minutes    = minima_step_minutes,
+        min_sep_minutes = minima_min_sep_minutes,
+        prominence      = minima_prominence,
+    )
 
-    print(f"  Qualifying arcs: {len(records)} across {len(groups)} "
-          f"{time_window_min}-min bins (before ROI gate)")
+    print(f"  Qualifying arcs: {len(records)} across {len(minima_windows)} "
+          f"minima-defined windows (rolling {minima_window_hours:g}h count, "
+          f"{len(minima_idx)} interior minima detected)")
+    for idx in minima_idx:
+        t = pd.Timestamp(grid[idx])
+        print(f"    minima @ {t:%H:%M}  rolling count={int(counts[idx])}")
 
     windows: list[dict] = []
+    occ_counts_per_window: dict[str, int] = {}
     kept_arcs_total   = 0
-    dropped_sparse    = 0
+    dropped_empty     = 0
     dropped_no_roi    = 0
+    dropped_sparse    = 0
 
-    for window_dt in sorted(groups):
-        cands = groups[window_dt]
+    for lo, hi in minima_windows:
+        lo = pd.Timestamp(lo)
+        hi = pd.Timestamp(hi)
+        cands_all = [r for r in records if lo <= r["tec_max_dt"] < hi]
+
+        hhmm = f"{lo.hour:02d}{lo.minute:02d}"
+        wkey = f"{lo.strftime('%Y-%m-%d')}_{hhmm}"
+        occ_counts_per_window[wkey] = len(cands_all)
+
+        if not cands_all:
+            dropped_empty += 1
+            continue
 
         # ROI gate: keep only occultations within ISR_ROI_MAX_KM of ESR/TRO
-        lats = np.array([r["lat"] for r in cands])
-        lons = np.array([r["lon"] for r in cands])
+        lats = np.array([r["lat"] for r in cands_all])
+        lons = np.array([r["lon"] for r in cands_all])
         roi_mask = _near_isr_site_mask(lats, lons)
-        cands = [r for r, ok in zip(cands, roi_mask) if ok]
+        cands = [r for r, ok in zip(cands_all, roi_mask) if ok]
 
         if not cands:
             dropped_no_roi += 1
@@ -568,30 +1084,30 @@ def scan_and_select_files_per_window(
             continue
 
         selected = _round_robin_by_constellation(cands, max_files)
-        hhmm     = f"{window_dt.hour:02d}{window_dt.minute:02d}"
-        wkey     = f"{window_dt.strftime('%Y-%m-%d')}_{hhmm}"
 
         # Constellation breakdown for reporting
         breakdown: dict[str, int] = defaultdict(int)
         for r in selected:
             breakdown[r["conid"]] += 1
         const_str = "  ".join(f"{c}:{n}" for c, n in sorted(breakdown.items()))
-        print(f"    Window {wkey}: {len(selected)} arcs  [{const_str}]")
+        print(f"    Window {wkey} [{lo:%H:%M}-{hi:%H:%M}]: "
+              f"{len(cands_all)} occultations, {len(cands)} ROI-passing, "
+              f"{len(selected)} selected  [{const_str}]")
 
         windows.append(dict(
             window_key = wkey,
             hhmm       = hhmm,
-            time_dt    = window_dt,
+            time_dt    = lo,
             records    = selected,
         ))
         kept_arcs_total += len(selected)
 
-    print(f"  Retained {len(windows)} windows "
+    print(f"  Retained {len(windows)}/{len(minima_windows)} windows "
           f"({kept_arcs_total} total arcs); "
-          f"dropped {dropped_no_roi} (no ROI arcs) + "
+          f"dropped {dropped_empty} (empty) + {dropped_no_roi} (no ROI arcs) + "
           f"{dropped_sparse} (< {min_arcs_per_window} arcs).")
 
-    return windows
+    return windows, occ_counts_per_window
 
 
 def _isr_site_grid_index(grid_lats: np.ndarray, grid_lons: np.ndarray,
@@ -984,6 +1500,7 @@ def _iri_cache_path(
     spacing_deg: float,
     lat_min: float, lat_max: float,
     lon_min: float, lon_max: float,
+    n_grid: int,
     cache_dir: str = IRI_CACHE_DIR,
 ) -> str:
     """Return the .npz cache file path for a given IRI grid run."""
@@ -992,7 +1509,8 @@ def _iri_cache_path(
         f"{time_dt.hour:02d}{time_dt.minute:02d}_"
         f"{spacing_deg:.1f}deg_"
         f"lat{lat_min:.1f}_{lat_max:.1f}_"
-        f"lon{lon_min:.1f}_{lon_max:.1f}.npz"
+        f"lon{lon_min:.1f}_{lon_max:.1f}_"
+        f"n{n_grid}.npz"
     )
     return os.path.join(cache_dir, fname)
 
@@ -1015,19 +1533,35 @@ def build_iri_state_grid_cached(
     """
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = _iri_cache_path(
-        time_dt, spacing_deg, lat_min, lat_max, lon_min, lon_max, cache_dir,
+        time_dt, spacing_deg, lat_min, lat_max, lon_min, lon_max,
+        len(lats), cache_dir,
     )
 
     if os.path.isfile(cache_path):
         try:
             data = np.load(cache_path, allow_pickle=False)
             # Validate alt_grid match
-            if (data["alt_grid"].shape == alt_grid.shape
-                    and np.allclose(data["alt_grid"], alt_grid, rtol=1e-5)):
+            alt_ok = (data["alt_grid"].shape == alt_grid.shape
+                      and np.allclose(data["alt_grid"], alt_grid, rtol=1e-5))
+            # Validate the cached grid actually matches the requested grid.
+            # The cache filename only encodes a rounded bounding box, so two
+            # different Fibonacci grids (different node counts) can round to
+            # the same filename — guard against returning a stale mean_state
+            # whose n_grid doesn't match len(lats)/len(lons).
+            grid_ok = (
+                alt_ok
+                and data["lats"].shape == lats.shape
+                and data["lons"].shape == lons.shape
+                and np.allclose(data["lats"], lats, rtol=1e-6, atol=1e-6)
+                and np.allclose(data["lons"], lons, rtol=1e-6, atol=1e-6)
+            )
+            if grid_ok:
                 print(f"  [cache hit]  {os.path.basename(cache_path)}")
                 return data["mean_state"], data["ne_profiles"]
-            else:
+            elif not alt_ok:
                 print(f"  [cache miss] alt_grid mismatch — rebuilding.")
+            else:
+                print(f"  [cache miss] grid lat/lon mismatch — rebuilding.")
         except Exception as exc:
             print(f"  [cache miss] Could not load {cache_path}: {exc}")
 
@@ -2605,6 +3139,7 @@ def plot_group_summary_metrics_simulated(
     filter_results_by_mode: dict[str, dict],
     save_dir: str,
     hhmm: str,
+    bin_label: "str | None" = None,
 ) -> str | None:
     """
     Adapter to plotIonosphereTomography._plot_group_summary_metrics for the
@@ -2621,6 +3156,8 @@ def plot_group_summary_metrics_simulated(
         Directory to save the summary figure into.
     hhmm
         The window's HHMM tag; used in the figure filename.
+    bin_label
+        Optional bin label (e.g. "bin_30", "bin_all") for OCC_COUNT_BINS sweep.
 
     Returns
     -------
@@ -2714,12 +3251,79 @@ def plot_group_summary_metrics_simulated(
     # ── Parameter-error companion figure ──────────────────────────────────────
     plot_param_error_summary(
         filter_results_by_mode = filter_results_by_mode,
-        save_path = os.path.join(
-            save_dir, f"group_param_error_{group_key}.png"
+        save_path = _make_per_window_subfolder_path(
+            save_dir, hhmm, bin_label, f"group_param_error_{group_key}.png"
         ),
     )
 
     return summary_path
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §5b  Output subfolder organization
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_subfolder_path(
+    save_dir: str,
+    subfolder: str,
+    filename: str,
+) -> str:
+    """
+    Construct a path under save_dir/subfolder/, creating the subfolder if needed.
+    Use for cross_window and summaries; use _make_per_window_subfolder_path for per_window.
+
+    Args:
+        save_dir: Base output directory
+        subfolder: Subfolder name (e.g., "cross_window", "summaries")
+        filename: Filename to save
+
+    Returns:
+        Full path to the file (directory created automatically on use)
+    """
+    path = os.path.join(save_dir, subfolder, filename)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
+
+
+def _parse_bin_count_from_label(bin_label: "str | None") -> "int | None":
+    """Extract numeric bin_count from bin_label ('bin_30' → 30, 'bin_all' → None)."""
+    if bin_label is None or bin_label == "bin_all" or bin_label == "all":
+        return None
+    if isinstance(bin_label, str) and bin_label.startswith("bin_"):
+        try:
+            return int(bin_label[4:])
+        except (ValueError, IndexError):
+            return None
+    try:
+        return int(bin_label)
+    except (ValueError, TypeError):
+        return None
+
+
+def _make_per_window_subfolder_path(
+    save_dir: str,
+    hhmm: str,
+    bin_label: "str | None",
+    filename: str,
+) -> str:
+    """
+    Construct a path for per-window figures organized as:
+    save_dir/per_window/HHMM/bin_COUNT/filename
+
+    Args:
+        save_dir: Base output directory
+        hhmm: Window time code (e.g., "0120")
+        bin_label: Bin label (e.g., "bin_30", "bin_all", None)
+        filename: Filename to save
+
+    Returns:
+        Full path to the file (directory created automatically on use)
+    """
+    bin_count = _parse_bin_count_from_label(bin_label)
+    bin_folder = "bin_all" if bin_count is None else f"bin_{bin_count}"
+    path = os.path.join(save_dir, "per_window", hhmm, bin_folder, filename)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2729,6 +3333,7 @@ def plot_group_summary_metrics_simulated(
 def _process_time_window(
     window: dict,
     save_dir: str = SAVE_DIR,
+    bin_label: "str | None" = None,
 ) -> dict:
     """
     Run Steps 2–14 of the pipeline for a single time window.
@@ -2740,13 +3345,18 @@ def _process_time_window(
     time-dependent and rebuilt from scratch here.
 
     All figures produced for this window are namespaced with the window's
-    "_HHMM" suffix so successive windows do not overwrite each other.
+    "_HHMM" suffix so successive windows do not overwrite each other.  When
+    *bin_label* is given (e.g. "bin_30", "bin_all" — see
+    _process_time_window_with_arc_subset()), it is appended to that suffix so
+    repeated OCC_COUNT_BINS sweep runs into the same save_dir don't overwrite
+    each other either.  Leaving it at the default None reproduces the exact
+    filenames of the original (pre-sweep) single-pass call.
     """
     window_key = window["window_key"]
     hhmm       = window["hhmm"]
     time_dt    = window["time_dt"]
     records    = window["records"]
-    save_suffix = f"_{hhmm}"
+    save_suffix = f"_{hhmm}" if bin_label is None else f"_{hhmm}_{bin_label}"
 
     print(f"  Parsing {len(records)} files …")
     parsed_list: list[dict] = []
@@ -2824,12 +3434,13 @@ def _process_time_window(
     for k, name in enumerate(PARAM_NAMES):
         print(f"    {name:20s}  σ = {float(np.sqrt(ens_var[k].mean())):.4g}")
 
-    plot_ensemble_histograms(
-        model_state, mean_5deg, time_dt,
-        save_path=os.path.join(
-            save_dir, f"ensemble_histograms_{YYYY}_{DOY:03d}{save_suffix}.png"
-        ),
-    )
+    if not SKIP_PLOTS:
+        plot_ensemble_histograms(
+            model_state, mean_5deg, time_dt,
+            save_path=_make_per_window_subfolder_path(
+                save_dir, hhmm, bin_label, f"ensemble_histograms_{YYYY}_{DOY:03d}{save_suffix}.png"
+            ),
+        )
 
     # ── Steps 3–4: forward models ────────────────────────────────────────────
     print("\nStep 3: Running forward models …")
@@ -2850,15 +3461,16 @@ def _process_time_window(
 
     # ── Step 5: main results plot ────────────────────────────────────────────
     print("\nStep 5: Plotting results …")
-    save_results = os.path.join(
-        save_dir, f"param_iono_test_{YYYY}_{DOY:03d}{save_suffix}.png"
+    save_results = _make_per_window_subfolder_path(
+        save_dir, hhmm, bin_label, f"param_iono_test_{YYYY}_{DOY:03d}{save_suffix}.png"
     )
-    plot_results(
-        truth_arcs, model_arcs,
-        grid_lats_1deg, grid_lons_1deg,
-        grid_lats_5deg, grid_lons_5deg,
-        time_dt, save_results,
-    )
+    if not SKIP_PLOTS:
+        plot_results(
+            truth_arcs, model_arcs,
+            grid_lats_1deg, grid_lons_1deg,
+            grid_lats_5deg, grid_lons_5deg,
+            time_dt, save_results,
+        )
 
     # ── Step 6: parameter sensitivity sweep ──────────────────────────────────
     print("\nStep 6: Parameter sensitivity sweep …")
@@ -2877,25 +3489,26 @@ def _process_time_window(
                    f"{str(arc0.get('conid', '?'))}"
                    f"{str(arc0.get('prn_id', '?'))}")
 
-    save_sens = os.path.join(
-        save_dir, f"param_sensitivity_{YYYY}_{DOY:03d}{save_suffix}"
+    save_sens = _make_per_window_subfolder_path(
+        save_dir, hhmm, bin_label, f"param_sensitivity_{YYYY}_{DOY:03d}{save_suffix}"
     )
-    save_abs = os.path.join(
-        save_dir, f"param_sensitivity_abs_{YYYY}_{DOY:03d}{save_suffix}"
+    save_abs = _make_per_window_subfolder_path(
+        save_dir, hhmm, bin_label, f"param_sensitivity_abs_{YYYY}_{DOY:03d}{save_suffix}"
     )
 
-    plot_parameter_influence(
-        rays_0, tang_km_0, mean_1gp, ALT_GRID,
-        time_dt, arc_label_0, save_sens,
-        n_sweep=_N_SWEEP, n_sigma=_N_SIGMA, abs_error=False, log_err_scale=True,
-        tec_truth_perturbed=tec_truth_arc0,
-    )
-    plot_parameter_influence(
-        rays_0, tang_km_0, mean_1gp, ALT_GRID,
-        time_dt, arc_label_0, save_abs,
-        n_sweep=_N_SWEEP, n_sigma=_N_SIGMA, abs_error=True, log_err_scale=True,
-        tec_truth_perturbed=tec_truth_arc0,
-    )
+    if not SKIP_PLOTS:
+        plot_parameter_influence(
+            rays_0, tang_km_0, mean_1gp, ALT_GRID,
+            time_dt, arc_label_0, save_sens,
+            n_sweep=_N_SWEEP, n_sigma=_N_SIGMA, abs_error=False, log_err_scale=True,
+            tec_truth_perturbed=tec_truth_arc0,
+        )
+        plot_parameter_influence(
+            rays_0, tang_km_0, mean_1gp, ALT_GRID,
+            time_dt, arc_label_0, save_abs,
+            n_sweep=_N_SWEEP, n_sigma=_N_SIGMA, abs_error=True, log_err_scale=True,
+            tec_truth_perturbed=tec_truth_arc0,
+        )
 
     # ── Step 6b: build simulated IGS geometry once (shared by ro_igs / igs_only) ─
     igs_sim_geometry: list[dict] = []
@@ -2987,6 +3600,8 @@ def _process_time_window(
             save_suffix      = f"{save_suffix}_{mode}",
             mode             = mode,
             igs_sim_geometry = igs_sim_geometry if mode in ("ro_igs", "igs_only") else None,
+            hhmm             = hhmm,
+            bin_label        = bin_label,
         )
 
     # Backward-compatible primary result for cross-window aggregation: prefer
@@ -3001,70 +3616,693 @@ def _process_time_window(
     # Mirrors plotIonosphereTomography._plot_group_summary_metrics from the
     # ISR-DA pipeline, but with the synthetic truth EDP substituted for real
     # ISR profiles.  Skipped if none of the three modes produced a result.
-    if filter_results:
+    if filter_results and not SKIP_PLOTS:
         print("\nStep 14b: Plotting cross-mode group summary metrics …")
         try:
             plot_group_summary_metrics_simulated(
                 filter_results_by_mode = filter_results,
                 save_dir               = save_dir,
                 hhmm                   = hhmm,
+                bin_label              = bin_label,
             )
         except Exception as exc:
             print(f"  [warn] group summary metrics plot failed: "
                   f"{type(exc).__name__}: {exc}")
 
+    # Lightweight geometry summary (station/IPP/tangent-point locations) for
+    # the station-map overlay figure — kept separate from parsed_list/
+    # igs_sim_geometry (which _cleanup_memory strips) so it survives into the
+    # saved checkpoint.
+    ro_tangent_points = {
+        "lat": tp_lats_all.tolist(),
+        "lon": tp_lons_all.tolist(),
+    }
+    igs_stations_summary = [
+        {"code": st["code"], "lat": st["lat"], "lon": st["lon"]}
+        for st in igs_stations
+    ] if igs_sim_geometry else []
+    igs_ipp_points = None
+    if igs_sim_geometry:
+        igs_ipp_points = {
+            "lat": ipp_lats_all.tolist(),
+            "lon": ipp_lons_all.tolist(),
+        }
+
     return {
-        "window_key":     window_key,
-        "hhmm":           hhmm,
-        "time_dt":        time_dt,
-        "n_arcs":         len(parsed_list),
-        "records":        records,
-        "parsed_list":    parsed_list,
-        "truth_arcs":     truth_arcs,
-        "model_arcs":     model_arcs,
-        "grid_1deg":      (grid_lats_1deg, grid_lons_1deg),
-        "grid_5deg":      (grid_lats_5deg, grid_lons_5deg),
-        "filter_result":  primary_result,
-        "filter_results": filter_results,
+        "window_key":         window_key,
+        "hhmm":               hhmm,
+        "time_dt":            time_dt,
+        "n_arcs":             len(parsed_list),
+        "records":            records,
+        "parsed_list":        parsed_list,
+        "truth_arcs":         truth_arcs,
+        "model_arcs":         model_arcs,
+        "grid_1deg":          (grid_lats_1deg, grid_lons_1deg),
+        "grid_5deg":          (grid_lats_5deg, grid_lons_5deg),
+        "filter_result":      primary_result,
+        "filter_results":     filter_results,
+        "ro_tangent_points":  ro_tangent_points,
+        "igs_stations":       igs_stations_summary,
+        "igs_ipp_points":     igs_ipp_points,
     }
 
 
-def main() -> None:
+def _process_time_window_with_arc_subset(
+    window: dict,
+    arc_subset_dict: dict,
+    bin_count: "int | None",
+    save_dir: str,
+) -> dict:
+    """
+    Run _process_time_window() on a bin-count-limited arc subset, then enrich
+    the result with the per-bin error analyses the OCC_COUNT_BINS sweep needs
+    (§11b–d: station EDP errors, HF reflection heights, critical frequencies)
+    so they don't have to be recomputed later from checkpoints.
+
+    arc_subset_dict : select_arcs_by_count_bin()'s (selected, meta) pair
+        merged into one dict — must carry "selected_arcs" (the list[dict] of
+        arc records to process in place of window["records"]); any other keys
+        (e.g. "requested_count", "actual_count", "selected_indices") are
+        preserved verbatim under the returned result's "arc_selection".
+
+    Figure filenames get bin_count baked in via _process_time_window()'s
+    bin_label — "bin_{bin_count}", or "bin_all" when bin_count is None — e.g.
+    param_iono_test_2025_239_1430_bin_30.png / ..._1430_bin_all.png, so
+    repeated sweep runs into the same save_dir don't clobber each other.
+
+    Passing bin_count=None with arc_subset_dict["selected_arcs"] == the
+    window's full arc list reproduces _process_time_window()'s computed
+    results exactly; only the bin-labelled filenames and the additive result
+    fields below are new.
+    """
+    arcs_subset = arc_subset_dict["selected_arcs"]
+    bin_label   = f"bin_{bin_count}" if bin_count is not None else "bin_all"
+
+    sub_window = {**window, "records": arcs_subset}
+    result = _process_time_window(sub_window, save_dir, bin_label=bin_label)
+
+    result["bin_count"]     = bin_count
+    result["arc_selection"] = arc_subset_dict
+
+    filter_results = result.get("filter_results") or {}
+
+    # Per-mode error analyses: station EDP / HF reflection / critical
+    # frequency errors are computed independently for each of ro_only,
+    # ro_igs, igs_only (whichever modes actually produced a result) instead
+    # of only the ro_igs > ro_only > igs_only "primary" fallback, so the OCC
+    # sweep summary can compare all three observation configurations.
+    result["station_edp_errors"]   = {}
+    result["hf_reflection_errors"] = {}
+    result["critical_frequencies"] = {}
+
+    for mode in FILTER_MODES:
+        fr = filter_results.get(mode)
+        if fr is None:
+            continue
+
+        kf_r     = fr.get("kf_result")
+        ekf_r    = fr.get("ekf_param")
+        truth_ne = fr.get("truth_ne_5deg")
+
+        if kf_r is None or ekf_r is None or truth_ne is None:
+            continue
+
+        truth_edp_dict = dict(ne=truth_ne, grid_lats=fr["grid_lats_5deg"],
+                               grid_lons=fr["grid_lons_5deg"])
+        prior_edp_dict = dict(ne=kf_r["prior_edp"], grid_lats=kf_r["grid_lats"],
+                               grid_lons=kf_r["grid_lons"])
+        post_kf_dict   = dict(ne=kf_r["posterior_edp"], grid_lats=kf_r["grid_lats"],
+                               grid_lons=kf_r["grid_lons"])
+        post_ekf_dict  = dict(ne=ekf_r["posterior_edp"], grid_lats=ekf_r["grid_lats"],
+                               grid_lons=ekf_r["grid_lons"])
+
+        try:
+            result["station_edp_errors"][mode] = analyze_edp_error_at_stations(
+                truth_edp_dict, prior_edp_dict, post_kf_dict, post_ekf_dict,
+                stations_list=IGS_SIM_STATIONS, alt_grid=ALT_GRID,
+                stations_json=IGS_SIM_STATIONS_JSON,
+            )
+        except Exception as exc:
+            print(f"  [warn] station_edp_errors[{mode}] failed: {type(exc).__name__}: {exc}")
+
+        try:
+            result["hf_reflection_errors"][mode] = analyze_hf_reflection_heights(
+                truth_edp_dict, prior_edp_dict, post_kf_dict, post_ekf_dict,
+                alt_grid=ALT_GRID,
+            )
+        except Exception as exc:
+            print(f"  [warn] hf_reflection_errors[{mode}] failed: {type(exc).__name__}: {exc}")
+
+        try:
+            result["critical_frequencies"][mode] = analyze_critical_frequencies(
+                truth_edp_dict, prior_edp_dict, post_kf_dict, post_ekf_dict,
+                alt_grid=ALT_GRID, stations_list=IGS_SIM_STATIONS,
+                stations_json=IGS_SIM_STATIONS_JSON,
+            )
+        except Exception as exc:
+            print(f"  [warn] critical_frequencies[{mode}] failed: {type(exc).__name__}: {exc}")
+
+    if not result["station_edp_errors"]:
+        result["station_edp_errors"] = None
+    if not result["hf_reflection_errors"]:
+        result["hf_reflection_errors"] = None
+    if not result["critical_frequencies"]:
+        result["critical_frequencies"] = None
+
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §13b  Checkpoint save/load — per-(window_key, bin_count) result persistence
+# ─────────────────────────────────────────────────────────────────────────────
+# Lets the OCC_COUNT_BINS sweep survive a crash/restart: each (window_key,
+# bin_count) result is written to its own JSON file plus a small sidecar
+# metadata file, so a restart can skip whatever's already on disk instead of
+# recomputing every window/bin from scratch.
+
+class _NumpyJSONEncoder(json.JSONEncoder):
+    """JSON encoder that unwraps numpy scalars/arrays and pandas Timestamps,
+    which show up throughout the pipeline's result dicts and aren't
+    JSON-serializable by default."""
+
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, pd.Timestamp):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+def _checkpoint_result_path(window_key: str, bin_count, save_dir: str) -> Path:
+    return Path(save_dir) / f"{window_key}_{bin_count}.json"
+
+
+def _checkpoint_meta_path(window_key: str, bin_count, save_dir: str) -> Path:
+    return Path(save_dir) / f"{window_key}_{bin_count}.meta.json"
+
+
+def save_checkpoint(
+    window_key: str,
+    bin_count: int | None,
+    result_dict: dict,
+    save_dir: str,
+) -> bool:
+    """
+    Save *result_dict* to {save_dir}/{window_key}_{bin_count}.json, plus a
+    small sidecar {window_key}_{bin_count}.meta.json recording completion
+    status/timestamp (so list_completed_bins()/get_completion_status() can
+    check restart state without loading the full — potentially large —
+    result file).
+
+    Returns True on success. Failures are caught and printed rather than
+    raised, since a checkpoint write failing shouldn't abort the sweep.
+    """
+    try:
+        os.makedirs(save_dir, exist_ok=True)
+        result_path = _checkpoint_result_path(window_key, bin_count, save_dir)
+        meta_path   = _checkpoint_meta_path(window_key, bin_count, save_dir)
+
+        with open(result_path, "w") as f:
+            json.dump(result_dict, f, cls=_NumpyJSONEncoder)
+
+        meta = dict(
+            window_key  = window_key,
+            bin_count   = bin_count,
+            completed   = True,
+            saved_at    = pd.Timestamp.now().isoformat(),
+            result_file = result_path.name,
+        )
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+
+        return True
+    except Exception as exc:
+        print(f"  [warn] save_checkpoint failed for {window_key}/{bin_count}: "
+              f"{type(exc).__name__}: {exc}")
+        return False
+
+
+def load_checkpoint(
+    window_key: str,
+    bin_count: int | None,
+    save_dir: str,
+) -> tuple[bool, dict | None]:
+    """
+    Load {save_dir}/{window_key}_{bin_count}.json if it exists.
+
+    Returns (True, result_dict) if found and readable, (False, None)
+    otherwise (missing or corrupt file — treated as "not done" so the
+    sweep just recomputes it).
+    """
+    result_path = _checkpoint_result_path(window_key, bin_count, save_dir)
+    if not result_path.exists():
+        return False, None
+    try:
+        with open(result_path, "r") as f:
+            result_dict = json.load(f)
+        return True, result_dict
+    except Exception as exc:
+        print(f"  [warn] load_checkpoint failed for {window_key}/{bin_count}: "
+              f"{type(exc).__name__}: {exc}")
+        return False, None
+
+
+def list_completed_bins(window_key: str, save_dir: str) -> list:
+    """
+    Return the bin_count values already checkpointed (completed=True) for
+    *window_key*, by scanning its *.meta.json sidecar files.  Enables restart
+    to skip bins already finished for this window.
+    """
+    save_dir_path = Path(save_dir)
+    if not save_dir_path.is_dir():
+        return []
+
+    completed: list = []
+    for meta_path in sorted(save_dir_path.glob(f"{window_key}_*.meta.json")):
+        try:
+            with open(meta_path, "r") as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        if meta.get("completed"):
+            completed.append(meta.get("bin_count"))
+    return completed
+
+
+def get_completion_status(
+    save_dir: str,
+    windows: list[dict],
+    occ_count_bins: list,
+) -> dict:
+    """
+    Build {window_key: {bin_count: bool}} for every window in *windows*
+    crossed with every bin_count in *occ_count_bins*, so main() can decide
+    what still needs to run on restart in one lookup rather than re-deriving
+    checkpoint paths inline.
+    """
+    status: dict[str, dict] = {}
+    for w in windows:
+        wkey = w["window_key"]
+        completed_here = set(list_completed_bins(wkey, save_dir))
+        status[wkey] = {bc: (bc in completed_here) for bc in occ_count_bins}
+    return status
+
+
+def setup_cli_args(argv: "list[str] | None" = None) -> argparse.Namespace:
+    """
+    CLI for test_param_iono.py:
+
+        python test_param_iono.py [OPTIONS]
+
+    Lets a one-off invocation override the §0 configuration block (date,
+    save/checkpoint dirs, restart) and narrow a run down to a single window,
+    bin_count, or filter mode — e.g. for re-running just the cell that
+    crashed, or a quick --dry-run to see what a full day would do.
+    """
+    parser = argparse.ArgumentParser(
+        prog="test_param_iono.py",
+        description="Per-window parametric ionosphere KF/EKF_Param validation pipeline.",
+    )
+    parser.add_argument("--date", type=str, default=None, metavar="YYYY.DOY",
+                         help="Override YYYY/DOY (e.g. 2025.239) and BASE_PATH.")
+    parser.add_argument("--save-dir", type=str, default=None,
+                         help="Override SAVE_DIR.")
+    parser.add_argument("--checkpoint-dir", type=str, default=None,
+                         help="Override CHECKPOINT_DIR.")
+
+    restart_group = parser.add_mutually_exclusive_group()
+    restart_group.add_argument(
+        "--enable-restart", dest="enable_restart", action="store_true", default=None,
+        help="Enable checkpoint restart (default True).",
+    )
+    restart_group.add_argument(
+        "--disable-restart", dest="enable_restart", action="store_false",
+        help="Disable checkpoint restart — always recompute.",
+    )
+
+    parser.add_argument("--window-key", type=str, default=None, metavar="HHMM",
+                         help='Process only this window (e.g. "1430").')
+    parser.add_argument("--bin-count", type=int, default=None, metavar="COUNT",
+                         help="Process only this OCC_COUNT_BINS value (e.g. 30).")
+    parser.add_argument("--force", action="store_true",
+                         help="Recompute every window/bin, ignoring existing checkpoints.")
+    parser.add_argument("--resume-from", type=str, default=None, metavar="WINDOW[:BIN]",
+                         help='Skip all cells until this restart point is reached, then '
+                              'process from there onward. e.g. "1430" or "1430:30" '
+                              '(use ":None" for the full-arc bin).')
+    parser.add_argument("--mode", type=str, default=None, choices=list(FILTER_MODES),
+                         help="Run only this filter mode.")
+    parser.add_argument("--skip-plots", action="store_true",
+                         help="Skip all plotting (faster if only collecting data).")
+
+    verbosity = parser.add_mutually_exclusive_group()
+    verbosity.add_argument("--verbose", action="store_true",
+                            help="Debug-level logging for the run-plan/progress logger.")
+    verbosity.add_argument("--quiet", action="store_true",
+                            help="Warning-level logging only.")
+
+    parser.add_argument("--dry-run", action="store_true",
+                         help="Print the run plan and exit without processing.")
+
+    return parser.parse_args(argv)
+
+
+def _apply_cli_overrides(args: argparse.Namespace) -> None:
+    """Apply setup_cli_args() overrides to the §0 module-level configuration."""
+    global YYYY, DOY, BASE_PATH, SAVE_DIR, CHECKPOINT_DIR, ENABLE_RESTART
+    global FILTER_MODES, OCC_COUNT_BINS, SKIP_PLOTS
+
+    if args.date:
+        try:
+            yyyy_str, doy_str = args.date.split(".")
+            YYYY, DOY = int(yyyy_str), int(doy_str)
+        except ValueError:
+            raise SystemExit(f"--date must be YYYY.DOY (e.g. 2025.239), got {args.date!r}")
+        BASE_PATH = (f"/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/"
+                     f"{YYYY}.{DOY}/")
+
+    if args.save_dir:
+        SAVE_DIR = args.save_dir
+    if args.checkpoint_dir:
+        CHECKPOINT_DIR = args.checkpoint_dir
+    if args.enable_restart is not None:
+        ENABLE_RESTART = args.enable_restart
+    if args.mode:
+        FILTER_MODES = (args.mode,)
+    if args.bin_count is not None:
+        OCC_COUNT_BINS = [args.bin_count]
+    if args.skip_plots:
+        SKIP_PLOTS = True
+
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+    elif args.quiet:
+        logger.setLevel(logging.WARNING)
+
+
+def _parse_resume_point(resume_from: "str | None") -> "tuple[str, object] | None":
+    """
+    Parse a --resume-from value into (window_token, bin_sentinel).
+
+    Accepts "WINDOW" (resume at the first bin of that window) or "WINDOW:BIN"
+    where BIN is an int or the literal "None" (the full-arc bin).  The bin
+    sentinel is the string "__ANY__" when no bin was given, meaning "resume as
+    soon as this window starts".  Returns None when *resume_from* is unset.
+    """
+    if not resume_from:
+        return None
+    token = resume_from.strip()
+    if ":" in token:
+        win_part, bin_part = token.split(":", 1)
+        bin_part = bin_part.strip()
+        if bin_part.lower() in ("none", ""):
+            bin_val: object = None
+        else:
+            try:
+                bin_val = int(bin_part)
+            except ValueError:
+                raise SystemExit(
+                    f"--resume-from bin must be an int or 'None', got {bin_part!r}"
+                )
+        return win_part.strip(), bin_val
+    return token, "__ANY__"
+
+
+def _resume_point_matches(w: dict, bin_count, resume_point: "tuple[str, object]") -> bool:
+    """True when (window *w*, *bin_count*) is the --resume-from restart cell."""
+    win_token, bin_sentinel = resume_point
+    if win_token not in (w.get("hhmm"), w.get("window_key")):
+        return False
+    return bin_sentinel == "__ANY__" or bin_sentinel == bin_count
+
+
+def _write_summary_csv(all_results: dict[str, dict], path: str) -> int:
+    """
+    Flatten *all_results* to one (window, bin_count, mode) row per filter and
+    write them to *path*.  Returns the number of rows written.
+    """
+    rows: list[dict] = []
+    for wkey, r in all_results.items():
+        hhmm = r.get("hhmm")
+        bin_results = r.get("bin_results") or ({None: r} if "error" not in r else {})
+        if "error" in r and not bin_results:
+            rows.append(dict(window_key=wkey, hhmm=hhmm, bin_count=None,
+                             mode=None, error=r["error"]))
+            continue
+        for bin_count, wres in bin_results.items():
+            if not isinstance(wres, dict) or "error" in wres:
+                err = wres.get("error") if isinstance(wres, dict) else "invalid result"
+                rows.append(dict(window_key=wkey, hhmm=hhmm, bin_count=bin_count,
+                                 mode=None, error=err))
+                continue
+            per_mode = wres.get("filter_results") or {}
+            for mode in FILTER_MODES:
+                fr = per_mode.get(mode)
+                if not fr:
+                    continue
+                rows.append(dict(
+                    window_key = wkey,
+                    hhmm       = hhmm,
+                    bin_count  = bin_count,
+                    mode       = mode,
+                    n_arcs     = len(fr.get("arc_truth_list") or []),
+                    prior_rmse = fr.get("prior_rmse"),
+                    kf_rmse    = (fr.get("kf_result") or {}).get("post_rmse"),
+                    ekf_rmse   = (fr.get("ekf_param") or {}).get("post_rmse"),
+                ))
+
+    csv_dir = os.path.dirname(path)
+    if csv_dir:
+        os.makedirs(csv_dir, exist_ok=True)
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return len(rows)
+
+
+def _cleanup_memory(result: dict) -> None:
+    """
+    Remove large intermediate arrays from result dict to free RAM between bins.
+    Keeps only summary metrics needed for cross-window plots.
+    """
+    import gc
+    import matplotlib.pyplot as plt
+
+    # Close all matplotlib figures to release memory
+    plt.close('all')
+
+    # Remove large intermediate data structures that were only needed for plotting
+    keys_to_remove = [
+        "parsed_list",           # Full arc data
+        "truth_arcs",            # Full arc data
+        "model_arcs",            # Full arc data
+        "records",               # File metadata (large)
+        "grid_1deg",             # Coordinate arrays
+        "grid_5deg",             # Coordinate arrays
+    ]
+
+    for key in keys_to_remove:
+        if key in result:
+            del result[key]
+
+    # For filter_results, keep only summary metrics, remove full EDPs/covariances
+    filter_results = result.get("filter_results", {})
+    for mode, fr in filter_results.items():
+        if fr is None:
+            continue
+        keys_to_remove_filter = [
+            "prior_edp",
+            "posterior_edp",
+            "prior_ne_5deg",
+            "posterior_ne_5deg",
+            "prior_Xc",
+            "post_Xc",
+            "tec_slices",
+            "grid_lats_1deg",
+            "grid_lons_1deg",
+            "grid_lats_5deg",
+            "grid_lons_5deg",
+        ]
+        for key in keys_to_remove_filter:
+            fr.pop(key, None)
+
+        # Same for nested kf_result and ekf_param
+        for sub_key in ["kf_result", "ekf_param"]:
+            sub_res = fr.get(sub_key)
+            if sub_res:
+                for key in keys_to_remove_filter:
+                    sub_res.pop(key, None)
+
+    gc.collect()
+
+
+def main(args: "argparse.Namespace | None" = None) -> None:
+    if args is None:
+        args = setup_cli_args()
+    _apply_cli_overrides(args)
+
     os.makedirs(SAVE_DIR,      exist_ok=True)
     os.makedirs(IRI_CACHE_DIR, exist_ok=True)
+    if ENABLE_CHECKPOINT:
+        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     # ── Step 1: full-day file scan → per-window record lists ─────────────────
-    print("=" * 60)
-    print(f"Step 1: Scanning podTc2 files in {BASE_PATH}")
-    print(f"        window size = {WINDOW_MINUTES} min, "
-          f"min arcs/window = {MIN_ARCS_PER_WINDOW}")
-    windows = scan_and_select_files_per_window(BASE_PATH)
+    logger.info("=" * 60)
+    logger.info(f"Step 1: Scanning podTc2 files in {BASE_PATH}")
+    logger.info(f"        window size = {WINDOW_MINUTES} min, "
+                f"min arcs/window = {MIN_ARCS_PER_WINDOW}")
+    windows, occ_counts_per_window = scan_and_select_files_per_window(BASE_PATH)
 
     if not windows:
-        print("No windows retained after ROI + sparsity filtering.  Exiting.")
+        logger.warning("No windows retained after ROI + sparsity filtering.  Exiting.")
         return
 
+    if args.window_key:
+        windows = [w for w in windows
+                   if w["hhmm"] == args.window_key or w["window_key"] == args.window_key]
+        if not windows:
+            logger.warning(f"--window-key {args.window_key!r} matched no window.  Exiting.")
+            return
+
+    bin_list = list(OCC_COUNT_BINS)
+
+    # --force / --disable-restart both mean "recompute, ignore checkpoints".
+    force        = bool(args.force) or not ENABLE_RESTART
+    resume_point = _parse_resume_point(args.resume_from)
+    resume_reached = resume_point is None
+
+    # ── Startup banner: what's done, what still needs to run ─────────────────
+    completion_status = get_completion_status(CHECKPOINT_DIR, windows, bin_list)
+    total_cells = len(windows) * len(bin_list)
+    done_cells  = sum(1 for bins in completion_status.values()
+                      for done in bins.values() if done)
+    todo_cells  = total_cells - done_cells
+
     print("\n" + "=" * 60)
-    print(f"Processing {len(windows)} window(s) on {YYYY}.{DOY:03d}")
+    print(f" test_param_iono.py — {YYYY}.{DOY:03d}")
+    print("=" * 60)
+    print(f"  Base path          : {BASE_PATH}")
+    print(f"  Figures dir        : {SAVE_DIR}")
+    print(f"  Checkpoint dir     : {CHECKPOINT_DIR}  "
+          f"(restart={'off' if force else 'on'})")
+    print(f"  Windows to process : {len(windows)}  "
+          f"({', '.join(w['hhmm'] for w in windows)})")
+    print(f"  Bins per window    : {len(bin_list)}  {bin_list}")
+    print(f"  Filter modes       : {FILTER_MODES}")
+    if resume_point is not None:
+        print(f"  Resume from        : {args.resume_from}")
+    if force:
+        print(f"  Restart status     : force recompute — {total_cells} cells will run")
+    else:
+        print(f"  Restart status     : {done_cells} checkpoints found, "
+              f"{todo_cells} of {total_cells} cells need to run")
     print("=" * 60)
 
+    if args.dry_run:
+        print("\n[dry-run] plan printed above — exiting without processing.")
+        return
+
+    # ── Steps 2..N: per-window, per-bin processing (crash → resume) ──────────
     all_results: dict[str, dict] = {}
-    for i, w in enumerate(windows):
-        header = f" Window {i+1}/{len(windows)}: {w['window_key']} " \
-                 f"({len(w['records'])} arcs) "
-        print("\n" + "#" * 70)
-        print("#" + header.center(68) + "#")
-        print("#" * 70)
-        try:
-            all_results[w["window_key"]] = _process_time_window(w, SAVE_DIR)
-        except Exception as exc:
-            print(f"  ✗ Window {w['window_key']} FAILED: {type(exc).__name__}: {exc}")
-            all_results[w["window_key"]] = {
-                "window_key": w["window_key"],
-                "hhmm":       w["hhmm"],
-                "time_dt":    w["time_dt"],
-                "error":      f"{type(exc).__name__}: {exc}",
-            }
+    total_windows = len(windows)
+
+    try:
+        for i, w in enumerate(windows):
+            wkey = w["window_key"]
+            window_result: dict | None = None
+            bin_results: dict = {}
+
+            for bin_count in bin_list:
+                # --resume-from: skip everything until the restart cell is hit.
+                if not resume_reached:
+                    if _resume_point_matches(w, bin_count, resume_point):
+                        resume_reached = True
+                    else:
+                        print(f"  Skipping {wkey} bin={bin_count} (before --resume-from)")
+                        found, cached = load_checkpoint(wkey, bin_count, CHECKPOINT_DIR)
+                        if found:
+                            _cleanup_memory(cached)
+                            bin_results[bin_count] = cached
+                            if bin_count is None:
+                                window_result = cached
+                        continue
+
+                # Checkpoint restart: skip anything already on disk.
+                if completion_status.get(wkey, {}).get(bin_count) and not force:
+                    print(f"  Skipping {wkey} bin={bin_count} (checkpoint found)")
+                    found, cached = load_checkpoint(wkey, bin_count, CHECKPOINT_DIR)
+                    if found:
+                        _cleanup_memory(cached)
+                        bin_results[bin_count] = cached
+                        if bin_count is None:
+                            window_result = cached
+                    continue
+
+                # Select this bin's arc subset and run the full pipeline on it.
+                arcs_subset, bin_meta = select_arcs_by_count_bin(
+                    w["records"], bin_count, wkey,
+                )
+                arc_subset_dict = {**bin_meta, "selected_arcs": arcs_subset}
+                header = f" Window {i+1}/{total_windows}: {wkey} " \
+                         f"({len(arcs_subset)} arcs, bin={bin_count}) "
+                print("\n" + "#" * 70)
+                print("#" + header.center(68) + "#")
+                print("#" * 70)
+
+                try:
+                    result = _process_time_window_with_arc_subset(
+                        w, arc_subset_dict, bin_count, SAVE_DIR,
+                    )
+                    save_checkpoint(wkey, bin_count, result, CHECKPOINT_DIR)
+                    # Clean up large intermediate arrays to prevent OOM
+                    _cleanup_memory(result)
+                except Exception as exc:
+                    crash_path = Path(CHECKPOINT_DIR) / f"{wkey}_{bin_count}.crash"
+                    print(f"  ✗ {wkey} bin={bin_count} CRASHED: {exc}")
+                    print(f"    Checkpoint save at: {crash_path}")
+                    try:
+                        import traceback
+                        with open(crash_path, "w") as f:
+                            f.write(f"{wkey} bin={bin_count} crashed at "
+                                    f"{pd.Timestamp.now().isoformat()}\n")
+                            f.write(f"{type(exc).__name__}: {exc}\n\n")
+                            f.write(traceback.format_exc())
+                    except Exception:
+                        pass
+                    raise  # let the outer handler save state and exit
+
+                bin_results[bin_count] = result
+                if bin_count is None:
+                    window_result = result
+
+            if window_result is None:
+                window_result = next(iter(bin_results.values()), {
+                    "window_key": wkey, "hhmm": w["hhmm"], "time_dt": w["time_dt"],
+                    "error": "no bins produced a result",
+                })
+            window_result = dict(window_result)
+            window_result["hhmm"]        = w["hhmm"]
+            window_result["window_key"]  = wkey
+            window_result["time_dt"]     = w["time_dt"]
+            window_result["bin_results"] = bin_results
+            all_results[wkey] = window_result
+
+            # Force garbage collection after each window to free memory
+            import gc
+            gc.collect()
+
+    except KeyboardInterrupt:
+        print("Interrupted. Checkpoints saved. Re-run to resume.")
+        sys.exit(130)
+    except Exception as exc:
+        print(f"FATAL: {type(exc).__name__}: {exc}")
+        print(f"Checkpoints saved to {CHECKPOINT_DIR}")
+        print("Re-run same command to resume from checkpoint.")
+        sys.exit(1)
 
     # ── Cross-window summary ─────────────────────────────────────────────────
     print("\n" + "=" * 60)
@@ -3104,25 +4342,63 @@ def main() -> None:
                   f"{_fmt(prior)}  {_fmt(kf)}  {_fmt(ekf)}")
 
     n_err = sum(1 for r in all_results.values() if "error" in r)
+    n_ok  = len(all_results) - n_err
 
     # ── Cross-window EDP-RMSE plots (per-site & regional) ────────────────────
-    n_ok = len(all_results) - n_err
-    if n_ok > 0:
+    if n_ok > 0 and not SKIP_PLOTS:
         print("\n" + "=" * 60)
         print(f" Cross-window EDP-RMSE plots — {YYYY}.{DOY:03d}")
         print("=" * 60)
         plot_edp_site_rmse_across_windows(
             all_results, ALT_GRID,
-            save_path=os.path.join(
-                SAVE_DIR, f"edp_site_rmse_across_windows_{YYYY}_{DOY:03d}.png"
+            save_path=_make_subfolder_path(
+                SAVE_DIR, "cross_window", f"edp_site_rmse_across_windows_{YYYY}_{DOY:03d}.png"
             ),
         )
         plot_edp_regional_rmse_across_windows(
             all_results, ALT_GRID,
-            save_path=os.path.join(
-                SAVE_DIR, f"edp_regional_rmse_across_windows_{YYYY}_{DOY:03d}.png"
+            save_path=_make_subfolder_path(
+                SAVE_DIR, "cross_window", f"edp_regional_rmse_across_windows_{YYYY}_{DOY:03d}.png"
             ),
         )
+
+    # ── OCC_COUNT_BINS sweep statistics plots (§11b–d / Prompts 4.1–4.3) ─────
+    if n_ok > 0 and not SKIP_PLOTS:
+        print("\n" + "=" * 60)
+        print(f" Occultation-count sweep statistics — {YYYY}.{DOY:03d}")
+        print("=" * 60)
+        for label, fn in (
+            ("convergence vs. measurement count",
+             lambda: plot_convergence_vs_measurement_count(all_results, save_dir=SAVE_DIR)),
+            ("per-station EDP errors vs. occ count",
+             lambda: plot_station_edp_errors(
+                 all_results, IGS_SIM_STATIONS, ALT_GRID, SAVE_DIR,
+                 mode=FILTER_MODES[0], stations_json=IGS_SIM_STATIONS_JSON)),
+            ("HF reflection-height errors vs. occ count",
+             lambda: plot_hf_reflection_errors(all_results, save_dir=SAVE_DIR)),
+        ):
+            try:
+                fn()
+            except Exception as exc:
+                print(f"  [warn] {label} plot failed: "
+                      f"{type(exc).__name__}: {exc}")
+
+        # ── Cross-window summary table (formatted text output) ──────────────
+        try:
+            print_cross_window_summary(
+                all_results, ALT_GRID, stations_list=IGS_SIM_STATIONS,
+                save_dir=SAVE_DIR)
+        except Exception as exc:
+            print(f"  [warn] cross-window summary failed: "
+                  f"{type(exc).__name__}: {exc}")
+
+    # ── Final summary table → CSV ────────────────────────────────────────────
+    summary_csv = _make_subfolder_path(SAVE_DIR, "summaries", f"summary_{YYYY}_{DOY:03d}.csv")
+    try:
+        n_rows = _write_summary_csv(all_results, summary_csv)
+        print(f"\n  Summary table: {n_rows} rows → {summary_csv}")
+    except Exception as exc:
+        print(f"  [warn] summary CSV write failed: {type(exc).__name__}: {exc}")
 
     print(f"\n✓ test_param_iono.py completed.")
     print(f"  Windows attempted: {len(all_results)}  "
@@ -4943,6 +6219,1284 @@ def plot_edp_regional_rmse_across_windows(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# §11b  Convergence vs. measurement count — OCC_COUNT_BINS sweep
+# ─────────────────────────────────────────────────────────────────────────────
+# select_arcs_by_count_bin()/save_checkpoint()/load_checkpoint() exist to let
+# an OCC_COUNT_BINS sweep run per (window_key, bin_count) and survive a
+# crash/restart (see §13b).  The plot below consumes that sweep's output: for
+# each window it prefers an in-memory ``bin_results`` entry (a sweep loop
+# that already populated all_results[window_key]["bin_results"][bin_count]),
+# and otherwise falls back to the on-disk {window_key}_{bin_count}.json
+# checkpoints under CHECKPOINT_DIR.
+
+def _gather_bin_results(
+    window_key: str,
+    r: dict,
+    checkpoint_dir: str = CHECKPOINT_DIR,
+) -> dict:
+    """
+    Return {bin_count: window_result_dict} for one window, i.e. the
+    per-bin_count results of the OCC_COUNT_BINS sweep.
+
+    Prefers r["bin_results"] if the caller already ran the sweep in-memory;
+    otherwise loads whatever {window_key}_{bin_count}.json checkpoints exist
+    on disk (missing bins are simply absent from the returned dict).
+    """
+    bin_results = r.get("bin_results")
+    if bin_results:
+        return bin_results
+
+    out: dict = {}
+    for bin_count in OCC_COUNT_BINS:
+        found, result_dict = load_checkpoint(window_key, bin_count, checkpoint_dir)
+        if found:
+            out[bin_count] = result_dict
+    return out
+
+
+def _actual_measurement_count(
+    fr: dict | None,
+    wres: dict | None,
+    bin_count,
+) -> "int | None":
+    """
+    Resolve how many measurements were actually assimilated for one
+    (window, bin_count, mode) cell: prefer "actual_count" from the
+    select_arcs_by_count_bin() metadata — stored under "arc_selection" by
+    _process_time_window_with_arc_subset(), or the legacy "bin_meta" key in
+    older checkpoints (a bin can come up short if the window has fewer arcs
+    than requested) — fall back to the nominal bin_count, then to
+    len(arc_truth_list), then to n_arcs.
+    """
+    for holder in (fr, wres):
+        meta = (holder or {}).get("arc_selection") or (holder or {}).get("bin_meta")
+        if meta and meta.get("actual_count") is not None:
+            return int(meta["actual_count"])
+    if bin_count is not None:
+        return int(bin_count)
+    arcs = (fr or {}).get("arc_truth_list")
+    if arcs is not None:
+        return len(arcs)
+    n_arcs = (wres or {}).get("n_arcs")
+    if n_arcs is not None:
+        return int(n_arcs)
+    return None
+
+
+def aggregate_cross_window_statistics(
+    all_results: dict[str, dict],
+    alt_grid: np.ndarray,
+    stations_list: list[str],
+) -> dict:
+    """
+    Aggregate the OCC_COUNT_BINS sweep's per-(window, bin_count) checkpoints
+    into one cross-window/cross-bin statistics table.
+
+    Loads every window's per-bin results via _gather_bin_results() (in-memory
+    "bin_results" if the sweep just ran, else {window_key}_{bin_count}.json
+    under CHECKPOINT_DIR), then for each bin_count and each of prior/kf/
+    ekf_param pools:
+      - RMSE [TECU]                       (filter_result.prior_rmse /
+                                            kf_result.post_rmse / ekf_param.post_rmse)
+      - foF2 / foE error [MHz]            (critical_frequencies, §11's
+                                            analyze_critical_frequencies())
+      - per-station Ne / f_p MAE below hmF2 (station_edp_errors, §11's
+                                            analyze_edp_error_at_stations())
+      - HF reflection-height error [km], per frequency (hf_reflection_errors,
+        §11's analyze_hf_reflection_heights())
+      - a simple convergence readout: effective measurement count, and RMSE
+        reduction (%) relative to that window's prior
+
+    across every window that has data for that (bin_count, filter) cell.
+    "mean"/"std" on the foF2/foE blocks are the cross-window mean/std of each
+    window's own mean error; "rmse" pools window-level RMSEs as
+    sqrt(mean(rmse_i**2)) rather than averaging them directly, since RMSEs
+    from different windows aren't linearly poolable.
+
+    Returns
+    -------
+    {bin_count: {"prior" | "kf" | "ekf_param": {
+        "rmse_tecu":             {"mean", "std", "min", "max"},
+        "foF2_error_mhz":        {"mean", "std", "rmse"},
+        "foE_error_mhz":         {"mean", "std", "rmse"},
+        "per_station": {station_code: {
+            "ne_mae_below_f2peak": {"mean", "std", "min", "max"},
+            "fp_mae_below_f2peak": {"mean", "std", "min", "max"},
+        }, ...},
+        "hf_reflection_heights": {freq_mhz_str: {
+            "mean_error_km": {"mean", "std", "min", "max"},
+            "bias_km":       {"mean", "std", "min", "max"},
+            "miss_count": int, "false_alarm_count": int,
+        }, ...},
+        "convergence": {
+            "n_measurements":               {"mean", "std", "min", "max"},
+            "rmse_reduction_pct_vs_prior":   {"mean", "std", "min", "max"},
+        },
+    }}}
+
+    Also saves the full hierarchy to
+    {CHECKPOINT_DIR}/cross_window_statistics_{YYYY}_{DOY}.json and a
+    flattened one-row-per-(bin_count, filter_mode) table to
+    {SAVE_DIR}/cross_window_summary_{YYYY}_{DOY}.csv.
+    """
+    filt_names = ("prior", "kf", "ekf_param")
+
+    def _pool_stats(values) -> dict:
+        arr = np.asarray([v for v in values if v is not None], dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return dict(mean=None, std=None, min=None, max=None)
+        return dict(mean=float(np.mean(arr)), std=float(np.std(arr)),
+                    min=float(np.min(arr)), max=float(np.max(arr)))
+
+    def _pool_error_stats(mean_list, rmse_list) -> dict:
+        means = np.asarray([v for v in mean_list if v is not None], dtype=float)
+        means = means[np.isfinite(means)]
+        rmses = np.asarray([v for v in rmse_list if v is not None], dtype=float)
+        rmses = rmses[np.isfinite(rmses)]
+        return dict(
+            mean=float(np.mean(means)) if means.size else None,
+            std=float(np.std(means)) if means.size else None,
+            rmse=float(np.sqrt(np.mean(rmses ** 2))) if rmses.size else None,
+        )
+
+    # ── Gather every window's per-bin checkpoint data once ───────────────────
+    bin_maps: dict[str, dict] = {
+        wkey: _gather_bin_results(wkey, r)
+        for wkey, r in all_results.items() if "error" not in r
+    }
+
+    stats: dict = {}
+    for bin_count in OCC_COUNT_BINS:
+        raw         = {m: defaultdict(list) for m in filt_names}
+        station_raw = {m: defaultdict(lambda: defaultdict(list)) for m in filt_names}
+        hf_raw      = {m: defaultdict(lambda: defaultdict(list)) for m in filt_names}
+
+        for wkey, bin_map in bin_maps.items():
+            wres = bin_map.get(bin_count)
+            if not wres or "error" in wres:
+                continue
+
+            fr = wres.get("filter_result") or {}
+            rmse_by_mode = dict(
+                prior     = fr.get("prior_rmse"),
+                kf        = (fr.get("kf_result") or {}).get("post_rmse"),
+                ekf_param = (fr.get("ekf_param") or {}).get("post_rmse"),
+            )
+            prior_rmse = rmse_by_mode["prior"]
+            n_meas     = _actual_measurement_count(fr, wres, bin_count)
+
+            # station_edp_errors / hf_reflection_errors / critical_frequencies
+            # are now nested by observation mode (ro_only/ro_igs/igs_only);
+            # this cross-window pooling still reports a single series, so
+            # fall back to the same ro_igs > ro_only > igs_only priority
+            # used elsewhere for "the" result of a window/bin.
+            crit_all = wres.get("critical_frequencies") or {}
+            station_err_all = wres.get("station_edp_errors") or {}
+            hf_err_all      = wres.get("hf_reflection_errors") or {}
+            _primary_mode = next(
+                (m for m in ("ro_igs", "ro_only", "igs_only") if crit_all.get(m)),
+                None,
+            )
+            crit_by = crit_all.get(_primary_mode) or {} if _primary_mode else {}
+            fof2_by = crit_by.get("foF2") or {}
+            foe_by  = crit_by.get("foE") or {}
+            station_err = (station_err_all.get(_primary_mode) or {}) if _primary_mode else {}
+            hf_err      = (hf_err_all.get(_primary_mode) or {}) if _primary_mode else {}
+
+            for m in filt_names:
+                rmse_val = rmse_by_mode[m]
+                if rmse_val is not None:
+                    raw[m]["rmse_tecu"].append(rmse_val)
+                if n_meas is not None:
+                    raw[m]["n_measurements"].append(n_meas)
+                if rmse_val is not None and prior_rmse:
+                    raw[m]["reduction_pct"].append(
+                        (prior_rmse - rmse_val) / prior_rmse * 100.0)
+
+                f2 = fof2_by.get(m)
+                if f2:
+                    raw[m]["foF2_mean"].append(f2.get("mean_error_mhz"))
+                    raw[m]["foF2_rmse"].append(f2.get("rmse_mhz"))
+                fe = foe_by.get(m)
+                if fe:
+                    raw[m]["foE_mean"].append(fe.get("mean_error_mhz"))
+                    raw[m]["foE_rmse"].append(fe.get("rmse_mhz"))
+
+                for code in stations_list:
+                    st_out = station_err.get(code.upper())
+                    filt_out = (st_out or {}).get(m)
+                    if filt_out:
+                        station_raw[m][code.upper()]["ne_mae"].append(
+                            filt_out.get("mae_below_f2_peak"))
+                        station_raw[m][code.upper()]["fp_mae"].append(
+                            filt_out.get("fp_mae_below_f2_peak"))
+
+                for freq, freq_out in hf_err.items():
+                    filt_out = (freq_out or {}).get(m)
+                    if not filt_out:
+                        continue
+                    freq_val = float(freq)
+                    hf_raw[m][freq_val]["mean_err"].append(
+                        filt_out.get("mean_height_error_km"))
+                    hf_raw[m][freq_val]["bias"].append(filt_out.get("bias_km"))
+                    hf_raw[m][freq_val]["miss"].append(filt_out.get("miss_count") or 0)
+                    hf_raw[m][freq_val]["false_alarm"].append(
+                        filt_out.get("false_alarm_count") or 0)
+
+        stats[bin_count] = {}
+        for m in filt_names:
+            per_station = {
+                code: dict(
+                    ne_mae_below_f2peak=_pool_stats(vals["ne_mae"]),
+                    fp_mae_below_f2peak=_pool_stats(vals["fp_mae"]),
+                )
+                for code, vals in station_raw[m].items()
+            }
+            hf_out = {
+                str(freq): dict(
+                    mean_error_km=_pool_stats(vals["mean_err"]),
+                    bias_km=_pool_stats(vals["bias"]),
+                    miss_count=int(np.sum(vals["miss"])) if vals["miss"] else 0,
+                    false_alarm_count=int(np.sum(vals["false_alarm"])) if vals["false_alarm"] else 0,
+                )
+                for freq, vals in hf_raw[m].items()
+            }
+            stats[bin_count][m] = dict(
+                rmse_tecu              = _pool_stats(raw[m]["rmse_tecu"]),
+                foF2_error_mhz         = _pool_error_stats(raw[m]["foF2_mean"], raw[m]["foF2_rmse"]),
+                foE_error_mhz          = _pool_error_stats(raw[m]["foE_mean"], raw[m]["foE_rmse"]),
+                per_station            = per_station,
+                hf_reflection_heights  = hf_out,
+                convergence            = dict(
+                    n_measurements               = _pool_stats(raw[m]["n_measurements"]),
+                    rmse_reduction_pct_vs_prior  = _pool_stats(raw[m]["reduction_pct"]),
+                ),
+            )
+
+    # ── Save full hierarchy to JSON ───────────────────────────────────────────
+    json_path = os.path.join(CHECKPOINT_DIR, f"cross_window_statistics_{YYYY}_{DOY:03d}.json")
+    os.makedirs(os.path.dirname(json_path) or ".", exist_ok=True)
+    with open(json_path, "w") as f:
+        json.dump({str(bc): v for bc, v in stats.items()}, f, cls=_NumpyJSONEncoder, indent=2)
+    print(f"  Cross-window statistics → {json_path}")
+
+    # ── Flattened one-row-per-(bin_count, filter_mode) CSV ───────────────────
+    rows = []
+    for bin_count, per_mode in stats.items():
+        for m, block in per_mode.items():
+            ne_maes = [v["ne_mae_below_f2peak"]["mean"] for v in block["per_station"].values()
+                       if v["ne_mae_below_f2peak"]["mean"] is not None]
+            fp_maes = [v["fp_mae_below_f2peak"]["mean"] for v in block["per_station"].values()
+                       if v["fp_mae_below_f2peak"]["mean"] is not None]
+            hf_means = [v["mean_error_km"]["mean"] for v in block["hf_reflection_heights"].values()
+                        if v["mean_error_km"]["mean"] is not None]
+            rows.append(dict(
+                bin_count                   = bin_count,
+                filter_mode                 = m,
+                rmse_tecu_mean              = block["rmse_tecu"]["mean"],
+                rmse_tecu_std               = block["rmse_tecu"]["std"],
+                rmse_tecu_min               = block["rmse_tecu"]["min"],
+                rmse_tecu_max               = block["rmse_tecu"]["max"],
+                foF2_error_mhz_mean         = block["foF2_error_mhz"]["mean"],
+                foF2_error_mhz_std          = block["foF2_error_mhz"]["std"],
+                foF2_error_mhz_rmse         = block["foF2_error_mhz"]["rmse"],
+                foE_error_mhz_mean          = block["foE_error_mhz"]["mean"],
+                foE_error_mhz_std           = block["foE_error_mhz"]["std"],
+                foE_error_mhz_rmse          = block["foE_error_mhz"]["rmse"],
+                station_ne_mae_mean         = float(np.mean(ne_maes)) if ne_maes else None,
+                station_fp_mae_mean         = float(np.mean(fp_maes)) if fp_maes else None,
+                hf_reflection_error_km_mean = float(np.mean(hf_means)) if hf_means else None,
+                n_measurements_mean         = block["convergence"]["n_measurements"]["mean"],
+                rmse_reduction_pct_vs_prior_mean =
+                    block["convergence"]["rmse_reduction_pct_vs_prior"]["mean"],
+            ))
+
+    csv_path = _make_subfolder_path(SAVE_DIR, "summaries", f"cross_window_summary_{YYYY}_{DOY:03d}.csv")
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    print(f"  Cross-window summary CSV → {csv_path}")
+
+    return stats
+
+
+def print_cross_window_summary(
+    all_results: dict[str, dict],
+    alt_grid: np.ndarray,
+    stations_list: list[str] = None,
+    stats: dict = None,
+    save_dir: str = SAVE_DIR,
+) -> None:
+    """
+    Print a formatted summary table of the OCC_COUNT_BINS sweep results.
+
+    Shows:
+    - Table: RMSE (prior/KF/EKF) per bin_count × observation mode, with window count
+    - Convergence exponents (power-law b and R²) for each mode
+    - Per-station foF2/foE errors for the best bin_count (lowest KF RMSE)
+
+    Saves full output to {save_dir}/cross_window_summary_{YYYY}_{DOY}.txt
+    """
+    if stations_list is None:
+        stations_list = []
+
+    # Compute or use provided aggregation stats
+    if stats is None:
+        stats = aggregate_cross_window_statistics(all_results, alt_grid, stations_list)
+
+    # Gather per-observation-mode convergence data for RMSE table
+    agg, n_windows_used = _collect_convergence_series(all_results)
+
+    if n_windows_used == 0:
+        print("  [print_cross_window_summary] no per-bin data found — skipping.")
+        return
+
+    # Build RMSE table rows: (bin_count, mode, n_windows, rmse_prior, rmse_kf, rmse_ekf)
+    table_rows = []
+    for mode in FILTER_MODES:
+        mode_series = _series_for_mode(agg, mode)
+        if mode_series is None:
+            continue
+
+        # Map series points back to bin_count labels
+        for i, bin_count in enumerate(OCC_COUNT_BINS):
+            b = agg[mode][bin_count]
+            if not b["n"]:
+                continue
+
+            def _mean_or_nan(vals):
+                finite = [v for v in vals if v is not None and np.isfinite(v)]
+                return float(np.mean(finite)) if finite else None
+
+            table_rows.append(dict(
+                bin_count=bin_count if bin_count is not None else "all",
+                mode=mode,
+                n_windows=len(b["n"]),
+                rmse_prior=_mean_or_nan(b["prior"]),
+                rmse_kf=_mean_or_nan(b["kf"]),
+                rmse_ekf=_mean_or_nan(b["ekf"]),
+            ))
+
+    # Sort table by bin_count (with "all" last) and mode
+    def sort_key(row):
+        bc = row["bin_count"]
+        bc_val = float('inf') if bc == "all" else (bc or 0)
+        mode_order = {"ro_only": 0, "ro_igs": 1, "igs_only": 2}
+        return (bc_val, mode_order.get(row["mode"], 3))
+
+    table_rows.sort(key=sort_key)
+
+    # Format RMSE table
+    table_str = "\n" + "─" * 80 + "\n"
+    table_str += "RMSE Convergence Across Bin Counts and Observation Modes\n"
+    table_str += "─" * 80 + "\n"
+    df_table = pd.DataFrame(table_rows)
+    df_table = df_table.round(2)
+    table_str += df_table.to_string(index=False)
+    table_str += "\n"
+
+    # Convergence exponents from power-law fitting
+    table_str += "\n" + "─" * 80 + "\n"
+    table_str += "Convergence Rates (Power-Law Fit: RMSE(n) = a · n^(-b))\n"
+    table_str += "─" * 80 + "\n"
+
+    for mode in FILTER_MODES:
+        mode_series = _series_for_mode(agg, mode)
+        if mode_series is None:
+            table_str += f"\n{mode}: no data\n"
+            continue
+
+        fits = _plot_convergence_panel_fits_only(mode_series)
+        table_str += f"\n{mode}:\n"
+
+        for key in ["prior", "kf", "ekf"]:
+            fit = fits.get(key)
+            if fit is None:
+                table_str += f"  {key:8s}: no fit\n"
+            else:
+                table_str += f"  {key:8s}: b={fit['b']:.3f}  R²={fit['r2']:.3f}  " \
+                             f"(a={fit['a']:.3g})\n"
+
+    # Find best bin_count (lowest KF RMSE across all modes)
+    best_rmse = float('inf')
+    best_bin = None
+    best_mode = None
+    for row in table_rows:
+        if row["rmse_kf"] is not None and row["rmse_kf"] < best_rmse:
+            best_rmse = row["rmse_kf"]
+            best_bin = row["bin_count"]
+            best_mode = row["mode"]
+
+    # Per-station foF2/foE errors for best bin_count
+    table_str += "\n" + "─" * 80 + "\n"
+    if best_bin is not None:
+        # Find the numeric bin_count key in stats dict
+        best_bin_key = None if best_bin == "all" else int(best_bin)
+
+        if best_bin_key in stats:
+            station_errors = []
+            for filt_name in ("prior", "kf", "ekf_param"):
+                block = stats[best_bin_key].get(filt_name, {})
+                per_station = block.get("per_station", {})
+
+                for station_code in sorted(per_station.keys()):
+                    station_data = per_station[station_code]
+                    station_errors.append(dict(
+                        station=station_code,
+                        filter_mode=filt_name,
+                        foF2_error_mhz=station_data.get("foF2_error_mhz"),
+                        foE_error_mhz=station_data.get("foE_error_mhz"),
+                    ))
+
+            if station_errors:
+                table_str += f"Per-Station foF2 / foE Errors for Best Bin (bin_count={best_bin})\n"
+                table_str += "─" * 80 + "\n"
+                df_station = pd.DataFrame(station_errors)
+                df_station = df_station.round(3)
+                table_str += df_station.to_string(index=False)
+                table_str += "\n"
+
+    table_str += "─" * 80 + "\n"
+
+    # Print to console
+    print(table_str)
+
+    # Save to file
+    txt_path = _make_subfolder_path(save_dir, "summaries", f"cross_window_summary_{YYYY}_{DOY:03d}.txt")
+    with open(txt_path, "w") as f:
+        f.write(table_str)
+
+    print(f"  Summary saved → {txt_path}")
+
+
+def _plot_convergence_panel_fits_only(series: "dict | None") -> dict:
+    """
+    Extract power-law fits from a convergence series without plotting.
+    Returns {series_name: fit_dict_or_None}.
+    """
+    fits: dict = {}
+    if series is None:
+        return fits
+
+    n = series["n"]
+    for key in ["prior", "kf", "ekf"]:
+        y = series[key]
+        fit = _fit_power_law(n, y)
+        fits[key] = fit
+
+    return fits
+
+
+def _fit_power_law(n: np.ndarray, y: np.ndarray) -> "dict | None":
+    """
+    Fit RMSE(n) = a * n**(-b) via ordinary least squares on
+    log(RMSE) = log(a) - b*log(n).
+
+    Returns dict(a=.., b=.., r2=..) (r2 computed in log-log space, i.e. the
+    space the fit actually minimises), or None if fewer than 2 finite,
+    strictly-positive (n, y) pairs are available.
+    """
+    n = np.asarray(n, dtype=float)
+    y = np.asarray(y, dtype=float)
+    valid = np.isfinite(n) & np.isfinite(y) & (n > 0) & (y > 0)
+    if np.count_nonzero(valid) < 2:
+        return None
+    log_n = np.log(n[valid])
+    log_y = np.log(y[valid])
+    slope, intercept = np.polyfit(log_n, log_y, 1)
+    pred    = slope * log_n + intercept
+    ss_res  = float(np.sum((log_y - pred) ** 2))
+    ss_tot  = float(np.sum((log_y - np.mean(log_y)) ** 2))
+    r2      = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    return dict(a=float(np.exp(intercept)), b=float(-slope), r2=r2)
+
+
+def _collect_convergence_series(all_results: dict[str, dict]) -> "tuple[dict, int]":
+    """
+    Pool per-bin (n_measurements, prior/KF/EKF post_rmse) across every window
+    in *all_results*, grouped by FILTER_MODES then by nominal bin_count.
+
+    Returns (agg, n_windows_used) where
+        agg[mode][bin_count] = {"n": [...], "prior": [...], "kf": [...], "ekf": [...]}
+    one entry per window that had that (mode, bin_count) cell populated.
+    """
+    agg: dict = {
+        mode: {bin_count: dict(n=[], prior=[], kf=[], ekf=[]) for bin_count in OCC_COUNT_BINS}
+        for mode in FILTER_MODES
+    }
+
+    n_windows_used = 0
+    for window_key, r in all_results.items():
+        if "error" in r:
+            continue
+        bin_map = _gather_bin_results(window_key, r)
+        if not bin_map:
+            continue
+        n_windows_used += 1
+
+        for bin_count in OCC_COUNT_BINS:
+            wres = bin_map.get(bin_count)
+            if wres is None:
+                continue
+            per_mode = wres.get("filter_results") or {}
+            for mode in FILTER_MODES:
+                fr = per_mode.get(mode)
+                if not fr:
+                    continue
+                n_meas = _actual_measurement_count(fr, wres, bin_count)
+                if n_meas is None or n_meas <= 0:
+                    continue
+                bucket = agg[mode][bin_count]
+                bucket["n"].append(n_meas)
+                bucket["prior"].append(fr.get("prior_rmse"))
+                bucket["kf"].append((fr.get("kf_result") or {}).get("post_rmse"))
+                bucket["ekf"].append((fr.get("ekf_param") or {}).get("post_rmse"))
+
+    return agg, n_windows_used
+
+
+def _series_for_mode(agg: dict, mode: str) -> "dict | None":
+    """
+    Collapse _collect_convergence_series()'s per-window buckets into one
+    point per bin_count (mean across windows, NaNs/None ignored), sorted
+    ascending by measurement count.  bin_count=None ("use all arcs") lands
+    at the largest n automatically, since its n is the window's true arc
+    count rather than a capped value.
+    """
+    rows = []
+    for bin_count in OCC_COUNT_BINS:
+        b = agg[mode][bin_count]
+        if not b["n"]:
+            continue
+
+        def _mean_or_nan(vals):
+            finite = [v for v in vals if v is not None and np.isfinite(v)]
+            return float(np.mean(finite)) if finite else float("nan")
+
+        rows.append((
+            float(np.mean(b["n"])),
+            _mean_or_nan(b["prior"]),
+            _mean_or_nan(b["kf"]),
+            _mean_or_nan(b["ekf"]),
+        ))
+    if not rows:
+        return None
+    rows.sort(key=lambda row: row[0])
+    arr = np.array(rows, dtype=float)
+    return dict(n=arr[:, 0], prior=arr[:, 1], kf=arr[:, 2], ekf=arr[:, 3])
+
+
+def _plot_convergence_panel(
+    ax,
+    series: "dict | None",
+    title: str,
+    igs_ref: "dict | None" = None,
+) -> dict:
+    """
+    Draw one bin_count-vs-RMSE panel: prior (black, dotted), KF (steelblue,
+    solid), EKF_Param (crimson, dashed), each labelled with its fitted power-
+    law exponent b and log-log R².  If *igs_ref* is given (mean prior/KF/EKF
+    RMSE for the igs_only mode, which is ~invariant to bin_count), draws it
+    as thin horizontal reference lines for context.
+
+    Returns {series_name: fit_dict_or_None} for the legend/stats panel.
+    """
+    ax.set_facecolor("#2b2b2b")
+    for sp in ax.spines.values():
+        sp.set_edgecolor("#555")
+
+    fits: dict = {}
+    if series is None:
+        ax.text(0.5, 0.5, "no data", color="lightgray", ha="center", va="center",
+                 transform=ax.transAxes)
+    else:
+        n = series["n"]
+        style = dict(
+            prior=("Prior",      "black",     ":",  "o"),
+            kf   =("KF post",    "steelblue", "-",  "s"),
+            ekf  =("EKF_P post", "crimson",   "--", "^"),
+        )
+        for key, (label, color, ls, marker) in style.items():
+            y = series[key]
+            fit = _fit_power_law(n, y)
+            fits[key] = fit
+            leg_label = label
+            if fit is not None:
+                leg_label += f"  (b={fit['b']:.2f}, R²={fit['r2']:.2f})"
+            ax.plot(n, y, color=color, lw=1.6, ls=ls, marker=marker,
+                     markersize=4, label=leg_label)
+
+        if igs_ref:
+            for key, (label, color, _, _) in style.items():
+                ref_val = igs_ref.get(key)
+                if ref_val is not None and np.isfinite(ref_val):
+                    ax.axhline(ref_val, color=color, lw=1.0, ls=(0, (1, 2)),
+                                alpha=0.55)
+            ax.plot([], [], color="gray", lw=1.0, ls=(0, (1, 2)), alpha=0.55,
+                     label="IGS-only baseline")
+
+    ax.set_title(title, color="white", fontsize=9, fontweight="bold")
+    ax.set_xlabel("Number of Occultations", color="lightgray", fontsize=8)
+    ax.set_ylabel("TEC RMSE  [TECU]", color="lightgray", fontsize=8)
+    ax.tick_params(colors="lightgray", labelsize=7)
+    ax.grid(True, lw=0.3, alpha=0.35, color="#888")
+    ax.legend(fontsize=6.5, facecolor="#2b2b2b", labelcolor="lightgray",
+               loc="best", framealpha=0.8)
+    return fits
+
+
+def plot_convergence_vs_measurement_count(
+    all_results: dict[str, dict],
+    save_dir: str = SAVE_DIR,
+) -> None:
+    """
+    Filter-accuracy convergence vs. number of assimilated measurements, using
+    the OCC_COUNT_BINS sweep (see select_arcs_by_count_bin() / the
+    {window_key}_{bin_count} checkpoints in §13b).
+
+    For every window with per-bin data available, pools prior/KF/EKF_Param
+    post_rmse at each nominal bin_count across windows (mean), then fits
+    RMSE(n) = a * n**(-b) per mode/series so the reported exponent b (higher
+    = faster improvement with more data) and log-log R² summarise how much
+    each filter benefits from additional occultations.
+
+    Layout — 2×2
+    ────────────────────────────────────────────────────────────
+    (0,0) ro_only, with IGS-only reference lines overlaid for context.
+    (0,1) ro_only alone (no reference lines) — the "clean" fit view.
+    (1,0) text summary of convergence exponents/R² for every mode/series.
+    (1,1) ro_igs (RO + IGS combined mode), with IGS-only reference lines.
+
+    Saved to {save_dir}/convergence_vs_measurement_count_{YYYY}_{DOY}.png.
+    """
+    agg, n_windows_used = _collect_convergence_series(all_results)
+    if n_windows_used == 0:
+        print("  [plot_convergence_vs_measurement_count] no per-bin data found "
+              f"(checked in-memory 'bin_results' and checkpoints under "
+              f"{CHECKPOINT_DIR}) — skipping.")
+        return
+
+    ro_only_series = _series_for_mode(agg, "ro_only")
+    ro_igs_series  = _series_for_mode(agg, "ro_igs")
+    igs_only_series = _series_for_mode(agg, "igs_only")
+
+    igs_ref = None
+    if igs_only_series is not None:
+        igs_ref = dict(
+            prior=float(np.nanmean(igs_only_series["prior"])),
+            kf   =float(np.nanmean(igs_only_series["kf"])),
+            ekf  =float(np.nanmean(igs_only_series["ekf"])),
+        )
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10), facecolor="#1e1e1e")
+    fig.patch.set_facecolor("#1e1e1e")
+
+    fits_ro_only_ref  = _plot_convergence_panel(
+        axes[0, 0], ro_only_series, "RO only (with IGS-only reference)", igs_ref=igs_ref)
+    fits_ro_only_clean = _plot_convergence_panel(
+        axes[0, 1], ro_only_series, "RO only", igs_ref=None)
+    fits_ro_igs = _plot_convergence_panel(
+        axes[1, 1], ro_igs_series, "RO + IGS (ro_igs)", igs_ref=igs_ref)
+
+    ax_stats = axes[1, 0]
+    ax_stats.set_facecolor("#2b2b2b")
+    for sp in ax_stats.spines.values():
+        sp.set_edgecolor("#555")
+    ax_stats.set_xticks([])
+    ax_stats.set_yticks([])
+
+    def _fmt_fit(fit):
+        if fit is None:
+            return "  n/a"
+        return f"  a={fit['a']:.3g}  b={fit['b']:.3f}  R²={fit['r2']:.3f}"
+
+    lines = [
+        f"Convergence fit:  RMSE(n) = a · n^(-b)   (n = occultations, {n_windows_used} window(s) pooled)",
+        "",
+        "ro_only:",
+        f"  prior{_fmt_fit(fits_ro_only_clean.get('prior'))}",
+        f"  KF   {_fmt_fit(fits_ro_only_clean.get('kf'))}",
+        f"  EKF_P{_fmt_fit(fits_ro_only_clean.get('ekf'))}",
+        "",
+        "ro_igs:",
+        f"  prior{_fmt_fit(fits_ro_igs.get('prior'))}",
+        f"  KF   {_fmt_fit(fits_ro_igs.get('kf'))}",
+        f"  EKF_P{_fmt_fit(fits_ro_igs.get('ekf'))}",
+    ]
+    ax_stats.text(0.03, 0.95, "\n".join(lines), transform=ax_stats.transAxes,
+                  color="lightgray", fontsize=9, family="monospace",
+                  va="top", ha="left")
+    ax_stats.set_title("Convergence-rate statistics", color="white",
+                        fontsize=9, fontweight="bold")
+
+    fig.suptitle(
+        f"TEC RMSE convergence vs. measurement count — {YYYY}.{DOY:03d}",
+        color="white", fontsize=12, y=0.98,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+
+    save_path = _make_subfolder_path(
+        save_dir, "cross_window", f"convergence_vs_measurement_count_{YYYY}_{DOY:03d}.png")
+    fig.savefig(save_path, dpi=130, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print(f"  Saved: {save_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §11c  Per-station EDP error vs. occultation count — OCC_COUNT_BINS sweep
+# ─────────────────────────────────────────────────────────────────────────────
+# Reuses the same bin-count sweep data source as plot_convergence_vs_measurement_
+# count() (§11b): per window, per bin_count, filter_results[mode] carries the
+# truth/prior/posterior Ne fields needed to interpolate to a station location
+# and compare against truth.
+
+def _collect_station_error_data(
+    all_results: dict[str, dict],
+    station_lat: float,
+    station_lon: float,
+    alt_grid: np.ndarray,
+    mode: str = "ro_only",
+) -> "tuple[dict, list]":
+    """
+    Gather, for one station location, per-bin_count lists of Ne/f_p
+    abs/relative error profiles (KF and EKF_Param vs. truth), pooled across
+    every window in *all_results* that has that bin_count checkpointed.
+
+    Returns
+    -------
+    per_bin : {bin_count: {"n_list": [...],
+                            "kf_abs_ne"/"kf_rel_ne"/"kf_abs_fp"/"kf_rel_fp": [(n_alt,), ...],
+                            "ekf_abs_ne"/"ekf_rel_ne"/"ekf_abs_fp"/"ekf_rel_fp": [(n_alt,), ...]}}
+        Each list holds one (n_alt,) profile per window (so median/std across
+        windows can be taken downstream).  "n_list" holds the actual
+        measurement count used in each contributing window (see
+        _actual_measurement_count()).
+    hmf2_list : list[float]
+        Truth F2-peak altitude (km) from every contributing (window, bin_count)
+        cell, used for the shared reference altitude line.
+    """
+    alt_grid = np.asarray(alt_grid, dtype=float)
+    per_bin: dict = {
+        bin_count: dict(
+            n_list=[],
+            kf_abs_ne=[], kf_rel_ne=[], kf_abs_fp=[], kf_rel_fp=[],
+            ekf_abs_ne=[], ekf_rel_ne=[], ekf_abs_fp=[], ekf_rel_fp=[],
+        )
+        for bin_count in OCC_COUNT_BINS
+    }
+    hmf2_list: list = []
+
+    for window_key, r in all_results.items():
+        if "error" in r:
+            continue
+        bin_map = _gather_bin_results(window_key, r)
+        if not bin_map:
+            continue
+
+        for bin_count in OCC_COUNT_BINS:
+            wres = bin_map.get(bin_count)
+            if wres is None:
+                continue
+            fr = (wres.get("filter_results") or {}).get(mode)
+            if not fr:
+                continue
+            truth_ne = fr.get("truth_ne_1deg")
+            g1lat    = fr.get("grid_lats_1deg")
+            g1lon    = fr.get("grid_lons_1deg")
+            if truth_ne is None or g1lat is None or g1lon is None:
+                continue
+
+            truth_prof = _interp_edp_field_to_station(
+                dict(ne=truth_ne, grid_lats=g1lat, grid_lons=g1lon),
+                station_lat, station_lon)
+            truth_fp = ne_to_mhz(truth_prof)
+            _, hmf2 = extract_robust_f2_peak(truth_prof, alt_grid)
+            if np.isfinite(hmf2):
+                hmf2_list.append(float(hmf2))
+
+            bucket = per_bin[bin_count]
+            n_meas = _actual_measurement_count(fr, wres, bin_count)
+            if n_meas is not None:
+                bucket["n_list"].append(n_meas)
+
+            truth_ne_safe = np.where(truth_prof != 0, np.abs(truth_prof), np.nan)
+            truth_fp_safe = np.where(truth_fp != 0, np.abs(truth_fp), np.nan)
+
+            for filt_key, filt_r in (("kf", fr.get("kf_result")),
+                                      ("ekf", fr.get("ekf_param"))):
+                if filt_r is None:
+                    continue
+                est_prof = _interp_edp_field_to_station(
+                    dict(ne=filt_r["posterior_ne_5deg"],
+                         grid_lats=filt_r["grid_lats"], grid_lons=filt_r["grid_lons"]),
+                    station_lat, station_lon)
+                est_fp = ne_to_mhz(est_prof)
+
+                abs_ne = np.abs(est_prof - truth_prof)
+                abs_fp = np.abs(est_fp - truth_fp)
+                bucket[f"{filt_key}_abs_ne"].append(abs_ne)
+                bucket[f"{filt_key}_rel_ne"].append(100.0 * abs_ne / truth_ne_safe)
+                bucket[f"{filt_key}_abs_fp"].append(abs_fp)
+                bucket[f"{filt_key}_rel_fp"].append(100.0 * abs_fp / truth_fp_safe)
+
+    return per_bin, hmf2_list
+
+
+def _bin_count_color_scale(per_bin: dict) -> "tuple[dict, object, object]":
+    """
+    Map each bin_count with data to an effective measurement count (mean
+    "n_list" across contributing windows) and build a shared colormap/
+    normalisation for it.  bin_count=None ("use all arcs") naturally maps to
+    the largest effective count, same convention as the convergence plot.
+    """
+    n_eff_by_bin: dict = {}
+    for bin_count in OCC_COUNT_BINS:
+        n_list = per_bin[bin_count]["n_list"]
+        if n_list:
+            n_eff_by_bin[bin_count] = float(np.mean(n_list))
+
+    if not n_eff_by_bin:
+        return n_eff_by_bin, None, None
+
+    vals = list(n_eff_by_bin.values())
+    cmap = mpl.colormaps["viridis"]
+    norm = mpl.colors.Normalize(vmin=min(vals), vmax=max(vals))
+    return n_eff_by_bin, cmap, norm
+
+
+def _plot_station_error_panel(
+    ax,
+    alt_grid: np.ndarray,
+    per_bin: dict,
+    n_eff_by_bin: dict,
+    cmap,
+    norm,
+    solid_key: str,
+    dashed_key: "str | None",
+    xlabel: str,
+    hmf2_ref: float,
+    title: str,
+) -> None:
+    """
+    One altitude-profile panel: for every bin_count with data, plot the
+    across-window median as a thick line (colour = bin_count's effective
+    measurement count) with a ±1σ shaded band.  If *dashed_key* is given
+    (used for the combined KF/EKF relative-error row), both series share the
+    bin_count colour but are distinguished by solid (KF) vs. dashed
+    (EKF_Param) linestyle.
+    """
+    ax.set_facecolor("#2b2b2b")
+    for sp in ax.spines.values():
+        sp.set_edgecolor("#555")
+
+    for bin_count, n_eff in sorted(n_eff_by_bin.items(), key=lambda kv: kv[1]):
+        color = cmap(norm(n_eff)) if cmap is not None else "steelblue"
+        bucket = per_bin[bin_count]
+
+        profiles = bucket[solid_key]
+        if profiles:
+            stacked = np.vstack(profiles)
+            med = np.nanmedian(stacked, axis=0)
+            std = np.nanstd(stacked, axis=0)
+            ax.plot(med, alt_grid, color=color, lw=2.0, ls="-")
+            ax.fill_betweenx(alt_grid, med - std, med + std,
+                               color=color, alpha=0.15, lw=0)
+
+        if dashed_key is not None:
+            profiles_d = bucket[dashed_key]
+            if profiles_d:
+                stacked_d = np.vstack(profiles_d)
+                med_d = np.nanmedian(stacked_d, axis=0)
+                std_d = np.nanstd(stacked_d, axis=0)
+                ax.plot(med_d, alt_grid, color=color, lw=1.6, ls="--")
+                ax.fill_betweenx(alt_grid, med_d - std_d, med_d + std_d,
+                                   color=color, alpha=0.10, lw=0)
+
+    if np.isfinite(hmf2_ref):
+        ax.axhline(hmf2_ref, color="white", lw=1.1, ls=(0, (4, 2)), alpha=0.6)
+
+    if dashed_key is not None:
+        legend_handles = [
+            Line2D([0], [0], color="gray", lw=2.0, ls="-",  label="KF"),
+            Line2D([0], [0], color="gray", lw=1.6, ls="--", label="EKF_Param"),
+        ]
+        ax.legend(handles=legend_handles, fontsize=6.5, facecolor="#2b2b2b",
+                   labelcolor="lightgray", loc="best", framealpha=0.8)
+
+    ax.set_title(title, color="white", fontsize=9, fontweight="bold")
+    ax.set_xlabel(xlabel, color="lightgray", fontsize=8)
+    ax.set_ylabel("Altitude  [km]", color="lightgray", fontsize=8)
+    ax.tick_params(colors="lightgray", labelsize=7)
+    ax.grid(True, lw=0.3, alpha=0.35, color="#888")
+
+
+def plot_station_edp_errors(
+    all_results: dict[str, dict],
+    stations_list: list[str],
+    alt_grid: np.ndarray,
+    save_dir: str,
+    mode: str = "ro_only",
+    stations_json: "str | None" = None,
+) -> None:
+    """
+    Per-station Ne/f_p error-vs-altitude profiles across the OCC_COUNT_BINS
+    sweep, one figure per station.
+
+    Layout — 3×2 per station
+    ────────────────────────────────────────────────────────────
+    Column 1 (Ne)                          Column 2 (f_p)
+    Row 1: |Ne error| (KF)                 |f_p error| (KF)
+    Row 2: |Ne error| (EKF_Param)          |f_p error| (EKF_Param)
+    Row 3: relative Ne error (%)           relative f_p error (%)
+           — KF (solid) and EKF_Param (dashed) overlaid, since the request's
+             3-row spec doesn't split relative error by filter the way rows
+             1–2 do for absolute error.
+
+    Within each panel: one median-across-windows line per bin_count (colour
+    = effective measurement count, shared colorbar), ±1σ shading across
+    windows, and a reference altitude line at the (median, across
+    windows/bins) truth F2-peak altitude. The spec calls this a "vertical
+    line", but with altitude on the y-axis (as specified) marking a single
+    altitude is a horizontal line — drawn that way here.
+
+    Saved to {save_dir}/station_{station_name}_edp_errors_{YYYY}_{DOY}.png.
+    """
+    alt_grid = np.asarray(alt_grid, dtype=float)
+    if stations_json is None:
+        stations_json = IGS_SIM_STATIONS_JSON
+    stations = _load_igs_sim_stations(stations_json, stations_list, roi_max_km=np.inf)
+    stations_by_code = {s["code"]: s for s in stations}
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    for code in stations_list:
+        code_u = code.upper()
+        st = stations_by_code.get(code_u)
+        if st is None:
+            print(f"  [plot_station_edp_errors] Station {code} not resolved — skipped.")
+            continue
+
+        per_bin, hmf2_list = _collect_station_error_data(
+            all_results, st["lat"], st["lon"], alt_grid, mode=mode)
+        n_eff_by_bin, cmap, norm = _bin_count_color_scale(per_bin)
+        if not n_eff_by_bin:
+            print(f"  [plot_station_edp_errors] {code_u}: no per-bin data found "
+                  f"(checked in-memory 'bin_results' and checkpoints under "
+                  f"{CHECKPOINT_DIR}) — skipping.")
+            continue
+        hmf2_ref = float(np.nanmedian(hmf2_list)) if hmf2_list else float("nan")
+
+        fig, axes = plt.subplots(3, 2, figsize=(11, 13), facecolor="#1e1e1e",
+                                  sharey=True)
+        fig.patch.set_facecolor("#1e1e1e")
+
+        _plot_station_error_panel(
+            axes[0, 0], alt_grid, per_bin, n_eff_by_bin, cmap, norm,
+            solid_key="kf_abs_ne", dashed_key=None,
+            xlabel="|Ne error|  [m⁻³]", hmf2_ref=hmf2_ref,
+            title="Ne absolute error — KF")
+        _plot_station_error_panel(
+            axes[1, 0], alt_grid, per_bin, n_eff_by_bin, cmap, norm,
+            solid_key="ekf_abs_ne", dashed_key=None,
+            xlabel="|Ne error|  [m⁻³]", hmf2_ref=hmf2_ref,
+            title="Ne absolute error — EKF_Param")
+        _plot_station_error_panel(
+            axes[2, 0], alt_grid, per_bin, n_eff_by_bin, cmap, norm,
+            solid_key="kf_rel_ne", dashed_key="ekf_rel_ne",
+            xlabel="Ne relative error  [%]", hmf2_ref=hmf2_ref,
+            title="Ne relative error")
+
+        _plot_station_error_panel(
+            axes[0, 1], alt_grid, per_bin, n_eff_by_bin, cmap, norm,
+            solid_key="kf_abs_fp", dashed_key=None,
+            xlabel="|f_p error|  [MHz]", hmf2_ref=hmf2_ref,
+            title="f_p absolute error — KF")
+        _plot_station_error_panel(
+            axes[1, 1], alt_grid, per_bin, n_eff_by_bin, cmap, norm,
+            solid_key="ekf_abs_fp", dashed_key=None,
+            xlabel="|f_p error|  [MHz]", hmf2_ref=hmf2_ref,
+            title="f_p absolute error — EKF_Param")
+        _plot_station_error_panel(
+            axes[2, 1], alt_grid, per_bin, n_eff_by_bin, cmap, norm,
+            solid_key="kf_rel_fp", dashed_key="ekf_rel_fp",
+            xlabel="f_p relative error  [%]", hmf2_ref=hmf2_ref,
+            title="f_p relative error")
+
+        if cmap is not None:
+            sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+            sm.set_array([])
+            cbar = fig.colorbar(sm, ax=axes, orientation="vertical",
+                                 fraction=0.03, pad=0.03)
+            cbar.set_label("Number of Occultations", color="lightgray", fontsize=8)
+            cbar.ax.tick_params(colors="lightgray", labelsize=7)
+
+        fig.suptitle(
+            f"{code_u} — Error vs. Occultation Count  ({YYYY}.{DOY:03d}, mode={mode})",
+            color="white", fontsize=12, y=0.995,
+        )
+
+        save_path = _make_subfolder_path(
+            save_dir, "cross_window", f"station_{code_u}_edp_errors_{YYYY}_{DOY:03d}.png")
+        fig.savefig(save_path, dpi=130, bbox_inches="tight",
+                    facecolor=fig.get_facecolor())
+        plt.close(fig)
+        print(f"  Saved: {save_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# §11d  HF reflection-height errors vs. occultation count — OCC_COUNT_BINS sweep
+# ─────────────────────────────────────────────────────────────────────────────
+# Reuses the same bin-count sweep data source as plot_convergence_vs_measurement_
+# count()/plot_station_edp_errors() (§11b/§11c): per window, per bin_count,
+# filter_results[mode]["kf_result"]/["ekf_param"] carry the prior/posterior Ne
+# grids that analyze_hf_reflection_heights() needs.
+
+def _collect_hf_reflection_series(
+    all_results: dict[str, dict],
+    frequencies_mhz: list[float],
+    mode: str = "ro_only",
+) -> dict:
+    """
+    Pool per-bin HF reflection-height error metrics (analyze_hf_reflection_
+    heights()) across every window in *all_results*, grouped by frequency,
+    then bin_count, then filter (prior/kf/ekf_param).
+
+    Returns agg[freq][bin_count][filt_name] = dict(mean_err=[], bias=[],
+    std=[], miss=[], false_alarm=[]) — one entry appended per window that had
+    that (freq, bin_count, filt_name) cell populated.  *mode* selects which
+    FILTER_MODES entry to read per window (falls back to whichever mode is
+    populated if the requested one is missing).
+    """
+    freqs = [float(f) for f in frequencies_mhz]
+    filt_names = ("prior", "kf", "ekf_param")
+    agg = {
+        freq: {
+            bin_count: {filt: dict(mean_err=[], bias=[], std=[], miss=[], false_alarm=[])
+                        for filt in filt_names}
+            for bin_count in OCC_COUNT_BINS
+        }
+        for freq in freqs
+    }
+
+    for window_key, r in all_results.items():
+        if "error" in r:
+            continue
+        bin_map = _gather_bin_results(window_key, r)
+        if not bin_map:
+            continue
+
+        for bin_count in OCC_COUNT_BINS:
+            wres = bin_map.get(bin_count)
+            if wres is None:
+                continue
+            per_mode = wres.get("filter_results") or {}
+            fr = per_mode.get(mode) or per_mode.get("ro_only") \
+                or per_mode.get("ro_igs") or per_mode.get("igs_only")
+            if not fr:
+                continue
+            kf_r     = fr.get("kf_result")
+            ekf_r    = fr.get("ekf_param")
+            truth_ne = fr.get("truth_ne_5deg")
+            if kf_r is None or ekf_r is None or truth_ne is None:
+                continue
+
+            truth_edp_dict = dict(ne=truth_ne, grid_lats=fr["grid_lats_5deg"],
+                                   grid_lons=fr["grid_lons_5deg"])
+            prior_edp_dict = dict(ne=kf_r["prior_edp"], grid_lats=kf_r["grid_lats"],
+                                   grid_lons=kf_r["grid_lons"])
+            post_kf_dict   = dict(ne=kf_r["posterior_edp"], grid_lats=kf_r["grid_lats"],
+                                   grid_lons=kf_r["grid_lons"])
+            post_ekf_dict  = dict(ne=ekf_r["posterior_edp"], grid_lats=ekf_r["grid_lats"],
+                                   grid_lons=ekf_r["grid_lons"])
+
+            hf_out = analyze_hf_reflection_heights(
+                truth_edp_dict, prior_edp_dict, post_kf_dict, post_ekf_dict,
+                frequencies_mhz=freqs, alt_grid=ALT_GRID,
+            )
+
+            for freq in freqs:
+                freq_dict = hf_out.get(freq)
+                if not freq_dict:
+                    continue
+                for filt in filt_names:
+                    m = freq_dict.get(filt)
+                    if not m:
+                        continue
+                    bucket = agg[freq][bin_count][filt]
+                    bucket["mean_err"].append(m["mean_height_error_km"])
+                    bucket["bias"].append(m["bias_km"])
+                    bucket["std"].append(m["std_height_error_km"])
+                    bucket["miss"].append(m["miss_count"])
+                    bucket["false_alarm"].append(m["false_alarm_count"])
+
+    return agg
+
+
+def _hf_series_for_freq(agg_freq: dict) -> "dict | None":
+    """
+    Collapse _collect_hf_reflection_series()'s per-window buckets for one
+    frequency into one point per (bin_count, filter): mean across windows for
+    the continuous metrics (mean/bias/std height error), sum across windows
+    for the miss/false-alarm counts.  Bin order follows OCC_COUNT_BINS, i.e.
+    decreasing occultation count (None = "use all arcs" first).
+    """
+    filt_names = ("prior", "kf", "ekf_param")
+    bins_used = [bc for bc in OCC_COUNT_BINS
+                 if any(agg_freq[bc][f]["mean_err"] for f in filt_names)]
+    if not bins_used:
+        return None
+
+    def _mean_or_nan(vals):
+        finite = [v for v in vals if v is not None and np.isfinite(v)]
+        return float(np.mean(finite)) if finite else float("nan")
+
+    out: dict = dict(bins=bins_used)
+    for filt in filt_names:
+        mean_err, bias, std, miss, false_alarm = [], [], [], [], []
+        for bc in bins_used:
+            b = agg_freq[bc][filt]
+            mean_err.append(_mean_or_nan(b["mean_err"]))
+            bias.append(_mean_or_nan(b["bias"]))
+            std.append(_mean_or_nan(b["std"]))
+            miss.append(int(np.sum(b["miss"])) if b["miss"] else 0)
+            false_alarm.append(int(np.sum(b["false_alarm"])) if b["false_alarm"] else 0)
+        out[filt] = dict(
+            mean_err=np.array(mean_err, dtype=float),
+            bias=np.array(bias, dtype=float),
+            std=np.array(std, dtype=float),
+            miss=np.array(miss, dtype=int),
+            false_alarm=np.array(false_alarm, dtype=int),
+        )
+    return out
+
+
+def plot_hf_reflection_errors(
+    all_results: dict[str, dict],
+    frequencies_mhz: "list[float] | None" = None,
+    save_dir: str = SAVE_DIR,
+) -> None:
+    """
+    HF reflection-height accuracy vs. occultation-count bin, pooling every
+    window's OCC_COUNT_BINS sweep (see analyze_hf_reflection_heights() and
+    _collect_hf_reflection_series()).
+
+    For each frequency in *frequencies_mhz*, saves a 2×2 figure with one line
+    per filter (prior/KF/EKF_Param), x-axis = bin_count in OCC_COUNT_BINS'
+    decreasing-count order:
+      (0,0) mean |reflection-height error| [km]
+      (0,1) signed bias in reflection height (est − truth) [km]
+      (1,0) miss + false-alarm counts, stacked bar per filter
+      (1,1) std-dev of the reflection-height error [km]
+
+    Saved to {save_dir}/hf_reflection_errors_{freq}_mhz_{YYYY}_{DOY}.png, one
+    file per frequency.
+    """
+    if frequencies_mhz is None:
+        frequencies_mhz = [1.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0]
+    frequencies_mhz = [float(f) for f in frequencies_mhz]
+
+    agg = _collect_hf_reflection_series(all_results, frequencies_mhz)
+
+    filt_style = dict(
+        prior     =("Prior",      "black",     "o"),
+        kf        =("KF post",    "steelblue", "s"),
+        ekf_param =("EKF_P post", "crimson",   "^"),
+    )
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    for freq in frequencies_mhz:
+        series = _hf_series_for_freq(agg[freq])
+        fig, axes = plt.subplots(2, 2, figsize=(13, 10), facecolor="#1e1e1e")
+        fig.patch.set_facecolor("#1e1e1e")
+
+        if series is None:
+            for ax in axes.flat:
+                ax.set_facecolor("#2b2b2b")
+                ax.text(0.5, 0.5, "no data", color="lightgray", ha="center",
+                         va="center", transform=ax.transAxes)
+            fig.suptitle(f"HF reflection-height errors — {freq:.1f} MHz — no data",
+                          color="white", fontsize=12)
+        else:
+            bins = series["bins"]
+            x = np.arange(len(bins))
+            xticklabels = ["all" if bc is None else str(bc) for bc in bins]
+
+            def _style_axis(ax, ylabel, title):
+                ax.set_facecolor("#2b2b2b")
+                for sp in ax.spines.values():
+                    sp.set_edgecolor("#555")
+                ax.set_xticks(x)
+                ax.set_xticklabels(xticklabels, color="lightgray", fontsize=7)
+                ax.set_xlabel("Occultation-count bin", color="lightgray", fontsize=8)
+                ax.set_ylabel(ylabel, color="lightgray", fontsize=8)
+                ax.set_title(title, color="white", fontsize=9, fontweight="bold")
+                ax.tick_params(colors="lightgray", labelsize=7)
+                ax.grid(True, lw=0.3, alpha=0.35, color="#888")
+
+            # Panel 1: mean |height error|
+            ax = axes[0, 0]
+            for filt, (label, color, marker) in filt_style.items():
+                ax.plot(x, series[filt]["mean_err"], color=color, lw=1.6,
+                         marker=marker, markersize=5, label=label)
+            _style_axis(ax, "Mean |height error|  [km]",
+                        f"Mean reflection-height error — {freq:.1f} MHz")
+            ax.legend(fontsize=7, facecolor="#2b2b2b", labelcolor="lightgray",
+                       loc="best", framealpha=0.8)
+
+            # Panel 2: bias
+            ax = axes[0, 1]
+            for filt, (label, color, marker) in filt_style.items():
+                ax.plot(x, series[filt]["bias"], color=color, lw=1.6,
+                         marker=marker, markersize=5, label=label)
+            ax.axhline(0.0, color="white", lw=0.8, alpha=0.4)
+            _style_axis(ax, "Bias (est − truth)  [km]",
+                        f"Reflection-height bias — {freq:.1f} MHz")
+            ax.legend(fontsize=7, facecolor="#2b2b2b", labelcolor="lightgray",
+                       loc="best", framealpha=0.8)
+
+            # Panel 3: miss + false-alarm counts, stacked bar per filter
+            ax = axes[1, 0]
+            n_filt = len(filt_style)
+            bw = 0.8 / n_filt
+            for i, (filt, (label, color, _marker)) in enumerate(filt_style.items()):
+                xpos = x + (i - (n_filt - 1) / 2.0) * bw
+                miss = series[filt]["miss"]
+                false_alarm = series[filt]["false_alarm"]
+                ax.bar(xpos, miss, width=bw, color=color, alpha=0.85,
+                        label=f"{label} miss")
+                ax.bar(xpos, false_alarm, width=bw, bottom=miss, color=color,
+                        alpha=0.45, hatch="//", label=f"{label} false alarm")
+            _style_axis(ax, "Count", f"Miss + false-alarm counts — {freq:.1f} MHz")
+            ax.legend(fontsize=6, facecolor="#2b2b2b", labelcolor="lightgray",
+                       loc="best", framealpha=0.8, ncol=2)
+
+            # Panel 4: std-dev of height error
+            ax = axes[1, 1]
+            for filt, (label, color, marker) in filt_style.items():
+                ax.plot(x, series[filt]["std"], color=color, lw=1.6,
+                         marker=marker, markersize=5, label=label)
+            _style_axis(ax, "Std-dev of height error  [km]",
+                        f"Reflection-height error spread — {freq:.1f} MHz")
+            ax.legend(fontsize=7, facecolor="#2b2b2b", labelcolor="lightgray",
+                       loc="best", framealpha=0.8)
+
+            fig.suptitle(
+                f"HF reflection-height errors vs. occultation count — "
+                f"{freq:.1f} MHz — {YYYY}.{DOY:03d}",
+                color="white", fontsize=12, y=0.98,
+            )
+
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        save_path = _make_subfolder_path(
+            save_dir, "cross_window", f"hf_reflection_errors_{freq:.1f}_mhz_{YYYY}_{DOY:03d}.png")
+        fig.savefig(save_path, dpi=130, bbox_inches="tight",
+                    facecolor=fig.get_facecolor())
+        plt.close(fig)
+        print(f"  Saved: {save_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # §12  Parameter spatial error — 8×2 orthographic
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -5646,6 +8200,8 @@ def _run_enkf_retrieval_experiment(
     save_suffix: str = "",
     mode: str = "ro_igs",
     igs_sim_geometry: list[dict] | None = None,
+    hhmm: str = "",
+    bin_label: "str | None" = None,
 ) -> dict:
     """
     Execute the filter retrieval experiment (gridded Ne KF + EKF_Param)
@@ -5812,7 +8368,7 @@ def _run_enkf_retrieval_experiment(
         print("\n  [skip] EKF_Param disabled (RUN_EKF_PARAM = False)")
 
     # ── Step 9c: KF covariance panels ────────────────────────────────────────
-    if kf_result is not None:
+    if kf_result is not None and not SKIP_PLOTS:
         print("\nStep 9c: Plotting KF covariance panels (alt-alt + horizontal) …")
         plot_kf_covariance_panels(
             prior_Xc       = kf_result["prior_Xc"],
@@ -5822,22 +8378,22 @@ def _run_enkf_retrieval_experiment(
             grid_lats_5deg = grid_lats_5deg,
             grid_lons_5deg = grid_lons_5deg,
             truth_time     = truth_time,
-            save_path      = os.path.join(save_dir, f"kf_covariance_{YYYY}_{DOY:03d}{save_suffix}.png"),
+            save_path      = _make_per_window_subfolder_path(save_dir, hhmm, bin_label, f"kf_covariance_{YYYY}_{DOY:03d}{save_suffix}.png"),
         )
 
     # ── Step 10b: TEC + globe + EDP plot (KF) ────────────────────────────────
-    if kf_result is not None:
+    if kf_result is not None and not SKIP_PLOTS:
         print("\nStep 10b: Plotting KF TEC profiles, globe, and EDP spaghetti …")
         plot_kf_tec_edp(
             arc_truth_list, kf_result, truth_ne_1deg,
             grid_lats_1deg, grid_lons_1deg,
             grid_lats_5deg, grid_lons_5deg,
             ALT_GRID, truth_time,
-            save_path=os.path.join(save_dir, f"kf_tec_edp_{YYYY}_{DOY:03d}{save_suffix}.png"),
+            save_path=_make_per_window_subfolder_path(save_dir, hhmm, bin_label, f"kf_tec_edp_{YYYY}_{DOY:03d}{save_suffix}.png"),
         )
 
     # ── Step 10c: TEC + globe + EDP plot (EKF_Param) ─────────────────────────
-    if ekf_param_result is not None:
+    if ekf_param_result is not None and not SKIP_PLOTS:
         print("\nStep 10c: Plotting EKF_Param TEC profiles, globe, and EDP spaghetti …")
         _plot_tec_edp_figure(
             arc_truth_list,
@@ -5857,13 +8413,13 @@ def _run_enkf_retrieval_experiment(
                 f"({ekf_param_result['n_iterations']} iters, "
                 f"{'converged' if ekf_param_result['converged'] else 'not converged'})"
             ),
-            save_path=os.path.join(save_dir, f"ekf_param_tec_edp_{YYYY}_{DOY:03d}{save_suffix}.png"),
+            save_path=_make_per_window_subfolder_path(save_dir, hhmm, bin_label, f"ekf_param_tec_edp_{YYYY}_{DOY:03d}{save_suffix}.png"),
             prior_mean_state=ekf_param_result["prior_mean_state"],
             post_mean_state=ekf_param_result["posterior_mean_5deg"],
         )
 
     # ── Step 11b: arc innovation diagnostic (KF) ──────────────────────────────
-    if kf_result is not None:
+    if kf_result is not None and not SKIP_PLOTS:
         print("\nStep 11b: Plotting KF per-arc innovation diagnostic …")
         _plot_arc_innovation_diagnostic(
             arc_labels          = kf_result["arc_labels"],
@@ -5885,7 +8441,7 @@ def _run_enkf_retrieval_experiment(
         )
 
     # ── Step 11c: arc innovation diagnostic (EKF_Param) ─────────────────────
-    if ekf_param_result is not None:
+    if ekf_param_result is not None and not SKIP_PLOTS:
         print("\nStep 11c: Plotting EKF_Param per-arc innovation diagnostic …")
         _plot_arc_innovation_diagnostic(
             arc_labels         = ekf_param_result["arc_labels"],
@@ -5907,27 +8463,27 @@ def _run_enkf_retrieval_experiment(
         )
 
     # ── Step 12b: EDP spatial error (5×3) — KF with truth column ─────────────
-    if kf_result is not None:
+    if kf_result is not None and not SKIP_PLOTS:
         print("\nStep 12b: Plotting KF EDP spatial error (5×3 orthographic) …")
         plot_edp_spatial_error(
             truth_ne_5deg, kf_result["posterior_ne_5deg"],
             grid_lats_5deg, grid_lons_5deg, ALT_GRID,
             truth_time=truth_time,
-            save_path=os.path.join(save_dir, f"edp_spatial_error_kf_{YYYY}_{DOY:03d}{save_suffix}.png"),
+            save_path=_make_per_window_subfolder_path(save_dir, hhmm, bin_label, f"edp_spatial_error_kf_{YYYY}_{DOY:03d}{save_suffix}.png"),
         )
 
     # ── Step 12c: EDP spatial error — EKF_Param ──────────────────────────────
-    if ekf_param_result is not None:
+    if ekf_param_result is not None and not SKIP_PLOTS:
         print("\nStep 12c: Plotting EKF_Param EDP spatial error (5×2 orthographic) …")
         plot_edp_spatial_error(
             truth_ne_5deg, ekf_param_result["posterior_ne_5deg"],
             grid_lats_5deg, grid_lons_5deg, ALT_GRID,
             truth_time=truth_time,
-            save_path=os.path.join(save_dir, f"edp_spatial_error_ekf_param_{YYYY}_{DOY:03d}{save_suffix}.png"),
+            save_path=_make_per_window_subfolder_path(save_dir, hhmm, bin_label, f"edp_spatial_error_ekf_param_{YYYY}_{DOY:03d}{save_suffix}.png"),
         )
 
     # ── Step 14: KF vs EKF_Param comparison plot ─────────────────────────────
-    if kf_result is not None and ekf_param_result is not None:
+    if kf_result is not None and ekf_param_result is not None and not SKIP_PLOTS:
         print("\nStep 14: Plotting KF vs EKF_Param comparison …")
         plot_kf_ekf_comparison(
             arc_truth_list    = arc_truth_list,
@@ -5940,8 +8496,8 @@ def _run_enkf_retrieval_experiment(
             grid_lons_5deg    = grid_lons_5deg,
             alt_grid          = ALT_GRID,
             truth_time        = truth_time,
-            save_path         = os.path.join(
-                save_dir, f"kf_vs_ekf_param_comparison_{YYYY}_{DOY:03d}{save_suffix}.png"
+            save_path         = _make_per_window_subfolder_path(
+                save_dir, hhmm, bin_label, f"kf_vs_ekf_param_comparison_{YYYY}_{DOY:03d}{save_suffix}.png"
             ),
         )
 
@@ -6171,7 +8727,8 @@ def plot_occ_sweep_results(
             axes[0].legend(handles, labels, fontsize=7, loc="upper right")
         fig.suptitle(suptitle)
         fig.tight_layout()
-        fig.savefig(os.path.join(save_dir, fname), dpi=150)
+        # These are sweep-related but per-window organized
+        fig.savefig(_make_per_window_subfolder_path(save_dir, "sweep", None, fname), dpi=150)
         plt.close(fig)
 
     # ── Figure 1: N_OCC vs foF2 error ─────────────────────────────────────
@@ -6230,7 +8787,7 @@ def plot_occ_sweep_results(
     fig.suptitle("Fraction of cases within frequency threshold vs. N_OCC "
                  "(posterior)")
     fig.tight_layout()
-    fig.savefig(os.path.join(save_dir, "occ_sweep_threshold_fractions.png"),
+    fig.savefig(_make_per_window_subfolder_path(save_dir, "sweep", None, "occ_sweep_threshold_fractions.png"),
                 dpi=150)
     plt.close(fig)
 
@@ -6276,7 +8833,7 @@ def plot_occ_sweep_results(
         fig.colorbar(scat_proxy, ax=axes, label="N_OCC", shrink=0.85)
     fig.suptitle("HF propagation perspective: posterior vs. truth foF2/foE, "
                  "colored by N_OCC")
-    fig.savefig(os.path.join(save_dir, "occ_sweep_hf_propagation.png"),
+    fig.savefig(_make_per_window_subfolder_path(save_dir, "sweep", None, "occ_sweep_hf_propagation.png"),
                 dpi=150, bbox_inches="tight")
     plt.close(fig)
 
@@ -6317,7 +8874,7 @@ def main_sweep() -> None:
         print("#" * 70)
 
         try:
-            windows = scan_and_select_files_per_window(base_path)
+            windows, occ_counts_per_window = scan_and_select_files_per_window(base_path)
         except Exception as exc:
             print(f"[skip] scan failed for {base_path}: "
                   f"{type(exc).__name__}: {exc}")

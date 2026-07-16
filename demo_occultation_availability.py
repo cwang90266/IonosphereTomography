@@ -53,6 +53,27 @@ from demo_isr_da_comparison import (
 from demo_esr_isr import load_edps
 from demo_isr_initial_conditions import _identify_instrument
 
+# ── Longitude-shift experiment ────────────────────────────────────────────────
+# Shift the simulated ISR ground stations (ESR / TRO) by this many degrees of
+# longitude to see how station longitude alone affects GNSS-RO occultation
+# availability. Set to 0.0 to restore the true Svalbard/Tromso coordinates.
+# Figures from a shifted run are written to their own subfolder so they never
+# overwrite the baseline (unshifted) results.
+LON_SHIFT_DEG = 180.0
+SAVE_SUBDIR = "North_America" if LON_SHIFT_DEG else None
+
+if LON_SHIFT_DEG:
+    INSTRUMENTS = {
+        site: ({**inst,
+                "lon": ((inst["lon"] + LON_SHIFT_DEG + 180.0) % 360.0) - 180.0}
+               if site in ISR_SITES else inst)
+        for site, inst in INSTRUMENTS.items()
+    }
+
+FIGURES_DIR = Path(__file__).parent / "Figures" / "Occultation_Availability"
+if SAVE_SUBDIR:
+    FIGURES_DIR = FIGURES_DIR / SAVE_SUBDIR
+
 # ISR ground-station marker shape (colour now carries the satellite instead --
 # see _SAT_COLOR below). Consistent naming with demo_isr_initial_conditions.
 _INST_LABEL  = {"ESR": "ESR (Svalbard)", "TRO": "TRO (Tromso)"}
@@ -353,7 +374,11 @@ def plot_occultation_availability(
                 geod.circle(lon=inst["lon"], lat=inst["lat"],
                             radius=thresh * 1000.0, n_samples=181)
             )
-            ax_map.plot(ring[:, 0], ring[:, 1], transform=ccrs.PlateCarree(),
+            # Geodetic (not PlateCarree): these rings can wrap over the pole
+            # (radius exceeds the station's distance to the pole), and a
+            # PlateCarree transform draws straight lon/lat-space chords
+            # between samples there, faceting the ring into a rosette/pentagon.
+            ax_map.plot(ring[:, 0], ring[:, 1], transform=ccrs.Geodetic(),
                         color=thresh_colors[thresh], lw=1.6, zorder=3)
 
     for site in ISR_SITES:
@@ -675,7 +700,8 @@ def animate_ground_tracks(
             inst = INSTRUMENTS[site]
             ring = np.asarray(geod.circle(lon=inst["lon"], lat=inst["lat"],
                                           radius=thresh * 1000.0, n_samples=181))
-            ax.plot(ring[:, 0], ring[:, 1], transform=ccrs.PlateCarree(),
+            # Geodetic (not PlateCarree): see plot_occultation_availability for why.
+            ax.plot(ring[:, 0], ring[:, 1], transform=ccrs.Geodetic(),
                     color=thresh_colors[thresh], lw=1.4, zorder=4)
     for site in ISR_SITES:
         inst = INSTRUMENTS[site]
@@ -782,8 +808,7 @@ def animate_ground_tracks(
                          blit=False)
 
     if save_path is None:
-        save_path = (Path(__file__).parent / "Figures" / "Occultation_Availability" /
-                     "Movies" / f"ground_tracks_{day.strftime('%Y%m%d')}.gif")
+        save_path = FIGURES_DIR / "Movies" / f"ground_tracks_{day.strftime('%Y%m%d')}.gif"
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1243,8 +1268,7 @@ def run_tec_profile_windows(
     """
     day = pd.Timestamp(day)
     if save_dir is None:
-        save_dir = (Path(__file__).parent / "Figures" / "Occultation_Availability" /
-                    "TEC_Profiles" / day.strftime("%Y%m%d"))
+        save_dir = FIGURES_DIR / "TEC_Profiles" / day.strftime("%Y%m%d")
     save_dir = Path(save_dir)
 
     podtc_dir = _resolve_podtc_dir(day)
@@ -1330,7 +1354,7 @@ def run_day(day, window_hours: float = 1.0, roi_thresholds_km=ROI_THRESHOLDS_KM,
     """
     day = pd.Timestamp(day)
     if save_dir is None:
-        save_dir = Path(__file__).parent / "Figures" / "Occultation_Availability"
+        save_dir = FIGURES_DIR
     save_dir = Path(save_dir)
 
     podtc_dir = _resolve_podtc_dir(day)
@@ -1456,7 +1480,7 @@ def run_all_days(
         days = sorted(pd.Timestamp(d) for d in days)
 
     if save_dir is None:
-        save_dir = Path(__file__).parent / "Figures" / "Occultation_Availability"
+        save_dir = FIGURES_DIR
     save_dir = Path(save_dir)
     outer_threshold = max(roi_thresholds_km)
 
@@ -1687,8 +1711,7 @@ def main() -> None:
                              "the rolling-count/ROI-ring/histogram panels "
                              f"(default {','.join(str(int(t)) for t in ROI_THRESHOLDS_KM)}).")
     parser.add_argument("--save-dir", type=str,
-                        default=str(Path(__file__).parent / "Figures" /
-                                    "Occultation_Availability"),
+                        default=str(FIGURES_DIR),
                         help="Directory to write per-day figures into.")
     parser.add_argument("--movie", action="store_true",
                         help="Instead of the 2x2 figure, render an animated "
@@ -1824,7 +1847,7 @@ if __name__ == "__main__":
         DATE         = "2025-9-22"   # day to plot, "YYYY-MM-DD"
         WINDOW_HOURS = 1.0            # rolling-window width in hours
         ROI_THRESHOLDS = (2500.0, 1500.0, 500.0)   # any # of km thresholds
-        SAVE_DIR     = None           # None → Figures/Occultation_Availability
+        SAVE_DIR     = None           # None → FIGURES_DIR (Occultation_Availability[/North_America])
 
         RUN_ALL_DAYS = False   # True → batch-process every PODTC_BASE day + violin plot
         MAKE_FIGURES = True    # with RUN_ALL_DAYS: also save each day's 2x2 figure
@@ -1862,8 +1885,7 @@ if __name__ == "__main__":
                                         alt_cap=ALT_CAP, alt_min=ALT_MIN,
                                         save_dir=SAVE_DIR, use_cache=USE_CACHE,
                                         make_figures=MAKE_FIGURES, show=False)
-            violin_dir = Path(SAVE_DIR) if SAVE_DIR else (
-                Path(__file__).parent / "Figures" / "Occultation_Availability")
+            violin_dir = Path(SAVE_DIR) if SAVE_DIR else FIGURES_DIR
             violin_fig = plot_availability_violin(
                 daily_counts, threshold_km=max(ROI_THRESHOLDS),
                 window_hours=WINDOW_HOURS,

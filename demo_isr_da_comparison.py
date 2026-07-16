@@ -5,6 +5,11 @@ demo_isr_da_comparison.py
 Compares data-assimilation filter outputs (gridded KF vs. parametric EKF)
 against ISR ground-truth electron density profiles, across GNSS-RO-only,
 IGS-only, and combined observation modes.
+
+Supports an occultation-count sensitivity study: within each occultation-
+availability-minima window, sweeps the count of assimilated RO measurements
+(OCC_COUNT_BINS) to study measurement-density effects on retrieval quality,
+measured against real ISR electron density profiles.
 """
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ import argparse
 import json
 import os
 import pickle
+import sys
 import time
 import traceback
 from pathlib import Path
@@ -26,6 +32,7 @@ from matplotlib.gridspec import GridSpec
 
 import scipy
 from scipy.spatial import cKDTree
+from scipy.signal import find_peaks
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import netCDF4
@@ -57,7 +64,9 @@ from demo_compare_kf_enkf import (
 from plotIonosphereTomography import (
     ISR_MIN_VALID_GATES, _plot_group_all_modes, plot_isr_truth_comparison,
 )
-from test_param_iono import EKF_Param
+from test_param_iono import (
+    EKF_Param, select_arcs_by_count_bin, _get_reflection_height, _fit_power_law,
+)
 from Ionosphere_Tomography_Inverter.ionospheric_state import IonosphericState, N_STATE, PARAM_NAMES
 from Ionosphere_Tomography_Inverter.observation_operator import _ne_profile_ensemble
 from Ionosphere_Tomography_Inverter.enkf_update import _haversine_km
@@ -109,6 +118,19 @@ ISR_SITE_MATCH_DEG     = 0.5
 ISR_WINDOW_HALF_MINUTES = 15
 ISR_ROI_MAX_KM         = 2500.0   # RO peak-tangent-point → ISR site gate (great-circle)
 
+OCC_COUNT_BINS = [None, 55, 45, 35, 25, 15, 5]
+  # None = assimilate ALL available RO occultations in the window;
+  # then decreasing counts to study measurement-density sensitivity.
+WINDOW_ROLLING_HOURS = 1.0     # rolling window for availability_minima_windows
+WINDOW_MIN_SEP_MIN   = 60.0    # min separation between detected minima
+WINDOW_PROMINENCE    = 3.0     # peak prominence for minima detection
+MIN_ARCS_PER_WINDOW  = 10      # skip windows thinner than this
+
+# HF band frequencies [MHz] at which posterior/ISR radio reflection heights are
+# compared in compute_isr_metrics (mirrors analyze_hf_reflection_heights() in
+# test_param_iono.py, applied here to a single column vs a single ISR profile).
+HF_REFLECTION_FREQS_MHZ = [1.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Progress manifest (resume support)
@@ -141,31 +163,56 @@ def _save_progress_manifest(manifest: dict) -> None:
     tmp_path.replace(PROGRESS_MANIFEST)
 
 
-def print_progress_status() -> None:
+def print_progress_status(priority_days: "list[dict] | None" = None,
+                           window_key_filter: "str | None" = None) -> None:
     """
     Print a human-readable summary of how much of the analysis has already
     been completed, from the progress manifest and the accumulated ISR
-    metrics CSV -- without running anything. Used by `--status`.
+    metrics CSV -- without running anything except (when *priority_days* is
+    given) the same podTc2 metadata scan / minima-window split main() itself
+    uses, so the grid below reflects the exact units a real run would see.
+    Used by `--status`.
+
+    When *priority_days* is given (already filtered by --tier/--days/
+    --start-date, as main() does before calling this), also prints a
+    window x bin_count completion grid: for every (window, bin_count) cell,
+    how many of the len(OBS_MODES) x len(FILTER_TYPES) units already have a
+    DA_CACHE pickle on disk -- the exact same check _run_or_load() uses to
+    decide what to skip on resume -- so an interrupted overnight run shows
+    exactly what remains. *window_key_filter* narrows this grid to a single
+    window_key (--window), matching what an actual run with --window would
+    process.
     """
     manifest = _load_progress_manifest()
     print(f"[ISR-DA][status] Progress manifest: {PROGRESS_MANIFEST}")
     if not manifest:
-        print("  No groups recorded as complete yet.")
+        print("  No (group, bin) units recorded as complete yet.")
     else:
         dates = sorted({e.get("date") for e in manifest.values() if e.get("date")})
         date_range = f"{dates[0]} .. {dates[-1]}" if dates else "unknown"
-        print(f"  {len(manifest)} group(s) marked complete, spanning {len(dates)} "
-              f"day(s) ({date_range})")
+        print(f"  {len(manifest)} (group, bin) unit(s) marked complete, spanning "
+              f"{len(dates)} day(s) ({date_range})")
 
         from collections import Counter
+        # entry.get("bin_label", "all") covers manifest entries written before
+        # the OCC_COUNT_BINS sensitivity study added bin_count/bin_label keys.
+        bin_counts: Counter = Counter(
+            e.get("bin_label", "all") for e in manifest.values()
+        )
+        print("  Completed (group, bin) units per occultation-count bin:")
+        for bin_label, n in sorted(bin_counts.items(),
+                                    key=lambda kv: (kv[0] != "all", kv[0])):
+            print(f"    bin={bin_label:<4} : {n}")
+
         status_counts: Counter = Counter()
         for entry in manifest.values():
+            bin_label = entry.get("bin_label", "all")
             for obs_mode, per_filter in entry.get("obs_mode_status", {}).items():
                 for filter_type, status in per_filter.items():
-                    status_counts[(obs_mode, filter_type, status)] += 1
-        print("  Filter-run outcomes across completed groups:")
-        for (obs_mode, filter_type, status), n in sorted(status_counts.items()):
-            print(f"    {obs_mode:<9} {filter_type:<14} {status:<45} : {n}")
+                    status_counts[(bin_label, obs_mode, filter_type, status)] += 1
+        print("  Filter-run outcomes across completed (group, bin) units:")
+        for (bin_label, obs_mode, filter_type, status), n in sorted(status_counts.items()):
+            print(f"    bin={bin_label:<4} {obs_mode:<9} {filter_type:<14} {status:<45} : {n}")
 
     if ISR_METRICS_CSV.exists():
         df = pd.read_csv(ISR_METRICS_CSV, parse_dates=["t_centre"])
@@ -174,6 +221,56 @@ def print_progress_status() -> None:
               f"date range {df['date'].min()} .. {df['date'].max()}")
     else:
         print(f"\n  No ISR metrics CSV yet at {ISR_METRICS_CSV}")
+
+    if not priority_days:
+        return
+
+    bin_labels = [_bin_label(b) for b in OCC_COUNT_BINS]
+    n_per_cell = len(OBS_MODES) * len(FILTER_TYPES)
+    window_filter_note = f" matching --window {window_key_filter}" if window_key_filter else ""
+    print(f"\n  Window x bin_count completion grid{window_filter_note} "
+          f"({len(bin_labels)} bin(s): {bin_labels}; "
+          f"{n_per_cell} = {len(OBS_MODES)} obs_modes x {len(FILTER_TYPES)} filters per cell):")
+
+    grand_done = 0
+    grand_total = 0
+    any_windows = False
+    for day_info in priority_days:
+        date, podtc_dir = day_info["date"], day_info["podtc_dir"]
+        if podtc_dir is None:
+            continue
+        windows = build_minima_windows_for_day(podtc_dir, date)
+        if window_key_filter is not None:
+            windows = [w for w in windows if w["window_key"] == window_key_filter]
+        if not windows:
+            continue
+        any_windows = True
+
+        print(f"\n  {date}  ({len(windows)} window(s)):")
+        header = "    window  " + "".join(f"{lbl:>8}" for lbl in bin_labels) + "     total"
+        print(header)
+        for w in windows:
+            group_key = w["t_centre"].strftime("%Y-%m-%d_%H%M")
+            cells = []
+            row_done = 0
+            for bin_count in OCC_COUNT_BINS:
+                n_done = sum(
+                    1 for obs_mode in OBS_MODES for filter_type in FILTER_TYPES
+                    if _cache_path(group_key, bin_count, obs_mode, filter_type).exists()
+                )
+                row_done += n_done
+                cells.append(f"{n_done}/{n_per_cell}")
+            row_total = n_per_cell * len(OCC_COUNT_BINS)
+            grand_done += row_done
+            grand_total += row_total
+            print(f"    {w['window_key']:<8}" + "".join(f"{c:>8}" for c in cells) +
+                  f"   {row_done:>4}/{row_total}")
+
+    if not any_windows:
+        print("  No windows found for the selected day(s)" + window_filter_note + ".")
+    else:
+        pct = 100.0 * grand_done / grand_total if grand_total else 0.0
+        print(f"\n  Grid total: {grand_done}/{grand_total} unit(s) done ({pct:.1f}%)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -256,6 +353,13 @@ def load_ro_group_for_day(podtc_dir: Path) -> list[tuple[str, pd.DataFrame]]:
     crude region == "POLAR_N" latitude-threshold proxy with an actual
     distance-based gate.
 
+    Groups by demo_group's fixed 30-min time_window_key() clock grid
+    (group_key = "<time_window>__<region>"). Superseded by
+    build_minima_windows_for_day() below for the occultation-count
+    sensitivity study, which instead partitions the day at local minima of
+    occultation availability; kept intact here for backward compatibility
+    with call sites that still want the fixed-grid grouping.
+
     Returns a sorted list of (group_key, group_meta_df) tuples.
     """
     if podtc_dir is None or not Path(podtc_dir).is_dir():
@@ -273,6 +377,78 @@ def load_ro_group_for_day(podtc_dir: Path) -> list[tuple[str, pd.DataFrame]]:
     groups = [(key, grp) for key, grp in roi_meta.groupby("group_key")]
     groups.sort(key=lambda kv: kv[0])
     return groups
+
+
+def build_minima_windows_for_day(podtc_dir: Path, date) -> list[dict]:
+    """
+    Partition *podtc_dir*'s ISR-ROI occultations for *date* into windows
+    bounded by local minima of the rolling occultation-availability count
+    (demo_occultation_availability.availability_minima_windows), replacing
+    demo_group's fixed 30-min time_window_key() clock grid used by
+    load_ro_group_for_day() above.
+
+    Each occultation's timestamp is scan_metadata()'s "date" column, which
+    is the RO peak (TEC-max) tangent-point time (built from the
+    lat_tecmax_tangent / lon_tecmax_tangent netCDF attrs), not the file
+    start time.
+
+    Windows with fewer than MIN_ARCS_PER_WINDOW ISR-ROI occultations are
+    dropped.
+
+    Returns a list of dicts sorted by window start, one per retained window:
+        {"window_key": "HHMM" of the window centre,
+         "lo": window start Timestamp,
+         "hi": window end Timestamp,
+         "t_centre": window centre Timestamp,
+         "group_meta": DataFrame subset of ISR-ROI occultations in [lo, hi),
+         "n_occ": len(group_meta)}
+    """
+    if podtc_dir is None or not Path(podtc_dir).is_dir():
+        return []
+
+    meta = scan_metadata(str(podtc_dir))
+    if meta.empty:
+        return []
+
+    near_mask = _near_isr_site_mask(meta["lat"].to_numpy(), meta["lon"].to_numpy())
+    roi_meta = meta[near_mask]
+    if roi_meta.empty:
+        return []
+
+    from demo_occultation_availability import availability_minima_windows
+
+    date = pd.Timestamp(date)
+    day = pd.Timestamp(date.year, date.month, date.day)
+    minima_windows, _grid, _counts, _minima_idx = availability_minima_windows(
+        roi_meta["date"], day,
+        window_hours    = WINDOW_ROLLING_HOURS,
+        min_sep_minutes = WINDOW_MIN_SEP_MIN,
+        prominence       = WINDOW_PROMINENCE,
+    )
+
+    windows: list[dict] = []
+    for lo, hi in minima_windows:
+        subset = roi_meta[(roi_meta["date"] >= lo) & (roi_meta["date"] < hi)]
+        n_occ = len(subset)
+        if n_occ < MIN_ARCS_PER_WINDOW:
+            continue
+        t_centre = lo + (hi - lo) / 2
+        window_key = f"{t_centre.hour:02d}{t_centre.minute:02d}"
+        windows.append({
+            "window_key": window_key,
+            "lo": lo, "hi": hi, "t_centre": t_centre,
+            "group_meta": subset, "n_occ": n_occ,
+        })
+
+    windows.sort(key=lambda w: w["lo"])
+
+    print(f"[ISR-DA][minima-windows] {day.date()}: {len(windows)} window(s) "
+          f"(>= {MIN_ARCS_PER_WINDOW} arcs each)")
+    for w in windows:
+        print(f"  {w['window_key']}  centre={w['t_centre']}  "
+              f"n_occ={w['n_occ']}  span=[{w['lo']} .. {w['hi']})")
+
+    return windows
 
 
 def load_igs_for_day(date: pd.Timestamp) -> list:
@@ -769,26 +945,64 @@ def _safe_group_key(group_key: str) -> str:
     return group_key.replace("/", "_").replace(" ", "_").replace(":", "")
 
 
-def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
+# Module-level (not nested in run_all_filters) so print_progress_status()'s
+# window x bin_count completion grid can check the exact same DA_CACHE paths
+# _run_or_load() resumes from, without duplicating the naming convention.
+def _bin_label(bin_count: "int | None") -> str:
+    return "all" if bin_count is None else str(bin_count)
+
+
+def _manifest_key(group_key: str, bin_count: "int | None") -> str:
+    return f"{group_key}_bin{_bin_label(bin_count)}"
+
+
+def _cache_path(group_key: str, bin_count: "int | None",
+                 obs_mode: str, filter_type: str) -> Path:
+    return DA_CACHE / f"{group_key}_bin{_bin_label(bin_count)}_{obs_mode}_{filter_type}.pkl"
+
+
+def _parse_bin_count_value(raw: str) -> "int | None":
+    """Parse one --bin-count/--occ-bins token: "all"/"none" (any case) -> None
+    (use every available arc), else int(raw)."""
+    s = raw.strip().lower()
+    if s in ("all", "none"):
+        return None
+    return int(s)
+
+
+def run_all_filters(day_info: dict, windows: list[dict], igs_arcs: list,
                      edps: list[dict], force: bool = False,
                      no_plot: bool = False) -> tuple[dict, list[dict]]:
     """
     Run gridded-KF and parametric-EKF filters across all observation modes
-    (ro_only, ro_igs, igs_only) for every 30-min RO group on one ISR day.
+    (ro_only, ro_igs, igs_only) AND across the full OCC_COUNT_BINS
+    occultation-count sensitivity sweep, for every minima window on one ISR
+    day.
+
+    *windows* is the list of dicts returned by build_minima_windows_for_day()
+    (each: {"window_key", "lo", "hi", "t_centre", "group_meta", "n_occ"}).
+    For every window, every bin_count in OCC_COUNT_BINS is run in turn --
+    bin_count=None (all available RO occultations) first, then decreasing
+    counts -- via _process_window_bin(), which subsamples that window's RO
+    occultations to bin_count via select_arcs_by_count_bin() (IGS arcs are
+    never subsampled).
 
     Results are cached to DA_CACHE as
-    "{group_key}_{obs_mode}_{filter_type}.pkl" and pickled immediately after
-    each is computed, so a re-run with force=False resumes where it left off.
+    "{group_key}_bin{bin_label}_{obs_mode}_{filter_type}.pkl" and pickled
+    immediately after each is computed, so a re-run with force=False resumes
+    where it left off, independently per (window, bin_count).
 
-    Metrics and figures for each group are produced right after that group's
-    6 filter runs finish (rather than waiting for every group in the day to
-    finish), so plots start appearing incrementally as the day progresses.
+    Metrics and figures for each (window, bin_count) unit are produced right
+    after that unit's 6 filter runs finish (rather than waiting for every
+    unit in the day to finish), so plots start appearing incrementally as
+    the day progresses.
 
     Returns
     -------
     (results, metrics) where results is keyed by
-    (group_key, obs_mode, filter_type) -> result dict or None, and metrics
-    is the flat list of per-group ISR comparison rows (see compute_isr_metrics).
+    (group_key, bin_count, obs_mode, filter_type) -> result dict or None,
+    and metrics is the flat list of per-(window, bin_count) ISR comparison
+    rows (see compute_isr_metrics).
     """
     DA_CACHE.mkdir(parents=True, exist_ok=True)
     results: dict = {}
@@ -799,9 +1013,6 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
     _tro = INSTRUMENTS["TRO"]
     _igs_region = assign_region(_tro["lat"], _tro["lon"])
 
-    def _cache_path(group_key: str, obs_mode: str, filter_type: str) -> Path:
-        return DA_CACHE / f"{group_key}_{obs_mode}_{filter_type}.pkl"
-
     def _result_status(value) -> str:
         if value is None:
             return "None"
@@ -809,9 +1020,10 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
             return str(value.get("status", "ok (no 'status' key)"))
         return type(value).__name__
 
-    def _run_or_load(group_key: str, obs_mode: str, filter_type: str, compute_fn):
-        path = _cache_path(group_key, obs_mode, filter_type)
-        tag = f"{group_key} | {obs_mode:<9} | {filter_type:<14}"
+    def _run_or_load(group_key: str, bin_count: "int | None", obs_mode: str,
+                      filter_type: str, compute_fn):
+        path = _cache_path(group_key, bin_count, obs_mode, filter_type)
+        tag = f"{group_key} | bin={_bin_label(bin_count):<3} | {obs_mode:<9} | {filter_type:<14}"
         print(f"▶▶▶ _run_or_load START | {tag}")
         if path.exists() and not force:
             t0 = time.time()
@@ -839,21 +1051,57 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
                       f"({dt:.1f}s) -> status={_result_status(value)}")
                 with open(path, "wb") as fh:
                     pickle.dump(value, fh, protocol=4)
-        results[(group_key, obs_mode, filter_type)] = value
+        results[(group_key, bin_count, obs_mode, filter_type)] = value
         return value
 
-    def _process_group_all_filters(group_key, group_meta):
-        manifest_entry = progress_manifest.get(group_key)
+    def _process_window_bin(window: dict, bin_count: "int | None") -> None:
+        """
+        Run the full 3-obs-mode x 2-filter suite for one occultation-count
+        bin of one minima window.
+
+        *window* is one entry from build_minima_windows_for_day() -- a
+        {"window_key", "lo", "hi", "t_centre", "group_meta", "n_occ"} dict.
+        *bin_count* subsamples window["group_meta"]'s RO occultations down to
+        (up to) that many rows via select_arcs_by_count_bin() (None = use
+        every occultation in the window). IGS ground-station arcs are never
+        subsampled -- the bin only controls RO measurement density, which is
+        the whole point of comparing ro_only/ro_igs/igs_only across bins.
+        """
+        bin_label = _bin_label(bin_count)
+        window_key = window["window_key"]
+        t_centre   = window["t_centre"]
+        lo, hi     = window["lo"], window["hi"]
+        full_group_meta = window["group_meta"]
+
+        # group_key keeps the "YYYY-MM-DD_HHMM" convention _parse_time_window()
+        # / _filter_igs_cmp() expect; the bin dimension lives in manifest_key
+        # (and the DA_CACHE pickle filenames via _cache_path), not here, so a
+        # window's identity stays stable across its whole OCC_COUNT_BINS sweep.
+        group_key = t_centre.strftime("%Y-%m-%d_%H%M")
+
+        manifest_key = _manifest_key(group_key, bin_count)
+        manifest_entry = progress_manifest.get(manifest_key)
         if manifest_entry is not None and manifest_entry.get("status") == "complete" and not force:
-            print(f"  [resume] {group_key} already marked complete in the progress "
+            print(f"  [resume] {manifest_key} already marked complete in the progress "
                   f"manifest (metrics+plots written on a previous run) -- skipping. "
                   f"Use --force to redo it.")
             return
 
-        t_centre = _parse_time_window(group_key)
-        win_key  = group_meta["time_window"].iloc[0]
+        # ── Subsample RO occultations to this bin (seeded on window_key, so
+        #    re-running the same window/bin reproduces the same subset --
+        #    mirrors select_arcs_by_count_bin()'s own reproducibility
+        #    contract in test_param_iono.py). select_arcs_by_count_bin()
+        #    expects a list, so pass positional indices and use its returned
+        #    selected_indices to subset the DataFrame's rows directly.
+        _dummy_arcs = list(range(len(full_group_meta)))
+        _, _sel_meta = select_arcs_by_count_bin(_dummy_arcs, bin_count, window_key)
+        group_meta = full_group_meta.iloc[_sel_meta["selected_indices"]].reset_index(drop=True)
 
-        igs_window_arcs = _filter_igs_cmp(igs_arcs, win_key, window_minutes=30)
+        # IGS arcs are filtered to the window's actual (minima-derived, not
+        # fixed-30-min) span -- window_minutes is chosen so _filter_igs_cmp's
+        # t_centre +/- window/2 reproduces exactly [lo, hi).
+        window_width_min = (hi - lo).total_seconds() / 60.0
+        igs_window_arcs = _filter_igs_cmp(igs_arcs, group_key, window_minutes=window_width_min)
         # Use a single raypath per arc (its central-time epoch) instead of the
         # full ~30-minute arc as multiple observations spread across the
         # window -- see _collapse_igs_arc_to_central_epoch() docstring.
@@ -862,9 +1110,9 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
         if t_centre.hour not in global_edp_cache:
             global_edp_cache.update(_build_hour_edp_cache(t_centre))
 
-        # ── Per-window/per-obs-mode figure output directories ───────────────
+        # ── Per-window/per-bin/per-obs-mode figure output directories ───────
         safe_key   = _safe_group_key(group_key)
-        group_dirs = {mode: SAVE_DIR / safe_key / mode for mode in OBS_MODES}
+        group_dirs = {mode: SAVE_DIR / safe_key / f"bin_{bin_label}" / mode for mode in OBS_MODES}
         for _d in group_dirs.values():
             _d.mkdir(parents=True, exist_ok=True)
 
@@ -898,7 +1146,7 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
             _dlon *= 1.5
 
         # ── Gridded KF: RO only ───────────────────────────────────────────────
-        res_ro = _run_or_load(group_key, "ro_only", "gridded_kf", lambda: process_group(
+        res_ro = _run_or_load(group_key, bin_count, "ro_only", "gridded_kf", lambda: process_group(
             group_key, group_meta, ALT_GRID,
             global_edp_cache=global_edp_cache,
             run_sequential=False, save_dir=str(group_dirs["ro_only"]),
@@ -917,7 +1165,7 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
             res_ro["post_edp_3d"] = res_ro.get("joint_post_edp_3d", res_ro.get("post_edp_3d"))
 
         # ── Gridded KF: RO + IGS ──────────────────────────────────────────────
-        res_roigs = _run_or_load(group_key, "ro_igs", "gridded_kf", lambda: process_group(
+        res_roigs = _run_or_load(group_key, bin_count, "ro_igs", "gridded_kf", lambda: process_group(
             group_key, group_meta, ALT_GRID,
             global_edp_cache=global_edp_cache,
             run_sequential=False, save_dir=str(group_dirs["ro_igs"]),
@@ -947,7 +1195,7 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
                 sigma_obs=10.0, max_rays_per_arc=200,
             )
 
-        res_igs = _run_or_load(group_key, "igs_only", "gridded_kf", _run_igs_only_kf)
+        res_igs = _run_or_load(group_key, bin_count, "igs_only", "gridded_kf", _run_igs_only_kf)
 
         # Augment res_igs (in place, so the same object cached under
         # results[...] picks up the extra fields too) with the _plot_group/
@@ -1011,7 +1259,7 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
                         sigma_obs=10.0, max_update_rays=100,
                     )
 
-                _run_or_load(group_key, obs_mode, "parametric_ekf", _run_igs_ekf)
+                _run_or_load(group_key, bin_count, obs_mode, "parametric_ekf", _run_igs_ekf)
                 continue
 
             def _run_ekf(kf_result=kf_result, obs_mode=obs_mode):
@@ -1027,15 +1275,15 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
                     group_key=f"{group_key}_{obs_mode}", n_members=200,
                     sigma_obs=10.0, max_update_rays=100,
                 )
-            _run_or_load(group_key, obs_mode, "parametric_ekf", _run_ekf)
+            _run_or_load(group_key, bin_count, obs_mode, "parametric_ekf", _run_ekf)
 
         # ── Per-group summary: which of the 6 (obs_mode, filter_type) combos
         #    actually produced a usable result vs. were skipped/failed ────────
-        print(f"  [diag] {group_key} : summary of 6 obs_mode/filter_type combos")
+        print(f"  [diag] {group_key} | bin={bin_label} : summary of 6 obs_mode/filter_type combos")
         _missing = object()
         for obs_mode in OBS_MODES:
             for filter_type in FILTER_TYPES:
-                value = results.get((group_key, obs_mode, filter_type), _missing)
+                value = results.get((group_key, bin_count, obs_mode, filter_type), _missing)
                 status = "MISSING (never ran)" if value is _missing else _result_status(value)
                 print(f"           {obs_mode:<9} | {filter_type:<14} -> {status}")
 
@@ -1046,7 +1294,7 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
         # means each group's plots land as soon as that group is done.
         group_filter_results = {
             obs_mode: {
-                filter_type: results.get((group_key, obs_mode, filter_type))
+                filter_type: results.get((group_key, bin_count, obs_mode, filter_type))
                 for filter_type in FILTER_TYPES
             }
             for obs_mode in OBS_MODES
@@ -1054,6 +1302,7 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
 
         group_day_info = dict(
             day_info, group_key=group_key,
+            bin_count=bin_count, bin_label=bin_label,
             n_ro_occultations=len(group_meta),
             n_igs_arcs=len(igs_window_arcs),
         )
@@ -1063,13 +1312,17 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
         # (main() previously only wrote the CSV once, after every day had
         # completed -- a crash partway through lost every already-computed
         # group's metrics). Safe to call repeatedly: dedup keeps the latest
-        # row per (group_key, obs_mode, filter_type, instrument).
+        # row per (group_key, bin_count, obs_mode, filter_type, instrument) --
+        # bin_count is part of the dedup key so different OCC_COUNT_BINS
+        # sweep points for the same window don't overwrite each other.
         _append_metrics_csv(group_metrics)
 
         def _mark_group_complete(plots_written: bool) -> None:
-            progress_manifest[group_key] = {
+            progress_manifest[manifest_key] = {
                 "date":              str(day_info.get("date")),
                 "group_key":         group_key,
+                "bin_count":         bin_count,
+                "bin_label":         _bin_label(bin_count),
                 "n_ro_occultations": len(group_meta),
                 "n_igs_arcs":        len(igs_window_arcs),
                 "has_isr_truth":     bool(_isr_profiles_for_window(edps, t_centre)),
@@ -1094,14 +1347,20 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
         window_edps = _isr_profiles_for_window(edps, t_centre)
         window_isr_profiles = [_isr_edp_to_profile(e) for e in window_edps]
 
+        # Bin-tag the save_dir root passed to these two plotting helpers (they
+        # each build their own group_key-keyed subfolder beneath it) so
+        # different OCC_COUNT_BINS sweep points for the same window land in
+        # separate figure directories instead of overwriting one another.
+        bin_save_dir = SAVE_DIR / f"bin_{bin_label}"
+
         _plot_group_all_modes(
             group_key, group_filter_results, igs_window_arcs,
-            window_isr_profiles, SAVE_DIR, window_edps,
+            window_isr_profiles, bin_save_dir, window_edps,
         )
 
         if window_edps:
             solar = get_solar_conditions(t_centre)
-            group_save_dir = SAVE_DIR / _safe_group_key(group_key)
+            group_save_dir = bin_save_dir / _safe_group_key(group_key)
             # plot_isr_truth_comparison's output filename is keyed only by
             # (group_key, inst_name) -- when a window contains several scans
             # from the same site, looping over every scan silently overwrote
@@ -1124,43 +1383,40 @@ def run_all_filters(day_info: dict, ro_groups: list, igs_arcs: list,
 
         _mark_group_complete(plots_written=True)
 
-    # ── Run ISR-aligned groups first, most occultations first ────────────────
-    # A group whose time window has no co-located ISR profile can never
-    # produce an ISR comparison metric/plot (see compute_isr_metrics /
-    # window_edps above), so running those last means the runs that actually
-    # yield useful output land first instead of waiting behind a full day of
-    # ISR-blind groups.
-    def _group_priority(item: tuple) -> tuple:
-        group_key, group_meta = item
-        n_occ = len(group_meta)
-        try:
-            t_centre = _parse_time_window(group_key)
-            has_isr = bool(_isr_profiles_for_window(edps, t_centre))
-        except ValueError:
-            has_isr = False
-        return (0 if has_isr else 1, -n_occ)
+    # ── Run ISR-aligned windows first, most occultations first ───────────────
+    # A window with no co-located ISR profile can never produce an ISR
+    # comparison metric/plot (see compute_isr_metrics / window_edps above),
+    # so running those last means the runs that actually yield useful output
+    # land first instead of waiting behind a full day of ISR-blind windows.
+    def _window_priority(window: dict) -> tuple:
+        has_isr = bool(_isr_profiles_for_window(edps, window["t_centre"]))
+        return (0 if has_isr else 1, -window["n_occ"])
 
-    keyed_groups = sorted(((_group_priority(g), g) for g in ro_groups), key=lambda p: p[0])
-    ro_groups = [item for _, item in keyed_groups]
-    n_isr_aligned = sum(1 for key, _ in keyed_groups if key[0] == 0)
-    print(f"  [diag] Reordered {len(ro_groups)} group(s): "
+    keyed_windows = sorted(((_window_priority(w), w) for w in windows), key=lambda p: p[0])
+    windows = [item for _, item in keyed_windows]
+    n_isr_aligned = sum(1 for key, _ in keyed_windows if key[0] == 0)
+    print(f"  [diag] Reordered {len(windows)} window(s): "
           f"{n_isr_aligned} ISR-aligned (most occultations first), "
-          f"{len(ro_groups) - n_isr_aligned} without ISR truth (run last)")
+          f"{len(windows) - n_isr_aligned} without ISR truth (run last)")
 
-    # Each group is processed in its own try/except so an unexpected exception
-    # in one group (ROI setup, adaptation code, etc. -- anything outside the
-    # per-filter try/except in _run_or_load) can't discard already-cached
-    # results/plots for other groups in the same day, which previously
-    # propagated all the way out of run_all_filters() and skipped the entire
-    # day's plotting pass in main(), even for groups that had fully succeeded.
-    for group_key, group_meta in ro_groups:
-        try:
-            _process_group_all_filters(group_key, group_meta)
-        except Exception:
-            print(f"  [error] group {group_key} failed with an unexpected "
-                  f"exception; skipping to the next group so already-computed "
-                  f"results can still be plotted.")
-            traceback.print_exc()
+    # Each (window, bin_count) unit is processed in its own try/except so an
+    # unexpected exception in one unit (ROI setup, adaptation code, etc. --
+    # anything outside the per-filter try/except in _run_or_load) can't
+    # discard already-cached results/plots for other units in the same day,
+    # which previously propagated all the way out of run_all_filters() and
+    # skipped the entire day's plotting pass in main(), even for units that
+    # had fully succeeded. bin_count=None (all occultations) runs first for
+    # each window, then OCC_COUNT_BINS' decreasing counts, matching
+    # test_param_iono.py's sweep ordering.
+    for window in windows:
+        for bin_count in OCC_COUNT_BINS:
+            try:
+                _process_window_bin(window, bin_count)
+            except Exception:
+                print(f"  [error] window {window['window_key']} bin={_bin_label(bin_count)} "
+                      f"failed with an unexpected exception; skipping to the next "
+                      f"unit so already-computed results can still be plotted.")
+                traceback.print_exc()
 
     return results, all_metrics
 
@@ -1180,6 +1436,13 @@ def _pct_improvement(prior_val: float, post_val: float) -> float:
     return 100.0 * (prior_val - post_val) / prior_val
 
 
+def _masked_mae(est: np.ndarray, ref: np.ndarray, mask: np.ndarray) -> float:
+    """Mean absolute error of *est* vs *ref* over the boolean *mask*; NaN if the
+    mask selects nothing. Used for the whole-profile / below-peak posterior-vs-
+    ISR error metrics in compute_isr_metrics."""
+    return float(np.mean(np.abs(est[mask] - ref[mask]))) if np.any(mask) else np.nan
+
+
 def compute_isr_metrics(day_info: dict, filter_results: dict, edps: list[dict]) -> list[dict]:
     """
     Compute posterior-vs-ISR-truth error metrics for one RO group's filter
@@ -1197,11 +1460,25 @@ def compute_isr_metrics(day_info: dict, filter_results: dict, edps: list[dict]) 
     -------
     List of metric-row dicts, one per (obs_mode, filter_type, ISR instrument)
     combination that had co-located ISR truth within the group's time window.
+
+    New posterior/prior-vs-ISR columns (ISR profile is the reference throughout;
+    Ne in m⁻³, plasma frequency in MHz):
+      - {prior,post}_profile_mae_ne / _mhz     : whole-profile mean-abs error
+        over all valid ISR gates.
+      - {prior,post}_below_peak_mae_ne / _mhz  : mean-abs error restricted to
+        below-F2-peak ISR gates.
+      - {prior,post}_hf_refl_err_km_{f}mhz     : signed HF reflection-height
+        error [km] (est − ISR) for f in HF_REFLECTION_FREQS_MHZ, i.e. the max
+        altitude where f_p(z) ≥ f in the model column vs the ISR profile.
+    foF2/foE errors ({prior,post}_foF2_err_mhz, {prior,post}_foE_err_mhz) are
+    already emitted above and unchanged.
     """
     rows: list[dict] = []
     date       = day_info.get("date")
     group_key  = day_info.get("group_key")
-    print(f"\n▶▶▶ compute_isr_metrics START | group={group_key}")
+    bin_count  = day_info.get("bin_count")
+    bin_label  = day_info.get("bin_label", "all")
+    print(f"\n▶▶▶ compute_isr_metrics START | group={group_key} bin={bin_label}")
 
     for obs_mode, per_filter in filter_results.items():
         for filter_type, result in per_filter.items():
@@ -1349,15 +1626,57 @@ def compute_isr_metrics(day_info: dict, filter_results: dict, edps: list[dict]) 
                     threshold_fields[f"prior_profile_within_{ts}mhz"] = bool(np.isfinite(prior_profile_fp_rmse) and prior_profile_fp_rmse <= thr)
                     threshold_fields[f"post_profile_within_{ts}mhz"]  = bool(np.isfinite(post_profile_fp_rmse)  and post_profile_fp_rmse  <= thr)
 
+                # ── Whole-profile & below-peak absolute error vs ISR truth ───
+                # ISR profile (isr_ne / isr_alt) is the reference throughout.
+                # `valid_all` gates the whole profile (finite, Ne>1e8); `valid`
+                # (reused from the RMSE block above) additionally restricts to
+                # below the F2 peak. Each computed in Ne [m⁻³] and, via the
+                # already-built fp arrays, plasma frequency [MHz].
+                valid_all = ((isr_ne > 1e8) & np.isfinite(isr_ne)
+                             & np.isfinite(post_at_isr) & np.isfinite(prior_at_isr))
+
+                prior_profile_mae_ne  = _masked_mae(prior_at_isr, isr_ne,     valid_all)
+                post_profile_mae_ne   = _masked_mae(post_at_isr,  isr_ne,     valid_all)
+                prior_profile_mae_mhz = _masked_mae(prior_fp_arr, isr_fp_arr, valid_all)
+                post_profile_mae_mhz  = _masked_mae(post_fp_arr,  isr_fp_arr, valid_all)
+
+                prior_below_peak_mae_ne  = _masked_mae(prior_at_isr, isr_ne,     valid)
+                post_below_peak_mae_ne   = _masked_mae(post_at_isr,  isr_ne,     valid)
+                prior_below_peak_mae_mhz = _masked_mae(prior_fp_arr, isr_fp_arr, valid)
+                post_below_peak_mae_mhz  = _masked_mae(post_fp_arr,  isr_fp_arr, valid)
+
+                # ── HF reflection-height error [km] per frequency ─────────────
+                # Max altitude where f_p(z) ≥ freq (bottom-up) in the posterior/
+                # prior model column (on alt_grid) vs the ISR profile (on
+                # isr_alt); recorded as a signed height difference (est − ISR).
+                prior_fp_col = ne_to_mhz(prior_col)
+                post_fp_col  = ne_to_mhz(post_col)
+                isr_fp_prof  = ne_to_mhz(isr_ne)
+                hf_reflection_fields: dict = {}
+                for _f in HF_REFLECTION_FREQS_MHZ:
+                    _fs = f"{int(_f)}" if float(_f).is_integer() else str(_f).replace(".", "")
+                    _isr_h   = _get_reflection_height(isr_fp_prof,  isr_alt,  _f)
+                    _prior_h = _get_reflection_height(prior_fp_col, alt_grid, _f)
+                    _post_h  = _get_reflection_height(post_fp_col,  alt_grid, _f)
+                    hf_reflection_fields[f"prior_hf_refl_err_km_{_fs}mhz"] = (
+                        float(_prior_h - _isr_h)
+                        if np.isfinite(_prior_h) and np.isfinite(_isr_h) else np.nan)
+                    hf_reflection_fields[f"post_hf_refl_err_km_{_fs}mhz"] = (
+                        float(_post_h - _isr_h)
+                        if np.isfinite(_post_h) and np.isfinite(_isr_h) else np.nan)
+
                 rows.append({
                     "date":                date,
                     "group_key":           group_key,
+                    "bin_count":           bin_count,
+                    "bin_label":           bin_label,
                     "obs_mode":            obs_mode,
                     "filter_type":         filter_type,
                     "instrument":          inst_name,
                     "t_centre":            t_centre,
                     "region":              region,
                     "n_ro_occultations":   n_ro_occultations,
+                    "n_occ_assimilated":   n_ro_occultations,
                     "n_igs_arcs":          n_igs_arcs,
                     "n_grid_points":       n_grid_points,
                     # TEC-space fit (RO/IGS observations vs. filter), same
@@ -1387,25 +1706,41 @@ def compute_isr_metrics(day_info: dict, filter_results: dict, edps: list[dict]) 
                     "post_foE_err_mhz":       post_foE_err,
                     "prior_profile_fp_rmse_mhz": prior_profile_fp_rmse,
                     "post_profile_fp_rmse_mhz":  post_profile_fp_rmse,
+                    # Whole-profile absolute error vs ISR (all valid gates),
+                    # in Ne [m⁻³] and plasma frequency [MHz].
+                    "prior_profile_mae_ne":    prior_profile_mae_ne,
+                    "post_profile_mae_ne":     post_profile_mae_ne,
+                    "prior_profile_mae_mhz":   prior_profile_mae_mhz,
+                    "post_profile_mae_mhz":    post_profile_mae_mhz,
+                    # Below-F2-peak absolute error vs ISR (below-peak gates).
+                    "prior_below_peak_mae_ne":   prior_below_peak_mae_ne,
+                    "post_below_peak_mae_ne":    post_below_peak_mae_ne,
+                    "prior_below_peak_mae_mhz":  prior_below_peak_mae_mhz,
+                    "post_below_peak_mae_mhz":   post_below_peak_mae_mhz,
+                    # HF reflection-height error [km] per frequency (signed,
+                    # est − ISR): prior_/post_hf_refl_err_km_{f}mhz.
+                    **hf_reflection_fields,
                     **threshold_fields,
                     "n_isr_gates_valid":   int(valid.sum()),
                     "ekf_converged":       ekf_converged,
                     "ekf_n_iterations":    ekf_n_iterations,
                 })
 
-    print(f"◀◀◀ compute_isr_metrics END   | group={group_key} -> {len(rows)} metric row(s)")
+    print(f"◀◀◀ compute_isr_metrics END   | group={group_key} bin={bin_label} -> {len(rows)} metric row(s)")
     return rows
 
 
-_METRICS_DEDUP_COLS = ["group_key", "obs_mode", "filter_type", "instrument"]
+_METRICS_DEDUP_COLS = ["group_key", "bin_count", "obs_mode", "filter_type", "instrument"]
 
 
 def _append_metrics_csv(metrics_rows: list[dict]) -> pd.DataFrame:
     """
     Append *metrics_rows* to the on-disk ISR-metrics CSV (ISR_METRICS_CSV)
-    immediately, deduplicated on group_key+obs_mode+filter_type+instrument
-    (keeping the latest row for any repeat), and return the full accumulated
-    DataFrame.
+    immediately, deduplicated on group_key+bin_count+obs_mode+filter_type+
+    instrument (keeping the latest row for any repeat), and return the full
+    accumulated DataFrame. bin_count is part of the key so the OCC_COUNT_BINS
+    sweep's per-bin rows for the same window coexist instead of overwriting
+    each other.
 
     Called right after each group's metrics are computed (inside
     run_all_filters) so results survive a crash/interrupt instead of only
@@ -1746,6 +2081,223 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Occultation-count sensitivity study (real ISR ground truth)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_OCC_CONVERGENCE_FILTER_STYLE = {
+    "gridded_kf":     dict(color="steelblue", ls="-",  marker="s"),
+    "parametric_ekf": dict(color="crimson",   ls="--", marker="^"),
+}
+
+_OCC_CONVERGENCE_METRICS = {
+    "below_peak_ne_mae": dict(
+        title="Below-F2-peak Ne error vs. ISR truth",
+        ylabel="Below-peak Ne MAE  [m$^{-3}$]",
+    ),
+    "foF2_error_mhz": dict(
+        title="foF2 error vs. ISR truth",
+        ylabel="|foF2 error|  [MHz]",
+    ),
+    "hf_reflection_height_error_km": dict(
+        title="HF reflection-height error vs. ISR truth",
+        ylabel="|HF reflection-height error|  [km]  "
+               f"(mean over {HF_REFLECTION_FREQS_MHZ} MHz)",
+    ),
+}
+
+
+def _add_occ_convergence_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Derive the three posterior-error columns plotted by
+    plot_isr_convergence_vs_occ_count() from the raw ISR_METRICS_CSV fields
+    written by compute_isr_metrics(). All three are non-negative "how far
+    from ISR truth" magnitudes so they can be aggregated (median, std) the
+    same way regardless of sign convention in the source column(s).
+    """
+    df = df.copy()
+    df["below_peak_ne_mae"] = df["post_below_peak_mae_ne"]
+    df["foF2_error_mhz"] = df["post_foF2_err_mhz"].abs()
+
+    hf_cols = [f"post_hf_refl_err_km_{int(f) if float(f).is_integer() else str(f).replace('.', '')}mhz"
+               for f in HF_REFLECTION_FREQS_MHZ]
+    hf_cols = [c for c in hf_cols if c in df.columns]
+    if hf_cols:
+        df["hf_reflection_height_error_km"] = df[hf_cols].abs().mean(axis=1, skipna=True)
+    else:
+        df["hf_reflection_height_error_km"] = np.nan
+    return df
+
+
+def _occ_convergence_series(
+    df: pd.DataFrame, metric_col: str, obs_mode: str, filter_type: str,
+) -> "dict | None":
+    """
+    Group *df* (already filtered to one metric's non-null rows) by bin_label
+    for a given (obs_mode, filter_type), pooling across windows/instruments.
+    One point per bin_label: x = mean n_occ_assimilated in that bin, y =
+    median of the metric, with the sample std as a +/-1 sigma band.  The
+    "all" bin (bin_count is NaN, i.e. every available arc used) is placed at
+    the largest x among the other bins, since it otherwise wouldn't sort
+    correctly against the fixed OCC_COUNT_BINS values.
+    """
+    sub = df[(df["obs_mode"] == obs_mode) & (df["filter_type"] == filter_type)]
+    sub = sub.dropna(subset=[metric_col, "n_occ_assimilated"])
+    if sub.empty:
+        return None
+
+    rows = []
+    for bin_label, g in sub.groupby("bin_label"):
+        vals = g[metric_col].to_numpy(dtype=float)
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            continue
+        n_x = float(g["n_occ_assimilated"].mean())
+        rows.append([bin_label, n_x, float(np.median(vals)),
+                     float(np.std(vals)) if vals.size > 1 else 0.0])
+    if not rows:
+        return None
+
+    max_x = max(r[1] for r in rows)
+    for r in rows:
+        if r[0] == "all":
+            r[1] = max_x
+    rows.sort(key=lambda r: r[1])
+
+    return dict(
+        bin_labels=[r[0] for r in rows],
+        n=np.array([r[1] for r in rows], dtype=float),
+        median=np.array([r[2] for r in rows], dtype=float),
+        std=np.array([r[3] for r in rows], dtype=float),
+    )
+
+
+def _plot_occ_convergence_panel(ax, series: "dict | None", filter_type: str, fit: bool) -> "dict | None":
+    """
+    Draw one (obs_mode, filter_type) convergence line + +/-1 sigma band onto
+    *ax*. If *fit* is True, also fits RMSE(n) = a * n**(-b) (via
+    test_param_iono._fit_power_law) and appends "(b=.., R²=..)" to the legend
+    label. Returns the fit dict (or None) so callers can print/annotate it
+    elsewhere too.
+    """
+    style = _OCC_CONVERGENCE_FILTER_STYLE[filter_type]
+    if series is None:
+        return None
+
+    n, median, std = series["n"], series["median"], series["std"]
+    label = filter_type
+    fit_result = _fit_power_law(n, median) if fit else None
+    if fit_result is not None:
+        label += f"  (b={fit_result['b']:.2f}, R²={fit_result['r2']:.2f})"
+
+    ax.plot(n, median, color=style["color"], ls=style["ls"], marker=style["marker"],
+             lw=1.8, markersize=5, label=label)
+    ax.fill_between(n, median - std, median + std, color=style["color"], alpha=0.15,
+                     linewidth=0)
+    return fit_result
+
+
+def plot_isr_convergence_vs_occ_count(
+    metrics_csv: "str | Path" = ISR_METRICS_CSV,
+    save_dir: "str | Path" = SAVE_DIR,
+) -> None:
+    """
+    Occultation-count sensitivity study against REAL ISR ground truth
+    (compute_isr_metrics / load_edps) -- the ISR-DA-comparison analogue of
+    test_param_iono.plot_convergence_vs_measurement_count(), which instead
+    compares against synthetic IRI truth.
+
+    Reads the accumulated ISR_METRICS_CSV (bin_count/bin_label/
+    n_occ_assimilated columns written by compute_isr_metrics per the
+    OCC_COUNT_BINS sweep) and, for each metric of interest, draws a 1x3
+    panel row (one panel per OBS_MODES entry). Each panel shows one line per
+    FILTER_TYPES entry (gridded_kf solid, parametric_ekf dashed), median +/-
+    1 sigma across windows/instruments, vs. n_occ_assimilated.
+
+    ro_only / ro_igs panels get a RMSE(n) = a*n**(-b) power-law fit (exponent
+    b and R² annotated in the legend) since those modes actually assimilate a
+    varying number of occultations. igs_only doesn't depend on RO count at
+    all -- its n_occ_assimilated column merely echoes the RO bin size of the
+    window it was computed alongside (see compute_isr_metrics), so it is
+    drawn as a flat horizontal reference line (overall median) rather than a
+    fitted series, spanning the same x-range as the other two panels for
+    visual comparison.
+
+    The scientific question this makes visible: does adding IGS TEC
+    (ro_igs vs. ro_only) let the filters reach the same ISR-truth accuracy
+    with fewer occultations?
+
+    Saved to {save_dir}/isr_convergence_vs_occ_count_{metric}.png, one file
+    per entry in _OCC_CONVERGENCE_METRICS.
+    """
+    metrics_csv = Path(metrics_csv)
+    save_dir = Path(save_dir)
+    if not metrics_csv.exists():
+        print(f"  [plot_isr_convergence_vs_occ_count] {metrics_csv} not found -- skipping.")
+        return
+
+    df = pd.read_csv(metrics_csv, parse_dates=["t_centre"])
+    if df.empty:
+        print("  [plot_isr_convergence_vs_occ_count] ISR metrics CSV is empty -- skipping.")
+        return
+    if "bin_label" not in df.columns or "n_occ_assimilated" not in df.columns:
+        print("  [plot_isr_convergence_vs_occ_count] bin_label/n_occ_assimilated "
+              "columns not found in ISR metrics CSV -- skipping.")
+        return
+
+    df = _add_occ_convergence_metric_columns(df)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    for metric_key, meta in _OCC_CONVERGENCE_METRICS.items():
+        if metric_key not in df.columns:
+            continue
+
+        fig, axes = plt.subplots(1, len(OBS_MODES), figsize=(6 * len(OBS_MODES), 5), squeeze=False)
+        axes = axes[0]
+
+        # Non-igs_only panels drive the shared x-range that the igs_only
+        # reference lines are drawn across.
+        shared_xlim = [np.inf, -np.inf]
+
+        for ax, obs_mode in zip(axes, OBS_MODES):
+            has_data = False
+            for filter_type in FILTER_TYPES:
+                series = _occ_convergence_series(df, metric_key, obs_mode, filter_type)
+                if series is None:
+                    continue
+                has_data = True
+                if obs_mode == "igs_only":
+                    ref_val = float(np.median(series["median"]))
+                    style = _OCC_CONVERGENCE_FILTER_STYLE[filter_type]
+                    ax.axhline(ref_val, color=style["color"], ls=style["ls"], lw=1.8,
+                                label=f"{filter_type}  (flat ref., median={ref_val:.3g})")
+                else:
+                    _plot_occ_convergence_panel(ax, series, filter_type, fit=True)
+                    shared_xlim[0] = min(shared_xlim[0], series["n"].min())
+                    shared_xlim[1] = max(shared_xlim[1], series["n"].max())
+
+            ax.set_title(obs_mode)
+            ax.set_xlabel("Occultations assimilated (n_occ_assimilated)")
+            ax.set_ylabel(meta["ylabel"])
+            ax.grid(True, lw=0.3, alpha=0.4)
+            if has_data:
+                ax.legend(fontsize=8)
+            else:
+                ax.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax.transAxes)
+
+        if np.isfinite(shared_xlim[0]) and np.isfinite(shared_xlim[1]) and shared_xlim[0] < shared_xlim[1]:
+            igs_ax = axes[OBS_MODES.index("igs_only")] if "igs_only" in OBS_MODES else None
+            if igs_ax is not None:
+                igs_ax.set_xlim(shared_xlim[0], shared_xlim[1])
+
+        fig.suptitle(f"{meta['title']} — vs. occultation count")
+        fig.tight_layout(rect=[0, 0, 1, 0.94])
+        save_path = save_dir / f"isr_convergence_vs_occ_count_{metric_key}.png"
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {save_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1771,15 +2323,40 @@ def main() -> None:
                         help="Print priority-day summary and exit.")
     parser.add_argument("--status", action="store_true",
                         help="Print resume/progress status (groups completed, "
-                             "filter-run outcomes, ISR metrics CSV size) and exit "
+                             "filter-run outcomes, ISR metrics CSV size, and a "
+                             "window x bin_count completion grid) and exit "
                              "without running anything.")
+    parser.add_argument("--bin-count", type=str, default=None, metavar="COUNT",
+                        help='Run only this OCC_COUNT_BINS value: an int (e.g. '
+                             '30) or "all" (bin_count=None, every available RO '
+                             'occultation in the window). Overrides --occ-bins.')
+    parser.add_argument("--window", type=str, default=None, metavar="HHMM",
+                        help='Run only this minima-window, by window_key '
+                             '(e.g. "1430").')
+    parser.add_argument("--occ-bins", type=str, default=None, metavar="LIST",
+                        help='Comma-separated override of OCC_COUNT_BINS, e.g. '
+                             '"all,30,20,10" (each token an int or "all").')
+    resume_group = parser.add_mutually_exclusive_group()
+    resume_group.add_argument(
+        "--resume", dest="resume", action="store_true", default=True,
+        help="Skip (window, bin, obs_mode, filter) units already complete in "
+             "the progress manifest / DA_CACHE (default).")
+    resume_group.add_argument(
+        "--no-resume", dest="resume", action="store_false",
+        help="Force recompute every (window, bin, obs_mode, filter) unit, "
+             "ignoring the progress manifest/DA_CACHE -- alias of --force for "
+             "the occultation-count sweep axis.")
     args = parser.parse_args()
 
-    if args.status:
-        print_progress_status()
-        return
+    force = args.force or not args.resume
 
-    priority_days = select_priority_days(force=args.force)
+    global OCC_COUNT_BINS
+    if args.bin_count is not None:
+        OCC_COUNT_BINS = [_parse_bin_count_value(args.bin_count)]
+    elif args.occ_bins is not None:
+        OCC_COUNT_BINS = [_parse_bin_count_value(tok) for tok in args.occ_bins.split(",")]
+
+    priority_days = select_priority_days(force=force)
 
     if args.start_date is not None:
         start = pd.Timestamp(args.start_date).date()
@@ -1806,6 +2383,10 @@ def main() -> None:
     if args.days is not None:
         priority_days = priority_days[:args.days]
 
+    if args.status:
+        print_progress_status(priority_days, window_key_filter=args.window)
+        return
+
     DA_CACHE.mkdir(parents=True, exist_ok=True)
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1823,29 +2404,43 @@ def main() -> None:
 
     all_metrics: list[dict] = []
 
-    for day_info in priority_days:
-        date = day_info["date"]
-        print(f"\n{'=' * 70}")
-        print(f"[Day] {date}  tier={day_info['tier']}  instruments={day_info['instruments']}")
+    # Wrapping the whole day/window/bin sweep in one try/except means a
+    # Ctrl-C at any point -- mid-window, mid-bin, mid-filter -- lands here
+    # rather than propagating a bare traceback: every unit that finished
+    # before the interrupt already has its DA_CACHE pickle + progress-manifest
+    # entry on disk (each is written immediately in run_all_filters /
+    # _run_or_load, not batched at the end), so re-running the same command
+    # resumes exactly where it left off.
+    try:
+        for day_info in priority_days:
+            date = day_info["date"]
+            print(f"\n{'=' * 70}")
+            print(f"[Day] {date}  tier={day_info['tier']}  instruments={day_info['instruments']}")
 
-        ro_groups = load_ro_group_for_day(day_info["podtc_dir"])
-        igs_arcs  = load_igs_for_day(pd.Timestamp(date))
-        print(f"  {len(ro_groups)} POLAR_N group(s), {len(igs_arcs)} IGS arc(s)")
+            windows  = build_minima_windows_for_day(day_info["podtc_dir"], date)
+            if args.window is not None:
+                windows = [w for w in windows if w["window_key"] == args.window]
+            igs_arcs = load_igs_for_day(pd.Timestamp(date))
+            print(f"  {len(windows)} minima window(s), {len(igs_arcs)} IGS arc(s)")
 
-        if not ro_groups:
-            # ro_only/ro_igs configs require real occultation metadata that
-            # process_group cannot fabricate; skip days with no RO groups
-            # rather than run only 2 of 6 filter configurations.
-            print("  [skip] No GNSS-RO groups for this day.")
-            continue
+            if not windows:
+                # ro_only/ro_igs configs require real occultation metadata that
+                # process_group cannot fabricate; skip days with no RO windows
+                # rather than run only 2 of 6 filter configurations.
+                note = f" matching --window {args.window}" if args.window else ""
+                print(f"  [skip] No GNSS-RO minima windows for this day{note}.")
+                continue
 
-        print(f"  Running {len(ro_groups)} group(s) x {len(OBS_MODES)} obs modes "
-              f"x {len(FILTER_TYPES)} filters ...")
-        _, day_metrics = run_all_filters(
-            day_info, ro_groups, igs_arcs, edps,
-            force=args.force, no_plot=args.no_plot,
-        )
-        all_metrics.extend(day_metrics)
+            print(f"  Running {len(windows)} window(s) x {len(OCC_COUNT_BINS)} occultation-count "
+                  f"bins x {len(OBS_MODES)} obs modes x {len(FILTER_TYPES)} filters ...")
+            _, day_metrics = run_all_filters(
+                day_info, windows, igs_arcs, edps,
+                force=force, no_plot=args.no_plot,
+            )
+            all_metrics.extend(day_metrics)
+    except KeyboardInterrupt:
+        print("\n[ISR-DA] Checkpoints saved — re-run to resume.")
+        sys.exit(130)
 
     # Metrics from this run were already appended to ISR_METRICS_CSV
     # incrementally (per group, inside run_all_filters), so this final
@@ -1855,6 +2450,13 @@ def main() -> None:
     print(f"\n[done] {len(all_metrics)} new ISR comparison row(s) this run "
           f"across {len(priority_days)} day(s)")
     summarize_statistics(all_metrics)
+
+    if not args.no_plot:
+        try:
+            plot_isr_convergence_vs_occ_count(ISR_METRICS_CSV, SAVE_DIR)
+        except Exception:
+            print("[ISR-DA] Occultation-count convergence plotting failed; continuing without it.")
+            traceback.print_exc()
 
 
 if __name__ == "__main__":
