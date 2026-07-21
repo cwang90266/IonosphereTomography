@@ -156,15 +156,71 @@ def scan_availability(tx_constellation, rx_constellation,
 # Link -> arc aggregation (test_param_iono.py-compatible schema)
 # ──────────────────────────────────────────────────────────────────────────
 
-def build_occultation_arcs(link_history: Sequence[Sequence[dict]]) -> List[dict]:
-    """Group per-epoch SLTA-valid links (from scan_availability) into per
-    TX-RX-pair arcs, using exactly the arc-dict schema that
-    test_param_iono.py's _build_arc_rays()/run_forward_models() expect:
+def _group_links_by_pair(
+        link_history: Sequence[Sequence[dict]]) -> Dict[Tuple[str, str], List[dict]]:
+    """Flatten scan_availability()'s per-epoch link_history into one
+    time-ordered link list per (tx.name, rx.name) pair."""
+    by_pair: Dict[Tuple[str, str], List[dict]] = {}
+    for links in link_history:
+        for link in links:
+            key = (link["tx"].name, link["rx"].name)
+            by_pair.setdefault(key, []).append(link)
+    return by_pair
+
+
+def segment_occultation_passes(
+        link_history: Sequence[Sequence[dict]], dt_s: float,
+        gap_tol: float = 1.5) -> List[List[dict]]:
+    """Split each TX-RX pair's per-epoch valid-link list into separate
+    continuous occultation passes.
+
+    scan_availability() reports SLTA validity independently at every epoch,
+    so a single physical occultation (satellites rise/set through the SLTA
+    window over many consecutive epochs) shows up as many consecutive valid
+    links for the same pair -- these must collapse to ONE event, not one per
+    epoch. Conversely the same TX-RX pair can occult multiple, unrelated
+    times over a simulation (successive orbital revolutions), and those
+    separate passes must NOT be merged into a single arc spanning the gap
+    between them. This splits on both: within a pair's time-ordered link
+    list, consecutive links whose epochs are more than gap_tol * dt_s apart
+    start a new segment.
+
+    Returns
+    -------
+    list of list of dict -- each inner list is one continuous pass's link
+    dicts, in epoch order.
+    """
+    by_pair = _group_links_by_pair(link_history)
+    gap_s = gap_tol * dt_s
+
+    segments: List[List[dict]] = []
+    for link_list in by_pair.values():
+        current = [link_list[0]]
+        for prev, link in zip(link_list, link_list[1:]):
+            if (link["epoch"] - prev["epoch"]).total_seconds() <= gap_s:
+                current.append(link)
+            else:
+                segments.append(current)
+                current = [link]
+        segments.append(current)
+    return segments
+
+
+def build_occultation_arcs(link_history: Sequence[Sequence[dict]], dt_s: float,
+                            gap_tol: float = 1.5) -> List[dict]:
+    """Group per-epoch SLTA-valid links (from scan_availability) into
+    per-continuous-pass arcs (see segment_occultation_passes), using exactly
+    the arc-dict schema that test_param_iono.py's
+    _build_arc_rays()/run_forward_models() expect:
 
         arc["GNSS"]           (3, n_epochs) ECEF km  -- TX positions
         arc["LEO"]            (3, n_epochs) ECEF km  -- RX positions
         arc["tangent_alt_km"] (n_epochs,)            -- SLTA h_t per epoch
         arc["prn_id"], arc["leo_id"], arc["conid"]    -- string identifiers
+
+    A TX-RX pair that occults more than once over the simulation (separate
+    orbital passes) yields one arc per pass, not one arc spanning the whole
+    simulation.
 
     TX/RX state vectors are stored in whatever frame the constellation
     simulation propagates them in (pseudo-inertial ECI for Walker-generated
@@ -172,14 +228,10 @@ def build_occultation_arcs(link_history: Sequence[Sequence[dict]]) -> List[dict]
     ECEF at its own epoch via propagator.eci_to_ecef() since
     test_param_iono.py's pipeline is ECEF throughout.
     """
-    by_pair: Dict[Tuple[str, str], List[dict]] = {}
-    for links in link_history:
-        for link in links:
-            key = (link["tx"].name, link["rx"].name)
-            by_pair.setdefault(key, []).append(link)
+    segments = segment_occultation_passes(link_history, dt_s, gap_tol)
 
     arcs: List[dict] = []
-    for (tx_name, rx_name), link_list in by_pair.items():
+    for link_list in segments:
         n = len(link_list)
         gnss_ecef = np.empty((3, n))
         leo_ecef = np.empty((3, n))
@@ -192,8 +244,8 @@ def build_occultation_arcs(link_history: Sequence[Sequence[dict]]) -> List[dict]
             leo_ecef[:, i] = r_rx_ecef
             tangent_alt_km[i] = link["h_t"]
 
-        prn_id = tx_name
-        leo_id = rx_name
+        prn_id = link_list[0]["tx"].name
+        leo_id = link_list[0]["rx"].name
         conid = prn_id[0].upper() if prn_id[:1].upper() in "GREC" else "?"
 
         arcs.append(dict(
@@ -281,7 +333,7 @@ def compute_occultation_availability(
     link_history = scan_availability(
         tx_constellation, rx_constellation, dt_s, n_steps, mass_kg, area_m2, cr,
     )
-    arcs = build_occultation_arcs(link_history)
+    arcs = build_occultation_arcs(link_history, dt_s)
 
     if not simulate_measurements_flag:
         return arcs

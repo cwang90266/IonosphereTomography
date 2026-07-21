@@ -14,12 +14,14 @@ together every other module in this package into one time-stepped run:
 
 Usage
 -----
+    python main.py                                    # uses RINEX defaults (2025-06-03)
     python main.py --tx-mode walker --rx-mode planetiq --time-step 30 \
-        --start-time 2026-01-01T00:00:00 --end-time 2026-01-02T00:00:00
+        --start-time 2026-01-01T00:00:00 --end-time 2026-01-02T00:00:00  # synthetic TX
 """
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,17 +50,17 @@ class SimulationConfig:
     """
 
     # Time loop
-    start_time: datetime = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    end_time: datetime = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    time_step_s: float = 30.0
+    start_time: datetime = datetime(2025, 6, 3, tzinfo=timezone.utc)
+    end_time: datetime = datetime(2025, 6, 3, 23, 59, tzinfo=timezone.utc)
+    time_step_s: float = 60.0
 
     # TX constellation
-    tx_mode: str = "walker"          # "walker" | "rinex"
+    tx_mode: str = "rinex"          # "walker" | "rinex"
     tx_sats_per_plane: int = 6
     tx_planes: int = 6
     tx_inclination_deg: float = 55.0
     tx_altitude_km: float = 20200.0
-    tx_rinex_path: Optional[str] = None
+    tx_rinex_path: Optional[str] = None  # Auto-download if not provided
     tx_rinex_constellations: str = "GREC"
 
     # RX constellation
@@ -66,6 +68,16 @@ class SimulationConfig:
     rx_custom_n: int = 6
     rx_custom_altitude_km: float = 550.0
     rx_custom_inclination_deg: float = 53.0
+
+    # Optional single extra RX satellite (on top of the PlanetiQ baseline,
+    # independent of rx_mode) -- e.g. an ISS-inclination cubesat.
+    rx_add_extra_sat: bool = False
+    rx_extra_altitude_km: float = 590.0
+    rx_extra_inclination_deg: float = 53.0
+    rx_extra_raan_deg: float = 0.0
+
+    # Ground-track panel (compute_rx_ground_tracks / _draw_ground_tracks)
+    ground_track_hours: float = 2.0
 
     # Ionosphere measurement simulation (configuration flag -> test_param_iono.py)
     simulate_iono: bool = False
@@ -112,7 +124,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     g_tx.add_argument("--tx-inclination-deg", type=float, default=d.tx_inclination_deg)
     g_tx.add_argument("--tx-altitude-km", type=float, default=d.tx_altitude_km)
     g_tx.add_argument("--tx-rinex-path", type=str, default=d.tx_rinex_path,
-                      help="RINEX mixed-nav file (required if --tx-mode rinex)")
+                      help="RINEX mixed-nav file path (optional; auto-downloads from "
+                           "CDDIS if not provided when --tx-mode rinex)")
     g_tx.add_argument("--tx-rinex-constellations", type=str,
                       default=d.tx_rinex_constellations)
 
@@ -128,6 +141,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
                       default=d.rx_custom_altitude_km)
     g_rx.add_argument("--rx-custom-inclination-deg", type=float,
                       default=d.rx_custom_inclination_deg)
+    g_rx.add_argument("--rx-add-extra-sat", action="store_true",
+                      default=d.rx_add_extra_sat,
+                      help="Add one extra RX satellite on top of the "
+                           "PlanetiQ baseline, independent of --rx-mode "
+                           "(orbital elements set via --rx-extra-*)")
+    g_rx.add_argument("--rx-extra-altitude-km", type=float,
+                      default=d.rx_extra_altitude_km)
+    g_rx.add_argument("--rx-extra-inclination-deg", type=float,
+                      default=d.rx_extra_inclination_deg)
+    g_rx.add_argument("--rx-extra-raan-deg", type=float,
+                      default=d.rx_extra_raan_deg,
+                      help="RAAN (deg) of the optional extra RX satellite "
+                           "(default: %(default)s)")
+
+    g_track = p.add_argument_group("ground-track panel")
+    g_track.add_argument("--ground-track-hours", type=float,
+                         default=d.ground_track_hours,
+                         help="Length (hours) of the RX ground-track panel "
+                              "appended to the global/regional figures "
+                              "(default: %(default)s)")
 
     g_iono = p.add_argument_group("ionosphere measurement simulation")
     g_iono.add_argument("--simulate-iono", action="store_true", default=d.simulate_iono,
@@ -166,6 +199,11 @@ def config_from_args(argv: Optional[List[str]] = None) -> SimulationConfig:
         rx_custom_n=args.rx_custom_n,
         rx_custom_altitude_km=args.rx_custom_altitude_km,
         rx_custom_inclination_deg=args.rx_custom_inclination_deg,
+        rx_add_extra_sat=args.rx_add_extra_sat,
+        rx_extra_altitude_km=args.rx_extra_altitude_km,
+        rx_extra_inclination_deg=args.rx_extra_inclination_deg,
+        rx_extra_raan_deg=args.rx_extra_raan_deg,
+        ground_track_hours=args.ground_track_hours,
         simulate_iono=args.simulate_iono,
         mass_kg=args.mass_kg,
         area_m2=args.area_m2,
@@ -187,10 +225,20 @@ def build_tx_constellation(cfg: SimulationConfig) -> TXConstellation:
             epoch=cfg.start_time, name_prefix="TX",
         )
     elif cfg.tx_mode == "rinex":
-        if not cfg.tx_rinex_path:
-            raise ValueError("tx_mode='rinex' requires --tx-rinex-path")
+        # Ensure repo root is on sys.path for TEC_model imports.
+        repo_root = Path(__file__).resolve().parent.parent
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+
+        # Auto-download BRDC file if path not provided.
+        if cfg.tx_rinex_path:
+            rinex_path = cfg.tx_rinex_path
+        else:
+            brdc_cache = repo_root / "Data" / "BRDC_Daily"
+            rinex_path = str(_download_brdc_file(cfg.start_time, brdc_cache))
+
         tx.from_rinex_nav(
-            cfg.tx_rinex_path, epoch=cfg.start_time,
+            rinex_path, epoch=cfg.start_time,
             constellations=cfg.tx_rinex_constellations,
         )
         # Broadcast-ephemeris state vectors come out in ECEF; the propagator
@@ -212,7 +260,75 @@ def build_rx_constellation(cfg: SimulationConfig) -> RXConstellation:
         )
     elif cfg.rx_mode != "planetiq":
         raise ValueError(f"Unknown rx_mode: {cfg.rx_mode!r}")
+
+    if cfg.rx_add_extra_sat:
+        rx.add_arbitrary_leo(
+            n=1, altitude_km=cfg.rx_extra_altitude_km,
+            inclination_deg=cfg.rx_extra_inclination_deg,
+            raan_deg=cfg.rx_extra_raan_deg,
+            epoch=cfg.start_time, name_prefix="ExtraLEO",
+        )
     return rx
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# BRDC (broadcast ephemeris) download from CDDIS
+# ──────────────────────────────────────────────────────────────────────────
+
+def _download_brdc_file(epoch: datetime, cache_dir: Path) -> Path:
+    """Download the combined multi-GNSS BRDC (broadcast ephemeris) file for
+    *epoch*'s day from CDDIS, reusing the same authenticated
+    TEC_model.igs_tec_pipeline.RinexDownloader every other demo script in
+    this repo already uses (RinexDownloader.nav_file()) -- it reads NASA
+    Earthdata Login credentials from ~/.netrc (machine
+    urs.earthdata.nasa.gov), tries the multi-GNSS mixed-nav product in
+    CDDIS's /{yy}p/ directory first (BRDM/BRDC..._MN.rnx.gz), then falls
+    back to the GPS-only IGS consolidated brdc{doy}0.{yy}n.gz in /{yy}n/.
+
+    Falls back to any BRDC file already present under Data/ if the CDDIS
+    download itself fails (e.g. no network, no ~/.netrc entry yet).
+
+    Parameters
+    ----------
+    epoch : datetime
+        Simulation start time (used to determine which day's BRDC file).
+    cache_dir : Path
+        Directory to cache downloaded (and decompressed) files.
+
+    Returns
+    -------
+    Path to the (decompressed) BRDC RINEX nav file.
+
+    Raises
+    ------
+    RuntimeError if both download fails and no fallback local file is found.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from TEC_model.igs_tec_pipeline import RinexDownloader
+
+    downloader = RinexDownloader(cache_dir=cache_dir)
+    try:
+        # `station` only affects the GPS-only /{yy}n/ fallback pattern -- the
+        # preferred /{yy}p/ mixed-nav product is station-independent.
+        return downloader.nav_file(station="BRDC", date=epoch)
+    except Exception as e:
+        print(f"  CDDIS download failed: {e}")
+        print(f"  Looking for fallback BRDC files in Data/...")
+        data_root = repo_root / "Data"
+        brdc_files = sorted(
+            list(data_root.glob("**/brdc*.[0-9][0-9]n"))
+            + list(data_root.glob("**/BRD[CM]*.rnx*"))
+        )
+        if brdc_files:
+            fallback = brdc_files[0]
+            print(f"    Using fallback: {fallback}")
+            return fallback
+
+        raise RuntimeError(
+            f"Failed to download BRDC for {epoch.date()} and no local fallback found"
+        ) from e
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -289,8 +405,8 @@ def run_simulation(cfg: SimulationConfig):
     Returns
     -------
     (events, arcs, truth_arcs, model_arcs) -- events is a flat list of
-    availability.OccultationEvent (one per valid link at one epoch); arcs is
-    the test_param_iono.py-compatible per-TX-RX-pair list; truth_arcs /
+    availability.OccultationEvent (one per continuous occultation pass, not
+    per epoch); arcs is the test_param_iono.py-compatible per-pass list; truth_arcs /
     model_arcs are None unless cfg.simulate_iono is True.
     """
     print(f"Building TX constellation (mode={cfg.tx_mode!r}) ...")
@@ -311,9 +427,9 @@ def run_simulation(cfg: SimulationConfig):
     n_links = sum(len(links) for links in link_history)
     print(f"  {n_links} valid occultation links across {len(link_history)} epochs")
 
-    events = av.events_from_occultation_links(link_history)
-    arcs = occ.build_occultation_arcs(link_history)
-    print(f"  Grouped into {len(arcs)} TX-RX arcs")
+    events = av.events_from_occultation_links(link_history, dt_s=cfg.time_step_s)
+    arcs = occ.build_occultation_arcs(link_history, dt_s=cfg.time_step_s)
+    print(f"  Grouped into {len(arcs)} continuous occultation passes")
 
     truth_arcs = model_arcs = None
     if cfg.simulate_iono:
@@ -355,6 +471,25 @@ def generate_output(cfg: SimulationConfig, events: List["av.OccultationEvent"]):
     print(f"  Total events within ROI             : {n_in_roi}")
 
     day = pd.Timestamp(cfg.start_time).normalize()
+
+    # Fresh, independent RX constellation copy purely for ground-track
+    # visualization -- scan_availability() (run_simulation) hides its own
+    # propagation loop and does not retain per-epoch RX positions, so the
+    # ground track is computed here as a separate propagation instead.
+    rx_for_tracks = build_rx_constellation(cfg)
+    ground_tracks = av.compute_rx_ground_tracks(
+        rx_for_tracks, start_time=cfg.start_time,
+        duration_hours=cfg.ground_track_hours,
+        mass_kg=cfg.mass_kg, area_m2=cfg.area_m2, cr=cfg.cr,
+    )
+
+    cfg.output_dir.mkdir(parents=True, exist_ok=True)
+    global_save_path = cfg.output_dir / f"global_occultation_density_{day.date()}.png"
+    av.plot_global_occultation_density(
+        df, day, save_path=global_save_path, ground_tracks=ground_tracks,
+    )
+    print(f"  Saved global density figure → {global_save_path}")
+
     doa = av._import_demo_occultation_availability()
     if n_in_roi:
         _, counts = doa.rolling_window_count(
@@ -365,6 +500,12 @@ def generate_output(cfg: SimulationConfig, events: List["av.OccultationEvent"]):
         peak_per_hour = 0
     print(f"  Peak in-ROI occultations / 1 h window: {peak_per_hour}")
     print("=" * 70)
+
+    if n_in_roi == 0:
+        # plot_occultation_availability's per-satellite ROI histogram panel
+        # assumes at least one in-ROI occultation; nothing to plot otherwise.
+        print("  No in-ROI occultations -- skipping regional availability figure.")
+        return df, None
 
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     save_path = cfg.output_dir / f"simulated_occultation_availability_{day.date()}.png"

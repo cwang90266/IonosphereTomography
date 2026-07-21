@@ -37,19 +37,43 @@ class RXConstellation:
         self.satellites: List[Satellite] = []
 
     # ------------------------------------------------------------------
-    def add_planetiq_baseline(self, raan_deg: float = 0.0,
+    def add_planetiq_baseline(self, raan_deg: Sequence[float] = (0.0, 5.0, 180.0),
+                               reverse: Sequence[bool] = (False, False, True),
+                               inclination_deg: float = 97.86,
+                               altitude_km: float = 620.0,
+                               arg_lat_deg: float = 90.0,
                                epoch: Optional[datetime] = None,
                                name_prefix: str = "PlanetiQ") -> "RXConstellation":
         """Add the baseline PlanetiQ constellation: 3 operational satellites
-        in a single 620 km, 97.86 deg sun-synchronous near-circular orbital
-        plane, evenly phased 120 deg apart.
+        in a 620 km, 97.86 deg sun-synchronous near-circular orbit -- but,
+        unlike a single shared plane phased 120 deg apart, each satellite
+        gets its own orbital plane (one RAAN each, default 0/5/180 deg) and
+        all three share the same *arg_lat_deg* (default 90 deg, i.e. near
+        the pole) at *epoch*, so they pass over the poles simultaneously
+        rather than being spread out in time.
+
+        One satellite per *reverse* (default: only the RAAN=180 one) has
+        its velocity vector negated so it travels the opposite way around
+        its orbital plane. This is a physically valid state vector -- a
+        circular 2-body orbit is time-reversible, so simply flipping v
+        yields a satellite retracing the same great circle the other
+        direction -- giving genuinely counter-rotating geometry instead of
+        merely a relabelled ascending node.
         """
-        sats = generate_walker_star(
-            sats_per_plane=3, planes=1, inclination_deg=97.86, altitude_km=620.0,
-            raan_offset_deg=raan_deg, epoch=epoch, name_prefix=name_prefix,
-        )
-        for s in sats:
-            s.constellation = "PlanetiQ"
+        n = len(raan_deg)
+        if len(reverse) != n:
+            raise ValueError("reverse must have the same length as raan_deg")
+
+        a_m = R_EARTH + altitude_km * 1e3
+        sats: List[Satellite] = []
+        for k, (raan, rev) in enumerate(zip(raan_deg, reverse)):
+            r, v = circular_state_vector(a_m, inclination_deg, raan, arg_lat_deg)
+            if rev:
+                v = -v
+            sats.append(Satellite(
+                name=f"{name_prefix}_{k:02d}", r_eci_m=r, v_eci_m_s=v,
+                epoch=epoch, plane=k, slot=0, constellation="PlanetiQ",
+            ))
         self.satellites.extend(sats)
         return self
 
