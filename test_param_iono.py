@@ -41,6 +41,7 @@ import os
 import json
 import argparse
 import logging
+import zlib
 import time as _time
 from pathlib import Path
 from collections import defaultdict
@@ -839,10 +840,19 @@ def select_arcs_by_count_bin(
     bin_count=None means "use all available arcs" (no subsampling — the
     OCC_COUNT_BINS convention for the densest bin).  If arc_list already has
     fewer than bin_count arcs there is nothing to subsample, so the full list
-    is returned unchanged.  Otherwise exactly bin_count arcs are drawn without
-    replacement using a seed derived from window_key (hash(window_key)), so
-    re-running the same window/bin reproduces the same subset — important for
-    checkpoint/restart consistency across OCC_COUNT_BINS.
+    is returned unchanged.  Otherwise the arcs are subsampled to bin_count
+    entries that are both:
+
+      * reproducible — the RNG is seeded from a stable zlib.crc32 of
+        window_key (NOT the process-salted built-in hash()), so re-running the
+        same window reproduces the same subsets across runs / restarts, which
+        checkpoint-resume and the DA cache rely on; and
+      * nested — every bin_count takes the first bin_count entries of a single
+        window-level random permutation, so a smaller bin is always a subset
+        of every larger bin (bin=5 ⊂ bin=15 ⊂ … ⊂ all).  The occultation-count
+        sweep therefore *adds* measurements between bins instead of drawing an
+        unrelated random set each time, isolating measurement density as the
+        only variable.
 
     Returns
     -------
@@ -859,10 +869,22 @@ def select_arcs_by_count_bin(
         selected_indices = list(range(n))
         selected = list(arc_list)
     else:
-        seed = hash(window_key) % (2**32)
+        # Reproducible seed: Python's built-in hash() is salted per process
+        # (PYTHONHASHSEED), so it draws a different subset every run and
+        # desyncs the DA cache.  zlib.crc32 is a stable, process-independent
+        # hash of the window key, so the same window always seeds identically.
+        seed = zlib.crc32(str(window_key).encode("utf-8"))
         rng = np.random.default_rng(seed)
-        selected_indices = sorted(int(i) for i in
-                                   rng.choice(n, size=bin_count, replace=False))
+        # NESTED subsets: draw ONE reproducible random permutation of all n
+        # arcs (the seed depends only on window_key, NOT bin_count) and take
+        # its first bin_count entries.  Because every bin_count reuses the
+        # same permutation, a smaller bin is always a subset of a larger one
+        # (bin=5 ⊂ bin=15 ⊂ … ⊂ all), so the occultation-count sweep *adds*
+        # measurements rather than swapping to an unrelated random draw --
+        # removing the "which arcs happened to be picked" confound from the
+        # count-sensitivity study while keeping the selection random.
+        perm = rng.permutation(n)
+        selected_indices = sorted(int(i) for i in perm[:bin_count])
         selected = [arc_list[i] for i in selected_indices]
 
     meta = dict(
@@ -4970,10 +4992,18 @@ def EKF_Param(
     alpha: float         = 0.5,
     tol: float           = 1e-4,
     max_iter: int        = 20,
+    tec_rmse_tol: "float | None" = None,
+    adapt_alpha: bool    = False,
+    alpha_max: float     = 1.0,
+    step_clip: "float | None" = None,
     apply_bounds: bool   = True,
     eps_jac: float       = 1e-4,
     n_workers: int       = 1,
     jacobian_analytical: bool = False,
+    prior_mean: "np.ndarray | None" = None,
+    return_diagnostics: bool = False,
+    free_params: "list | None" = None,
+    param_stages: "list | None" = None,
 ) -> dict:
     """
     Iterative Extended Kalman Filter on the parametric IRI state vector.
@@ -4999,7 +5029,31 @@ def EKF_Param(
         ΔP_i   = G_i (y_obs − H(P_i))
         P_{i+1} = P_i + ΔP_i
 
-    Stops when  ||ΔP||₂ / ||P_i||₂ < tol  or after max_iter steps.
+    Stops when  max_iter steps are reached, OR early when BOTH
+        ||ΔP||₂ / ||P_i||₂ < tol   AND   TEC-innovation RMSE < tec_rmse_tol.
+    If tec_rmse_tol is None the TEC gate is disabled and early-stop reverts to
+    the step-norm condition alone (legacy behaviour). The compound gate stops a
+    tiny-step iterate from being declared "converged" while it still fits the
+    TEC data poorly (e.g. an NmF2-frozen run whose step is a small fraction of
+    ||P|| but whose TEC RMSE is still high).
+
+    Phase-2a stabilisation (opt-in, all default OFF → legacy fixed-step Gauss-
+    Newton):
+      adapt_alpha : bool  — residual-monitoring adaptive step scale.  The TEC
+          RMSE at each iterate is used as a trust-region merit function: if a
+          step REDUCES the residual it is accepted and the step scale grows
+          (×1.3, capped at alpha_max) to accelerate; if a step INCREASES the
+          residual it is rejected, the iterate is rolled back, and the step
+          scale shrinks (×0.5, floored at 1e-2·alpha) before retrying.  Because
+          it reuses the residual already computed at the top of each iteration,
+          it costs no extra forward evaluations.  Guarantees a monotone-
+          decreasing residual and rescues the slow-but-monotone all-free
+          convergence seen in Phase 2d (rel_dP still ~1e-2 at max_iter).
+      alpha_max : float — ceiling for the adaptive step scale (default 1.0 =
+          full Kalman step).
+      step_clip : float | None — per-element trust region.  Each ΔP element is
+          clipped to ±step_clip · (prior ensemble std of that state element),
+          bounding worst-case overshoot.  None disables clipping.
 
     Parameters
     ----------
@@ -5022,6 +5076,51 @@ def EKF_Param(
                           piecewise-smooth approximation) and is exact for all
                           other parameters.  Faster than finite differences
                           for large state vectors; eps_jac is ignored.
+    prior_mean          : optional (N_STATE, n_grid) or (N_STATE*n_grid,) array
+                          giving the deterministic background used to build the
+                          ensemble (the IRI mean state).  When supplied it is
+                          used as the starting iterate P_0 and as the prior for
+                          the prior-EDP / prior innovations / returned
+                          prior_mean_state, so those reflect the true IRI
+                          background rather than ensemble *member 0*.  This
+                          matters because generate_ensemble_spatial draws every
+                          member (including member 0) as mean + random
+                          perturbation, so the default member-0 fallback is a
+                          random draw, not the background.  None (default) keeps
+                          the legacy member-0 behavior.
+    return_diagnostics  : if True, add observability diagnostics to the return
+                          dict: 'prior_jacobian' — the analytical sTEC Jacobian
+                          J = ∂y/∂P (n_obs, N_STATE*n_grid) evaluated at the
+                          prior iterate P_0 (iteration 0) — plus 'prior_obs_R'
+                          (sigma_obs) and 'prior_y_hat' (prior predictions).
+                          Used by tools/ekf_observability.py to form the
+                          geometry-only Fisher information without the ensemble
+                          overconfidence that confounds post_P.  Off by default
+                          to keep cached pipeline results small.
+    free_params         : optional list of PARAM_NAMES that are FREE to update;
+                          all others are frozen at the prior for the whole run.
+                          Freezing zeroes a parameter's ensemble-anomaly rows in
+                          X_c, giving it zero prior variance — it receives no
+                          update AND injects no cross-correlation into the
+                          observed parameters.  Motivated by the Phase-1
+                          observability result (integrated TEC constrains only
+                          log10(NmF2); hmF2/shape are unobservable, CRB<0.06), so
+                          e.g. free_params=["log10(NmF2)"] estimates the one
+                          observable amplitude while preserving the RO-informed
+                          peak/shape prior.  None (default) keeps all 8 free.
+    param_stages        : optional list of free-parameter lists for a
+                          block-coordinate (staged) estimation, run in sequence
+                          with the state carried forward between stages, e.g.
+                          [["log10(NmF2)"], PARAM_NAMES] to fit NmF2 first then
+                          relax the rest.  Overrides free_params when given.  NB:
+                          staging over the SAME TEC observations cannot make an
+                          unobservable parameter observable — a later stage that
+                          frees hmF2 will only move it via spurious ensemble
+                          cross-correlation.  Genuine peak information must come
+                          from the RO vertical structure (a different operator),
+                          not integrated TEC; this knob exists to make that
+                          empirically visible and to support future multi-source
+                          staging.
 
     Returns
     -------
@@ -5097,14 +5196,27 @@ def EKF_Param(
     )
 
     # ── 3. Prior ensemble anomaly X_c and initial state P_0 ──────────────────
-    # Use member 0 (unperturbed IRI baseline) as the starting iterate P_0.
-    # X_c captures the prior uncertainty for the covariance factor.
+    # X_c (anomalies about the ensemble sample mean) factors the prior
+    # covariance.  The starting iterate / prior state P_0 is the deterministic
+    # IRI background when the caller passes prior_mean; otherwise it falls back
+    # to ensemble member 0.  NB: with generate_ensemble_spatial every member —
+    # including member 0 — is a random draw of (mean + perturbation), so the
+    # member-0 fallback is NOT the background and makes the prior stochastic /
+    # non-reproducible.  Passing prior_mean pins P_0 to the true IRI mean.
     X_f = flatten_ensemble(model_state.ensemble)         # (n_state, M)
     mu  = X_f.mean(axis=1)                               # (n_state,) ensemble mean
     X_c = X_f - mu[:, np.newaxis]                        # (n_state, M) anomalies
     nm1 = max(n_members - 1, 1)
 
-    P_i = X_f[:, 0].copy()                               # (n_state,) P_0 = member 0
+    if prior_mean is not None:
+        P_0 = np.asarray(prior_mean, dtype=float).reshape(-1)   # (n_state,)
+        if P_0.shape[0] != X_f.shape[0]:
+            raise ValueError(
+                f"prior_mean has {P_0.shape[0]} elements but the state "
+                f"dimension is {X_f.shape[0]} (= N_STATE * n_grid).")
+    else:
+        P_0 = X_f[:, 0].copy()                           # legacy: ensemble member 0
+    P_i = P_0.copy()                                     # (n_state,) starting iterate
 
     # ── 4. Prior diagnostics (all sample rays) ────────────────────────────────
     prior_state_snap = IonosphericState(n_geo, n_members=1)
@@ -5126,81 +5238,197 @@ def EKF_Param(
     # ── 5. Observation noise covariance R ─────────────────────────────────────
     R_mat = (sigma_obs ** 2) * np.eye(n_obs)
 
-    # ── 6. EKF iteration ──────────────────────────────────────────────────────
+    # ── 5b. Parameter-freezing / staged (block-coordinate) plan ──────────────
+    # Phase-1 observability proved integrated TEC constrains only log10(NmF2);
+    # hmF2 and the shape params are unobservable (CRB<0.06).  Freezing a param =
+    # zeroing its ensemble-anomaly rows in X_c → zero prior variance → it gets no
+    # update AND injects no spurious cross-correlation into the observed params
+    # (this doubles as the overconfidence/stability fix).  `param_stages` runs
+    # several such blocks in sequence, carrying P_i forward.
+    from Ionosphere_Tomography_Inverter.ionospheric_state import (
+        PARAM_NAMES as _PN, I_HMF2, I_HME,
+    )
+
+    def _free_row_mask(free_names):
+        """Boolean (n_state,) mask, True where a parameter is FREE to update."""
+        if free_names is None:
+            return np.ones(N_STATE * n_geo, dtype=bool)
+        idx = []
+        for nm in free_names:
+            if nm not in _PN:
+                raise ValueError(f"free_params: unknown parameter {nm!r}; "
+                                 f"choose from {_PN}")
+            idx.append(_PN.index(nm))
+        m2d = np.zeros((N_STATE, n_geo), dtype=bool)
+        m2d[np.asarray(idx, dtype=int), :] = True
+        return m2d.reshape(-1)
+
+    if param_stages is not None:
+        stages = list(param_stages)
+    elif free_params is not None:
+        stages = [free_params]
+    else:
+        stages = [None]                       # legacy: one stage, all params free
+
+    X_c_full = X_c                            # pristine prior anomalies
+
+    # ── 6. EKF iteration (block-coordinate over stages) ───────────────────────
     residual_history:    list = []
     update_norm_history: list = []
     converged = False
     rel_norm  = np.inf
+    J_prior:   "np.ndarray | None" = None     # iter-0 Jacobian (observability)
+    y_hat_prior: "np.ndarray | None" = None
+    _global_it = 0
+    # These are captured from the final iteration of the final stage for 6b.
+    S    = R_mat.copy()
+    P_xy = np.zeros((N_STATE * n_geo, n_obs), dtype=float)
 
     jac_mode = "analytical" if jacobian_analytical else "finite-diff"
-    _iter_bar = tqdm(
-        range(max_iter), desc=f"  [EKF] iterating [{jac_mode}]", unit="it", leave=False,
-    )
-    for it in _iter_bar:
-        P_2d = P_i.reshape(N_STATE, n_geo)
+    staged   = (param_stages is not None) or (free_params is not None)
 
-        # Jacobian Ŵ_i = ∂H(P_i)/∂P  and baseline predictions y_hat
-        if jacobian_analytical:
-            J_i, y_hat = _ekf_param_analytical_jacobian(
-                P_2d, rep_rays, rep_W, alt_grid, n_geo,
-                n_workers=n_workers,
-            )
+    for stage_idx, stage_free in enumerate(stages):
+        free_mask = _free_row_mask(stage_free)
+        # Freeze by zeroing the anomaly rows of the frozen parameters.
+        X_c = X_c_full * free_mask[:, np.newaxis]
+        if staged:
+            n_free_p = int(free_mask.reshape(N_STATE, n_geo).any(axis=1).sum())
+            lbl = "all" if stage_free is None else ",".join(stage_free)
+            print(f"  [EKF] stage {stage_idx + 1}/{len(stages)}: "
+                  f"free=[{lbl}] ({n_free_p}/{N_STATE} params)")
+
+        _iter_bar = tqdm(
+            range(max_iter),
+            desc=f"  [EKF] iterating [{jac_mode}]", unit="it", leave=False,
+        )
+        stage_converged = False
+        # ── Phase-2a adaptive-step state (per stage) ──────────────────────────
+        alpha_eff   = float(alpha)          # current (adaptive) step scale
+        alpha_floor = 1e-2 * float(alpha)   # lower bound when shrinking
+        P_prev      = P_i.copy()            # last ACCEPTED iterate (merit)
+        resid_prev  = np.inf                # merit-function value at P_prev
+        # Per-element prior std (from masked anomalies) for the step clip;
+        # frozen rows are 0 so their (already-zero) ΔP is unaffected.
+        elem_std = np.sqrt((X_c ** 2).sum(axis=1) / nm1) if step_clip else None
+        for it in _iter_bar:
+            P_2d = P_i.reshape(N_STATE, n_geo)
+
+            # Jacobian Ŵ_i = ∂H(P_i)/∂P  and baseline predictions y_hat
+            if jacobian_analytical:
+                J_i, y_hat = _ekf_param_analytical_jacobian(
+                    P_2d, rep_rays, rep_W, alt_grid, n_geo,
+                    n_workers=n_workers,
+                )
+            else:
+                J_i, y_hat = _ekf_param_jacobian(
+                    P_2d, rep_rays, rep_W, alt_grid, n_geo,
+                    eps_rel=eps_jac, n_workers=n_workers,
+                )
+
+            # Stash the prior-iterate (very first iteration) Jacobian for the
+            # observability read-out: ∂y/∂P at the true IRI background P_0.
+            if return_diagnostics and _global_it == 0:
+                J_prior     = J_i.copy()
+                y_hat_prior = y_hat.copy()
+
+            # Innovation at current iterate
+            innov = y_obs_arc - y_hat                    # (n_obs,)
+            resid = float(np.sqrt(np.mean(innov ** 2)))
+
+            # ── Phase-2a adaptive step: use the residual as a trust-region
+            # merit function.  Accept-and-accelerate on descent, reject-and-
+            # shrink on an increase (roll back to the last accepted iterate).
+            if adapt_alpha and it > 0:
+                if resid > resid_prev * (1.0 + 1e-6):
+                    # Overshoot — reject: roll back, shrink, retry next iter.
+                    P_i        = P_prev.copy()
+                    alpha_eff  = max(alpha_floor, alpha_eff * 0.5)
+                    residual_history.append(resid_prev)
+                    update_norm_history.append(np.nan)
+                    _iter_bar.set_postfix(RMSE=f"{resid_prev:.3f}TECU",
+                                          a=f"{alpha_eff:.2f}", note="reject")
+                    continue
+                # Descent — accept and accelerate.
+                resid_prev = resid
+                P_prev     = P_i.copy()
+                alpha_eff  = min(float(alpha_max), alpha_eff * 1.3)
+            else:
+                resid_prev = resid
+                P_prev     = P_i.copy()
+
+            residual_history.append(resid)
+
+            # Low-rank covariance products — avoid forming Q explicitly:
+            #   A_i = J_i X_c                  (n_obs, M)
+            #   P_yy ≈ A_i A_i^T / nm1         (n_obs, n_obs)
+            #   P_xy ≈ X_c A_i^T   / nm1       (n_state, n_obs)
+            # With frozen rows of X_c zeroed, P_xy rows (and hence dP) are zero
+            # for frozen params, and their covariance never enters P_yy.
+            A_i  = J_i @ X_c                             # (n_obs, M)
+            P_yy = (A_i @ A_i.T) / nm1                   # (n_obs, n_obs)
+            P_xy = (X_c @ A_i.T) / nm1                   # (n_state, n_obs)
+
+            S = P_yy + R_mat                             # (n_obs, n_obs)
+            try:
+                import scipy.linalg as _la
+                K_T = _la.solve(S, P_xy.T, assume_a="pos")   # (n_obs, n_state)
+            except Exception:
+                K_T = np.linalg.lstsq(S, P_xy.T, rcond=None)[0]
+            G = alpha_eff * K_T.T                        # (n_state, n_obs)
+
+            dP = G @ innov                               # (n_state,)
+
+            # Phase-2a per-element trust region: bound each ΔP element to
+            # ±step_clip · prior-std.  Frozen rows have std 0 → ΔP stays 0.
+            if step_clip and elem_std is not None:
+                _lim = float(step_clip) * elem_std
+                dP = np.clip(dP, -_lim, _lim)
+
+            # Convergence check before applying the step
+            rel_norm = float(np.linalg.norm(dP) / (np.linalg.norm(P_i) + 1e-30))
+            update_norm_history.append(rel_norm)
+            _iter_bar.set_postfix(RMSE=f"{resid:.3f}TECU", rel_dP=f"{rel_norm:.2e}",
+                                  a=f"{alpha_eff:.2f}")
+
+            P_i = P_i + dP
+
+            # Clamp to physical bounds after each step
+            if apply_bounds:
+                P_2d_new = P_i.reshape(N_STATE, n_geo)
+                for k_p, (lo, hi) in enumerate(IonosphericState.PARAM_BOUNDS):
+                    P_2d_new[k_p] = np.clip(P_2d_new[k_p], lo, hi)
+                # Structural constraint: hmF2 > hmE + 20 km
+                P_2d_new[I_HMF2] = np.maximum(P_2d_new[I_HMF2],
+                                              P_2d_new[I_HME] + 20.0)
+                P_i = P_2d_new.ravel()
+
+            _global_it += 1
+            # Compound convergence: step must be small AND (if a TEC gate is
+            # set) the TEC-innovation RMSE must be below tec_rmse_tol.  `resid`
+            # is the RMSE at the current (pre-step) iterate; at convergence the
+            # step is tiny so it also reflects the post-step fit.
+            step_ok = rel_norm < tol
+            tec_ok  = (tec_rmse_tol is None) or (resid < tec_rmse_tol)
+            if step_ok and tec_ok:
+                stage_converged = True
+                _gate = ("" if tec_rmse_tol is None
+                         else f", RMSE={resid:.2f}<{tec_rmse_tol:.1f}TECU")
+                _iter_bar.write(f"  [EKF] {'stage '+str(stage_idx+1)+' ' if staged else ''}"
+                                f"converged at iteration {it + 1}  "
+                                f"(||ΔP||/||P|| = {rel_norm:.2e} < tol={tol:.1e}{_gate})")
+                break
         else:
-            J_i, y_hat = _ekf_param_jacobian(
-                P_2d, rep_rays, rep_W, alt_grid, n_geo,
-                eps_rel=eps_jac, n_workers=n_workers,
-            )
+            _iter_bar.write(f"  [EKF] {'stage '+str(stage_idx+1)+' ' if staged else ''}"
+                            f"reached max_iter={max_iter} without convergence  "
+                            f"(final ||ΔP||/||P|| = {rel_norm:.2e}, RMSE={resid:.2f}TECU"
+                            f"{'' if tec_rmse_tol is None else f' vs tol {tec_rmse_tol:.1f}'})")
+        _iter_bar.close()
+        converged = stage_converged             # reflects the final stage
 
-        # Innovation at current iterate
-        innov = y_obs_arc - y_hat                        # (n_obs,)
-        resid = float(np.sqrt(np.mean(innov ** 2)))
-        residual_history.append(resid)
-
-        # Low-rank covariance products — avoid forming Q explicitly:
-        #   A_i = J_i X_c                  (n_obs, M)
-        #   P_yy ≈ A_i A_i^T / nm1         (n_obs, n_obs)
-        #   P_xy ≈ X_c A_i^T   / nm1       (n_state, n_obs)
-        A_i  = J_i @ X_c                                 # (n_obs, M)
-        P_yy = (A_i @ A_i.T) / nm1                       # (n_obs, n_obs)
-        P_xy = (X_c @ A_i.T) / nm1                       # (n_state, n_obs)
-
-        S = P_yy + R_mat                                  # (n_obs, n_obs)
-        try:
-            import scipy.linalg as _la
-            K_T = _la.solve(S, P_xy.T, assume_a="pos")   # (n_obs, n_state)
-        except Exception:
-            K_T = np.linalg.lstsq(S, P_xy.T, rcond=None)[0]
-        G = alpha * K_T.T                                 # (n_state, n_obs)
-
-        dP = G @ innov                                    # (n_state,)
-
-        # Convergence check before applying the step
-        rel_norm = float(np.linalg.norm(dP) / (np.linalg.norm(P_i) + 1e-30))
-        update_norm_history.append(rel_norm)
-        _iter_bar.set_postfix(RMSE=f"{resid:.3f}TECU", rel_dP=f"{rel_norm:.2e}")
-
-        P_i = P_i + dP
-
-        # Clamp to physical bounds after each step
-        if apply_bounds:
-            P_2d_new = P_i.reshape(N_STATE, n_geo)
-            for k_p, (lo, hi) in enumerate(IonosphericState.PARAM_BOUNDS):
-                P_2d_new[k_p] = np.clip(P_2d_new[k_p], lo, hi)
-            # Structural constraint: hmF2 > hmE + 20 km
-            from Ionosphere_Tomography_Inverter.ionospheric_state import I_HMF2, I_HME
-            P_2d_new[I_HMF2] = np.maximum(P_2d_new[I_HMF2], P_2d_new[I_HME] + 20.0)
-            P_i = P_2d_new.ravel()
-
-        if rel_norm < tol:
-            converged = True
-            _iter_bar.write(f"  [EKF] Converged at iteration {it + 1}  "
-                             f"(||ΔP||/||P|| = {rel_norm:.2e} < tol={tol:.1e})")
-            break
-    else:
-        _iter_bar.write(f"  [EKF] Reached max_iter={max_iter} without convergence  "
-                         f"(final ||ΔP||/||P|| = {rel_norm:.2e})")
-    _iter_bar.close()
-
+    # Restore the pristine prior anomalies so section 6b's prior_P is the TRUE
+    # (unfrozen) prior covariance; post_P below uses the final-stage S / P_xy,
+    # so frozen params correctly retain their full prior variance.
+    X_c = X_c_full
     n_iterations = len(residual_history)
 
     # ── 6b. Analytical prior/posterior covariance (dense, parametric space) ──
@@ -5245,7 +5473,7 @@ def EKF_Param(
 
     # ── 8. Convert parametric states → Ne profile grids ──────────────────────
     prior_state_for_edp = IonosphericState(n_geo, n_members=1)
-    prior_state_for_edp.ensemble = X_f[:, 0].reshape(N_STATE, n_geo)[:, :, np.newaxis].copy()
+    prior_state_for_edp.ensemble = P_0.reshape(N_STATE, n_geo)[:, :, np.newaxis].copy()
     prior_edp = _parametric_to_edp(prior_state_for_edp, prior_state_for_edp.ensemble, alt_grid)
     post_edp  = _parametric_to_edp(post_state, post_state.ensemble, alt_grid)
 
@@ -5284,7 +5512,7 @@ def EKF_Param(
         posterior_ne_5deg    = post_edp,
         prior_edp            = prior_edp,
         posterior_edp        = post_edp,
-        prior_mean_state     = X_f[:, 0].reshape(N_STATE, n_geo).copy(),  # (N_STATE, n_geo)
+        prior_mean_state     = P_0.reshape(N_STATE, n_geo).copy(),  # (N_STATE, n_geo)
         posterior_mean_5deg  = P_post_2d.copy(),          # (N_STATE, n_geo)
         posterior_mean_state = P_post_2d.copy(),
         prior_P              = prior_P,                  # (n_state, n_state), param-major/geo-minor
@@ -5309,6 +5537,11 @@ def EKF_Param(
         n_iterations         = n_iterations,
         residual_history     = residual_history,
         update_norm_history  = update_norm_history,
+        # Observability diagnostics (only populated when return_diagnostics=True)
+        prior_jacobian       = J_prior,       # (n_obs, N_STATE*n_geo) ∂y/∂P at P_0
+        prior_y_hat          = y_hat_prior,   # (n_obs,) prior sTEC predictions
+        prior_obs_sigma      = float(sigma_obs),
+        n_grid_points        = n_geo,
     )
 
 

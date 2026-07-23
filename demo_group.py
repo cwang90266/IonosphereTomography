@@ -332,14 +332,35 @@ def _group_bounding_box(
 def _tight_bbox_from_points(
     lats: list[float],
     lons: list[float],
-    margin_deg: float,
+    margin_km: float,
 ) -> tuple[float, float, float, float]:
     """
-    Compute a bounding box from raw lat/lon points with a flat margin, using
-    the same min/max ± margin_deg logic as the mid-lat branch of
-    `_group_bounding_box` (including antimeridian handling), but WITHOUT the
-    polar pole-extension special case — the box never extends to ±90° lat or
-    the full lon span regardless of latitude.
+    Compute a lat/lon bounding box from raw points, padded so that every
+    point within margin_km kilometres of the point cloud's bounding edges is
+    guaranteed to fall inside the box — including in longitude.
+
+    A flat degree margin (this function's old behaviour: pad both lat and
+    lon by the same number of degrees, derived from margin_km via the
+    equatorial 111.32 km/deg constant) badly under-covers physical distance
+    in longitude at high latitude: 1° of longitude is ~111.32 km at the
+    equator but shrinks to ~111.32·cos(lat) km, e.g. only ~8 km at 86°N. RO
+    occultation ray-path extrema near the pole are frequently near-
+    meridional (large latitude spread, tiny longitude spread), so the old
+    flat-degree margin could pad such a footprint by only a few physical km
+    in longitude despite requesting e.g. 100-200 km — that's what produced
+    the intermittent "subset_region: only N vertices" failures for near-
+    polar groups (the padded box was thinner than the background EDP grid's
+    own point spacing). Convert margin_km to a longitude-degree margin using
+    the most poleward latitude the (already lat-padded) box reaches, so every
+    latitude within the box gets at least margin_km of physical coverage in
+    longitude — using the most poleward reference is conservative (it only
+    over-pads at the box's lower latitudes, never under-pads).
+
+    Uses the same antimeridian handling as before (including the pole
+    fallback to the full longitude circle when the shift-back would invert
+    the range), but WITHOUT the polar pole-extension special case — the box
+    never extends to ±90° lat or the full lon span just because the points
+    are near a pole (unless the lat-aware margin itself demands it).
 
     RO polar meshes deliberately span the full longitude circle for ray-
     geometry reasons (see `_group_bounding_box`), but using that same
@@ -354,17 +375,35 @@ def _tight_bbox_from_points(
     lats = [p[0] for p in pts]
     lons = [p[1] for p in pts]
 
-    lat_min = max(min(lats) - margin_deg, -90.0)
-    lat_max = min(max(lats) + margin_deg,  90.0)
+    KM_PER_DEG = 111.32
+    lat_margin_deg = margin_km / KM_PER_DEG
+
+    lat_min = max(min(lats) - lat_margin_deg, -90.0)
+    lat_max = min(max(lats) + lat_margin_deg,  90.0)
+
+    # Degrees-of-longitude-per-km shrinks toward the poles; use whichever of
+    # the two (already lat-padded) latitude bounds is more poleward so the
+    # margin is >= margin_km everywhere the box spans, not just at its
+    # equatorward edge. Capped short of 90° to avoid a divide-by-zero right
+    # at the pole.
+    _ref_lat = min(max(abs(lat_min), abs(lat_max)), 89.5)
+    lon_margin_deg = margin_km / (KM_PER_DEG * np.cos(np.radians(_ref_lat)))
+
+    if lon_margin_deg >= 180.0:
+        # Reference latitude is close enough to the pole that a margin_km
+        # buffer in longitude would wrap most/all of the way around anyway —
+        # just use the full circle rather than doing degenerate arithmetic.
+        return lat_min, lat_max, -180.0, 180.0
+
     lon_spread = max(lons) - min(lons)
     if lon_spread <= 180.0:
-        lon_min = max(min(lons) - margin_deg, -180.0)
-        lon_max = min(max(lons) + margin_deg,  180.0)
+        lon_min = max(min(lons) - lon_margin_deg, -180.0)
+        lon_max = min(max(lons) + lon_margin_deg,  180.0)
     else:
         # Antimeridian crossing: convert to 0–360, expand, shift back.
         lons_360 = [(l + 360) % 360 for l in lons]
-        raw_min  = min(lons_360) - margin_deg
-        raw_max  = max(lons_360) + margin_deg
+        raw_min  = min(lons_360) - lon_margin_deg
+        raw_max  = max(lons_360) + lon_margin_deg
         lon_min  = raw_min - 360 if raw_min > 180 else raw_min
         lon_max  = raw_max - 360 if raw_max > 180 else raw_max
         if lon_min > lon_max:
@@ -402,6 +441,7 @@ def process_group(
     extra_clean_list:       list  = None,
     roi_extra_points:       list[tuple[float, float]] | None = None,
     filter_label:           str   = "",
+    skip_joint:             bool  = False,
 ) -> dict:
     """
     Process a geographic group of occultations with a single joint KF update.
@@ -458,8 +498,51 @@ def process_group(
     """
     t_start = time.time()
     n_occ   = len(group_meta)
-    region  = group_meta["region"].iloc[0]
-    win_key = group_meta["time_window"].iloc[0]
+
+    # region used to be a safe `.iloc[0]` pick back when every group was
+    # built by demo_group's own fixed-30-min "<window>__<region>" grouping
+    # (one region per group, by construction). demo_isr_da_comparison.py's
+    # minima-availability windows (build_minima_windows_for_day) instead
+    # group purely by *time*, and an ISR-ROI window near TRO/ESR can mix
+    # occultations whose individual TEC-max tangent points are POLAR_N with
+    # ones that fall below the 60° polar-cap threshold (the 2500 km ROI
+    # gate reaches down to ~55°N) -- so `.iloc[0]` could silently pick
+    # either tag depending on row order, sending genuinely polar data down
+    # the mid-lat bounding-box branch below. That branch's antimeridian-wrap
+    # longitude math degenerates on near-pole points (longitude is nearly
+    # undefined right at the pole), producing a razor-thin bbox and the
+    # "subset_region: only N vertices"/boolean-index-mismatch failures seen
+    # in practice. Prefer the polar tag whenever ANY occultation in the
+    # group carries one -- the polar branch's full-longitude/pole-extension
+    # footprint is a safe superset that still covers any mixed-in mid-lat
+    # points, whereas the reverse is not true. Otherwise fall back to the
+    # most common mid-lat tag (still more representative than row 0).
+    _region_counts = group_meta["region"].value_counts()
+    _polar_tags    = [r for r in _region_counts.index if r in ("POLAR_N", "POLAR_S")]
+    region = (_region_counts.loc[_polar_tags].idxmax() if _polar_tags
+              else _region_counts.idxmax())
+    # NOTE: previously this read `group_meta["time_window"].iloc[0]` -- the
+    # per-occultation time_window tag assigned when the metadata table was
+    # originally scanned/bucketed on demo_group's fixed 30-min clock grid.
+    # That tag is only guaranteed to match *this* group's actual window when
+    # the caller used the fixed-grid grouping (load_ro_group_for_day(), where
+    # group_key is literally built as f"{that same time_window}__{region}").
+    # demo_isr_da_comparison.py's minima-availability windows
+    # (build_minima_windows_for_day()) instead select occultations by an
+    # independent, ad-hoc time span and pass a `group_key` whose embedded
+    # centre time can differ from occultation #0's stale per-row tag by tens
+    # of minutes -- e.g. group_key="2025-08-27_1227" while
+    # group_meta["time_window"].iloc[0] was still "2025-08-27_1200" from the
+    # original scan. Since result["time_window"] feeds ISR-truth time-window
+    # matching in compute_isr_metrics() (+/- ISR_WINDOW_HALF_MINUTES of
+    # t_centre), that mismatch silently dropped every ISR co-location match
+    # for both ro_only and ro_igs in minima-window runs -- e.g. it excluded
+    # the 2025-08-27 ESR epochs (12:22:48-12:23:00 UTC) from a
+    # "2025-08-27_1227" window's +/-15 min match range. group_key is always
+    # the authoritative "<time_window>[__<region>]" identifier for whichever
+    # grouping scheme is in use (_parse_time_window() strips the optional
+    # "__..." suffix), so use it directly instead.
+    win_key = group_key
 
     print(f"\n{'─'*60}")
     print(f"  Group : {group_key}")
@@ -610,23 +693,42 @@ def process_group(
         median_ts    = pd.Timestamp(np.median([d.value for d in all_dates]))
         profile_hour = median_ts.hour
 
-        # ── 4 & 5. Bounding box + mesh with vertex-count guard ──────────────
-        # Uses the same get_occultation_extrema method as demo.py section20().
-        # Two strategies depending on group type:
+        # ── 4 & 5. Bounding box + mesh: overlap of RO occultation footprints
+        #    and IGS ground-station IPP points ──────────────────────────────
+        # Previously this branched on `region` (a polar-cap shrink-the-
+        # equatorward-boundary loop vs. a rectangular-bin outlier-trim loop),
+        # each iterating until the union mesh fit under MAX_MESH_VERTICES.
+        # That branching assumed every occultation in a group shared one
+        # `region` tag, which broke once demo_isr_da_comparison.py started
+        # grouping purely by time (minima-availability windows can mix
+        # POLAR_N and mid-lat tangent points) -- picking the wrong branch
+        # produced degenerate antimeridian math near the pole and razor-thin
+        # bounding boxes that `subset_region` rejected outright.
         #
-        #   Polar   (POLAR_N / POLAR_S): shrink the equatorward latitude boundary
-        #           in _SHRINK_STEP degree increments until the mesh is small
-        #           enough.  No occultations are ever dropped.
+        # Replaced with a single, region-agnostic strategy: a tight bounding
+        # box around the actual RO ray-path extrema points, unioned with any
+        # IGS ground-station IPP points supplied via `roi_extra_points` (the
+        # same "overlap of occultations + ground-station pierce points" idea
+        # already used for igs_only's grid -- see _tight_bbox_from_points).
+        # No vertex-count cap and no trimming: every occultation stays in
+        # the group, and the mesh is whatever size that footprint implies.
         #
-        #   Mid-lat (rectangular bins): keep the bounding box fixed to the ray
-        #           extrema; remove the occultation whose centroid is farthest
-        #           from the group centroid until the mesh fits.
-        _BBOX_MARGIN = 100.0 / 111.32    # 100 km of padding around ray-path footprints
-        _SHRINK_STEP = 1.0     # equatorward shrink per polar iteration (degrees)
-        _is_polar    = region in ("POLAR_N", "POLAR_S")
+        # 200 km guarantees every point within 200 km of the edge of the RO
+        # occultation + IGS IPP footprint is included in the ROI. Passed to
+        # _tight_bbox_from_points as margin_km (lat-aware conversion to a
+        # longitude-degree margin -- see that function's docstring for why a
+        # flat degree margin badly under-covers physical distance near the
+        # poles) and, in equatorial-degree form, to subset_union_triangles
+        # below (whose margin_deg is already a true great-circle angular
+        # buffer via _inside_spherical_triangle_with_margin, so it needs no
+        # lat-aware conversion -- 200/111.32 deg of great-circle arc is
+        # exactly 200 km everywhere on the sphere).
+        _BBOX_MARGIN_KM = 200.0
+        _BBOX_MARGIN     = _BBOX_MARGIN_KM / 111.32   # equatorial-degree form, for subset_union_triangles
 
-        # Pre-compute extrema centre (mean of 3 corner points) per occultation.
-        # Used by the mid-lat outlier loop; also stored for the trim diagnostic.
+        # Pre-compute extrema centre (mean of 3 corner points) per occultation,
+        # kept for the trim diagnostic plot below (nothing is dropped from it
+        # any more, but the plot still shows each occultation's centroid).
         occ_centers: list[tuple[float, float]] = []
         for _data in clean_parsed:
             try:
@@ -641,6 +743,7 @@ def process_group(
             occ_centers.append((_clat, _clon))
 
         # Trim-tracking mirrors clean_list for the diagnostic plot.
+        # _trim_removed stays empty now that no occultations are ever dropped.
         _trim_info: list[dict] = [
             {
                 "label":      clean_labels[i],
@@ -657,7 +760,7 @@ def process_group(
             }
             for i in range(len(clean_list))
         ]
-        _trim_removed: list[dict] = []   # remains empty for polar groups
+        _trim_removed: list[dict] = []
 
         # ── Build per-occultation triangle list (union mesh) ─────────────────
         def _build_occ_triangles(parsed_list):
@@ -678,77 +781,42 @@ def process_group(
                 return bbox_eds
             return bbox_eds.subset_union_triangles(tris, margin_deg=margin_deg)
 
-        if _is_polar:
-            # ── Polar: shrink equatorward boundary, then apply union mask ────
-            lat_min, lat_max, lon_min, lon_max = _group_bounding_box(
-                clean_parsed, alt_grid, region, margin_deg=_BBOX_MARGIN,
-                extra_points=roi_extra_points,
-            )
-            while True:
-                eds_bbox = global_edp_cache[profile_hour].subset_region(
-                    lat_min, lat_max, lon_min, lon_max
-                )
-                try:
-                    eds_occ = _subset_union(eds_bbox, clean_parsed)
-                except ValueError:
-                    eds_occ = eds_bbox
-                n_geo = eds_occ.geolocation.shape[0]
-                if n_geo <= MAX_MESH_VERTICES:
-                    print(f"  [polar] Bbox lat [{lat_min:.1f}, {lat_max:.1f}]  "
-                          f"lon [{lon_min:.1f}, {lon_max:.1f}]  |  "
-                          f"union vertices: {n_geo}")
-                    break
-                if region == "POLAR_N":
-                    new_eq = lat_min + _SHRINK_STEP
-                    if new_eq >= 89.0:
-                        print(f"  [polar-shrink] Hit poleward limit, accepting {n_geo}.")
-                        break
-                    lat_min = new_eq
-                else:
-                    new_eq = lat_max - _SHRINK_STEP
-                    if new_eq <= -89.0:
-                        print(f"  [polar-shrink] Hit poleward limit, accepting {n_geo}.")
-                        break
-                    lat_max = new_eq
+        # RO ray-path extrema (top / TEC-max / bottom tangent corners) for
+        # every occultation in the group, unioned with the IGS pierce points
+        # passed in via roi_extra_points.
+        _roi_pts_lat: list[float] = []
+        _roi_pts_lon: list[float] = []
+        for _tri in _build_occ_triangles(clean_parsed):
+            if _tri is None:
+                continue
+            for _pt in _tri:
+                _roi_pts_lat.append(float(_pt[0]))
+                _roi_pts_lon.append(float(_pt[1]))
+        if not _roi_pts_lat:
+            # Extrema couldn't be computed for any occultation -- fall back
+            # to TEC-max tangent centroids (mirrors the old per-occultation
+            # fallback in _group_bounding_box).
+            _roi_pts_lat = [c[0] for c in occ_centers]
+            _roi_pts_lon = [c[1] for c in occ_centers]
+        if roi_extra_points:
+            for _lat, _lon in roi_extra_points:
+                _roi_pts_lat.append(float(_lat))
+                _roi_pts_lon.append(float(_lon))
 
-        else:
-            # ── Mid-lat: remove farthest outlier, then apply union mask ──────
-            while True:
-                lat_min, lat_max, lon_min, lon_max = _group_bounding_box(
-                    clean_parsed, alt_grid, region, margin_deg=_BBOX_MARGIN,
-                    extra_points=roi_extra_points,
-                )
-                eds_bbox = global_edp_cache[profile_hour].subset_region(
-                    lat_min, lat_max, lon_min, lon_max
-                )
-                try:
-                    eds_occ = _subset_union(eds_bbox, clean_parsed)
-                except ValueError:
-                    eds_occ = eds_bbox
-                n_geo = eds_occ.geolocation.shape[0]
-                print(f"  Bbox lat [{lat_min:.1f}, {lat_max:.1f}]  "
-                      f"lon [{lon_min:.1f}, {lon_max:.1f}]  |  "
-                      f"union vertices: {n_geo}")
-
-                if n_geo <= MAX_MESH_VERTICES or len(clean_list) <= 1:
-                    break
-
-                _clats  = np.array([c[0] for c in occ_centers])
-                _clons  = np.array([c[1] for c in occ_centers])
-                _gc_lat = float(np.mean(_clats))
-                _gc_lon = float(np.mean(_clons))
-                _dist   = (_clats - _gc_lat) ** 2 + (_clons - _gc_lon) ** 2
-                worst   = int(np.argmax(_dist))
-                print(f"  [trim] {n_geo} > MAX_MESH_VERTICES={MAX_MESH_VERTICES} — "
-                      f"dropping {clean_labels[worst]} "
-                      f"({np.sqrt(_dist[worst]):.1f}° from centroid)")
-                _trim_removed.append(_trim_info[worst])
-                _trim_info.pop(worst)
-                clean_list.pop(worst)
-                clean_labels.pop(worst)
-                clean_parsed.pop(worst)
-                clean_sat_ids.pop(worst)
-                occ_centers.pop(worst)
+        lat_min, lat_max, lon_min, lon_max = _tight_bbox_from_points(
+            _roi_pts_lat, _roi_pts_lon, margin_km=_BBOX_MARGIN_KM,
+        )
+        eds_bbox = global_edp_cache[profile_hour].subset_region(
+            lat_min, lat_max, lon_min, lon_max
+        )
+        try:
+            eds_occ = _subset_union(eds_bbox, clean_parsed)
+        except ValueError:
+            eds_occ = eds_bbox
+        n_geo = eds_occ.geolocation.shape[0]
+        print(f"  Bbox lat [{lat_min:.1f}, {lat_max:.1f}]  "
+              f"lon [{lon_min:.1f}, {lon_max:.1f}]  |  "
+              f"union vertices: {n_geo}")
 
         n_height = len(alt_grid)
         print(f"  Final group: {len(clean_list)} occultation(s), "
@@ -959,13 +1027,26 @@ def process_group(
                     )
                     rel_arc_idx_jnt += 1
 
-        posterior_state_flat_jnt = inverter_jnt.assimilate(
-            obs             = obs_joint,
-            obs_operator    = H_joint.astype(np.float32),
-            relaxation      = relaxation,
-            measurement_err = measurement_err,
-            use_info_form   = True,
-        )
+        if skip_joint:
+            # Data-prep-only mode: build everything the downstream consumers
+            # need (clean_list, eds_occ, prior_edp_3d, sat_ids, prior_P) but do
+            # NOT run the gridded-KF batch solve. Posterior is aliased to the
+            # prior so the result dict stays schema-complete without any
+            # assimilation. `x_top_tecu` is normally created inside
+            # assimilate(); prime it to the prior topside so the post-TEC block
+            # below computes post == prior instead of raising AttributeError.
+            print("  Skipping joint (batch) KF assimilation (skip_joint=True) — "
+                  "gridded KF not run; posterior aliased to prior.")
+            posterior_state_flat_jnt = np.asarray(prior_state_flat, dtype=float)
+            inverter_jnt.x_top_tecu = inverter_jnt.attrs["x_top_prior"][:, None]
+        else:
+            posterior_state_flat_jnt = inverter_jnt.assimilate(
+                obs             = obs_joint,
+                obs_operator    = H_joint.astype(np.float32),
+                relaxation      = relaxation,
+                measurement_err = measurement_err,
+                use_info_form   = True,
+            )
 
         # ── 11. Posterior TEC ─────────────────────────────────────────────────
         # Slice only grid and topside columns (bias columns don't map to TEC output).
@@ -1309,9 +1390,9 @@ def _plot_trim_diagnostic(
 
     fig, ax = plt.subplots(figsize=(9, 8), subplot_kw={"projection": proj})
     fig.suptitle(
-        f"Trim Diagnostic — {group_key}\n"
+        f"ROI Diagnostic — {group_key}\n"
         f"{n_kept} kept  ·  {n_removed} removed  "
-        f"(MAX_MESH_VERTICES = {MAX_MESH_VERTICES})",
+        f"(unified occultation+IGS bounding box, no vertex cap)",
         fontsize=11,
     )
 

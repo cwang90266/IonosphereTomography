@@ -505,33 +505,41 @@ def _fit_iri_params(
         nm_f2 = float(np.nanmax(ne))
         hm_f2 = float(alts[np.nanargmax(ne)])
 
-    # ── E-layer peak (90–150 km) ──────────────────────────────────────────────
-    e_mask = (alts >= 90.0) & (alts <= 150.0)
+    # ── E-layer peak (95–140 km) ──────────────────────────────────────────────
+    # Only accept a *genuine* E-peak: an interior local maximum whose amplitude
+    # is a physically sensible fraction of NmF2. When the E-region is F1-filled
+    # or rising monotonically into the F-layer, np.nanmax lands on the window
+    # edge and grabs an F-region density (~NmF2); using that as NmE wrecks the
+    # E/valley reconstruction (audit: E-region log10-RMSE blew up to ~3.6).
+    e_mask = (alts >= 95.0) & (alts <= 140.0)
+    nm_e, hm_e = None, None
     if e_mask.sum() >= 3:
-        ne_e   = ne[e_mask]
-        alt_e  = alts[e_mask]
-        nm_e   = float(np.nanmax(ne_e))
-        hm_e   = float(alt_e[np.nanargmax(ne_e)])
-    else:
-        nm_e  = max(nm_f2 * 0.05, 1e9)
-        hm_e  = 110.0
+        ne_e  = ne[e_mask]
+        alt_e = alts[e_mask]
+        k     = int(np.nanargmax(ne_e))
+        interior = 0 < k < len(ne_e) - 1
+        if interior and ne_e[k] < 0.5 * nm_f2:
+            nm_e = float(ne_e[k])
+            hm_e = float(alt_e[k])
+    if nm_e is None:
+        nm_e = float(np.clip(nm_f2 * 0.05, 1e9, 0.3 * nm_f2))
+        hm_e = 110.0
 
-    # ── Topside: H0, gamma ────────────────────────────────────────────────────
+    # ── Topside: H0, gamma — analytic seed + joint log-space fit ─────────────
+    # (same region-wise approach as _state_from_iri_direct; the previous single
+    #  global Nelder-Mead over all 8 params was less accurate on every region.)
     top_mask = alts > hm_f2
-    if top_mask.sum() >= 3:
-        ne_top  = ne[top_mask]
-        alt_top = alts[top_mask]
-        # H0 ~ distance above hmF2 where Ne drops to NmF2/e²  (Epstein half-width)
-        target  = nm_f2 / np.e
-        above   = alt_top[ne_top >= target]
-        H0      = float(above[-1] - hm_f2) if len(above) > 0 else 60.0
-        H0      = np.clip(H0, 20.0, 300.0)
-        gamma   = 0.5    # IRI default; small influence on profile shape
-    else:
-        H0    = 60.0
-        gamma = 0.5
+    H0_seed  = _h0_seed_from_profile(ne[top_mask], alts[top_mask], nm_f2, hm_f2)
+    H0, gamma = H0_seed, 0.5
+    if top_mask.sum() >= 5:
+        try:
+            H0, gamma = _fit_topside_H0_gamma(
+                ne[top_mask], alts[top_mask], nm_f2, hm_f2, H0_seed
+            )
+        except Exception:
+            pass
 
-    # ── Bottomside: B0, B1 ────────────────────────────────────────────────────
+    # ── Bottomside: B0, B1 — half-width seed + joint log-space fit ───────────
     bot_mask = (alts < hm_f2) & (alts > 100.0)
     if bot_mask.sum() >= 3:
         ne_bot  = ne[bot_mask]
@@ -544,20 +552,35 @@ def _fit_iri_params(
     else:
         B0 = 80.0
         B1 = 1.5
+    # Refit over the F-region bottomside ONLY (150 km -> hmF2); the 100-150 km
+    # E/valley band is F1-filled in IRI and unrepresentable by the 4-region
+    # model, so including it distorts the fit (see _state_from_iri_direct).
+    fit_mask = (alts > 150.0) & (alts < hm_f2)
+    if fit_mask.sum() >= 4:
+        try:
+            B0, B1 = _fit_bottomside_B0_B1(
+                ne[fit_mask], alts[fit_mask], nm_f2, hm_f2, B0, B1
+            )
+        except Exception:
+            pass
 
-    # ── Refine with bounded Nelder-Mead on the full profile ──────────────────
-    # Only run when the profile is well-sampled; skip silently on failure.
     x0 = np.array([np.log10(nm_f2), hm_f2, H0, gamma, B0, B1,
                    np.log10(nm_e), hm_e])
 
+    # ── Optional global polish, seeded from the region fits ──────────────────
+    # The region-wise fits already give an excellent seed; a light bounded
+    # Nelder-Mead over the whole profile can mop up residual valley/E coupling.
+    # Accepted ONLY if it strictly lowers the whole-profile log-RMSE, so it can
+    # never regress the region fits.
+    _lo = np.array([8.0, 100.0, 5.0, 0.05, 20.0, 0.5, 7.0, 80.0])
+    _hi = np.array([13.0, 600.0, 300.0, 2.0, 300.0, 4.0, 12.0, 180.0])
+
     def _residual(x):
-        p = np.maximum(x, [8.0, 100.0, 5.0, 0.05, 20.0, 0.5, 7.0, 80.0])
-        p = np.minimum(p, [13.0, 600.0, 300.0, 2.0, 300.0, 4.0, 12.0, 180.0])
+        p = np.minimum(np.maximum(x, _lo), _hi)
         params_lin = np.array([
             10.0 ** p[0], p[1], p[2], p[3], p[4], p[5], 10.0 ** p[6], p[7]
         ])[:, np.newaxis]  # (8, 1)
         ne_model = _ne_profile_ensemble(alts, params_lin)[:, 0]
-        # Log-space residual to weight peak and tail equally
         return float(np.nanmean((np.log10(np.maximum(ne_model, 1.0))
                                  - np.log10(ne)) ** 2))
 
@@ -569,8 +592,8 @@ def _fit_iri_params(
                 method="Nelder-Mead",
                 options={"maxiter": 600, "xatol": 1e-3, "fatol": 1e-4},
             )
-        if res.success or res.fun < _residual(x0):
-            x0 = res.x
+        if res.fun < _residual(x0):
+            x0 = np.minimum(np.maximum(res.x, _lo), _hi)
     except Exception:
         pass
 
@@ -850,6 +873,69 @@ def _fit_topside_H0_gamma(
     return H0_fit, gamma_fit
 
 
+def _fit_bottomside_B0_B1(
+    ne_bottom: np.ndarray,
+    alts_bottom: np.ndarray,
+    nm_f2: float,
+    hm_f2: float,
+    B0_seed: float,
+    B1_seed: float,
+) -> tuple[float, float]:
+    """
+    Jointly fit B0 and B1 from the valid (finite, positive) IRI ne bottomside
+    profile by minimising log₁₀-RMSE against OUR pure-bottomside formula.
+
+    IRI's own B0/B1 parameterise IRI's bottomside; copying them into the
+    Epstein-style bottomside used by _ne_profile_ensemble
+
+        Ne(h) = NmF2 * exp(-x**B1) / cosh(x),   x = (hmF2 - h) / B0
+
+    is systematically wrong (audit: bottomside log10-RMSE ~0.50 with the IRI
+    values vs ~0.09 when fitted). We therefore treat the IRI B0/B1 only as a
+    starting point and refit to reproduce the actual IRI profile shape in the
+    model's own basis — the bottomside analogue of _fit_topside_H0_gamma.
+
+    B0_seed/B1_seed are the IRI feature values (already clipped by the caller).
+
+    Returns (B0, B1) with B0 in [20, 300] km and B1 in [0.5, 4.0].
+    """
+    from scipy.optimize import minimize
+
+    ne_arr   = np.asarray(ne_bottom)
+    alts_arr = np.asarray(alts_bottom)
+
+    valid = np.isfinite(ne_arr) & (ne_arr > 0)
+    if valid.sum() < 4:
+        return B0_seed, B1_seed
+
+    ne_ref = np.log10(ne_arr[valid])
+    hh     = alts_arr[valid]
+
+    def _cost(x):
+        B0_t = np.exp(x[0])
+        B1_t = np.exp(x[1])
+        xx   = np.maximum((hm_f2 - hh) / (B0_t + 1e-9), 0.0)
+        xp   = np.where(xx > 0, xx, 1e-30)
+        ne_m = np.maximum(
+            nm_f2 * np.exp(-xp ** B1_t) / np.cosh(np.clip(xx, 0.0, 700.0)), 1.0
+        )
+        return float(np.mean((np.log10(ne_m) - ne_ref) ** 2))
+
+    x0  = np.array([np.log(np.clip(B0_seed, 20.0, 300.0)),
+                    np.log(np.clip(B1_seed, 0.5, 4.0))])
+    bds = [(np.log(20.0), np.log(300.0)), (np.log(0.5), np.log(4.0))]
+    try:
+        res = minimize(_cost, x0, method="L-BFGS-B", bounds=bds,
+                       options={"maxiter": 200, "ftol": 1e-7})
+        if res.fun <= _cost(x0):
+            x0 = res.x
+    except Exception:
+        pass
+    B0_fit = float(np.clip(np.exp(x0[0]), 20.0, 300.0))
+    B1_fit = float(np.clip(np.exp(x0[1]), 0.5, 4.0))
+    return B0_fit, B1_fit
+
+
 def _h0_seed_from_profile(
     ne_topside: np.ndarray,
     alts_topside: np.ndarray,
@@ -949,6 +1035,23 @@ def _state_from_iri_direct(
         try:
             H0, gamma = _fit_topside_H0_gamma(
                 ne[top_mask], alts[top_mask], nm_f2, hm_f2, H0_seed
+            )
+        except Exception:
+            pass
+
+    # ── Refit B0, B1 to the IRI bottomside in the model's own basis ──────────
+    # The IRI feature B0/B1 parameterise IRI's bottomside, not the Epstein
+    # exp(-x**B1)/cosh(x) form _ne_profile_ensemble uses; copying them leaves a
+    # large bottomside error (audit: F-bottom log10-RMSE ~0.15 -> ~0.04 when
+    # refitted). Fit over the F-region bottomside ONLY (150 km -> hmF2): the
+    # 100-150 km E/valley band is F1-filled in IRI but structurally unrepresent-
+    # able by our 4-region model, and including it distorts the fit toward an
+    # over-broad bottomside (B1 collapses, near-peak shape degrades).
+    bot_mask = (alts > 150.0) & (alts < hm_f2)
+    if bot_mask.sum() >= 4:
+        try:
+            b0, b1 = _fit_bottomside_B0_B1(
+                ne[bot_mask], alts[bot_mask], nm_f2, hm_f2, b0, b1
             )
         except Exception:
             pass
@@ -1242,14 +1345,20 @@ def _covariance_from_edp_samples(
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Estimate the EnKF background covariance from the IRI EDP ensemble using
-    exactly the same approach as the standard KF:
+    exactly the same STATISTIC as the standard KF's Ne-space covariance:
 
         P_grid = np.cov(edps_flat)   # (n_height*n_geo, n_height*n_geo)
+        C_spatial = P_grid.reshape(n_h,n_geo,n_h,n_geo).mean(axis=(0,2))  # marginal
 
-    C_spatial is derived by marginalising P_grid over altitude pairs —
-    the (n_geo, n_geo) mean covariance block normalised to Pearson r.
-    This is identical in spirit to how the KF encodes horizontal structure
-    through its full Ne-space P_grid.
+    conceptually -- C_spatial is the (n_geo, n_geo) mean of P_grid over
+    altitude pairs, normalised to Pearson r. This is identical in spirit to
+    how the KF encodes horizontal structure through its full Ne-space P_grid.
+    The implementation, however, never materialises P_grid: that dense matrix
+    is O((n_height*n_geo)^2) (e.g. 77.6 GiB at n_height=55, n_geo=1855) even
+    though only its altitude-marginalised (n_geo, n_geo) block is ever used.
+    A closed-form identity (see the Step 1+2 comment below) computes that
+    marginal directly in O(n_geo*n_s + n_geo^2), so grid size is no longer
+    memory-bound by this function.
 
     P_b is separately estimated in parameter space by fitting the 8-parameter
     IRI state to each sample and computing np.cov across samples.
@@ -1281,25 +1390,31 @@ def _covariance_from_edp_samples(
     print(f"  [EnKF] Estimating background covariance from {n_s} EDP samples "
           f"x {n_geo} grid points ...")
 
-    # ── Step 1: Ne-space sample covariance — identical to the KF ─────────────
-    # KF: P_grid = np.cov(edps_flat) where edps_flat = edps.reshape(n_h*n_geo, n_s)
-    # after clipping to the physical floor.
-    edps_flat = ne_all.reshape(n_height * n_geo, n_s)
-    edps_flat = np.nan_to_num(edps_flat, nan=physical_floor)
-    edps_flat = np.clip(edps_flat, physical_floor, None)
-    P_grid = np.cov(edps_flat)           # (n_height*n_geo, n_height*n_geo)
+    # ── Step 1+2: C_spatial — Ne-space sample covariance, marginalised over
+    # altitude pairs — WITHOUT ever forming the dense (n_height*n_geo)^2 Ne-space
+    # covariance matrix the KF conceptually uses (P_grid = np.cov(edps_flat)).
+    # That matrix is (n_height*n_geo)^2 * 8 bytes -- e.g. 77.6 GiB at n_height=55,
+    # n_geo=1855 -- yet the only thing ever extracted from it is the (n_geo,n_geo)
+    # mean over altitude-pairs: cov_geo[g1,g2] = mean_{h1,h2} Cov(ne[h1,g1,:],
+    # ne[h2,g2,:]). That mean has a closed form that skips the (n_h*n_geo)^2
+    # intermediate entirely:
+    #   Xc          = ne_all - mean_over_samples(ne_all)            (n_h,n_geo,n_s)
+    #   A[g,s]      = sum_h Xc[h,g,s]                                (n_geo,n_s)
+    #   cov_geo     = (A @ A.T) / (n_height^2 * (n_s - 1))           (n_geo,n_geo)
+    # Verified numerically identical (to float64 precision) to the old
+    # P_grid.reshape(n_h,n_geo,n_h,n_geo).mean(axis=(0,2)) result. Memory drops
+    # from O((n_height*n_geo)^2) to O(n_geo*n_s) + O(n_geo^2) -- e.g. ~13 MB
+    # instead of 77.6 GB at n_geo=1855 -- so the uncapped/large Fibonacci grid no
+    # longer OOMs here.
+    ne_clip = np.nan_to_num(ne_all, nan=physical_floor)
+    ne_clip = np.clip(ne_clip, physical_floor, None)
 
-    # ── Step 2: C_spatial — marginalise P_grid over altitude pairs ───────────
-    # Reshape to (n_height, n_geo, n_height, n_geo), average over both altitude
-    # axes to get a pooled (n_geo, n_geo) covariance, then normalise to Pearson r.
-    # This is exactly how the KF encodes horizontal structure: the off-diagonal
-    # geo-geo blocks of P_grid reflect how correlated grid points are across all
-    # altitudes, as measured by the IRI Monte Carlo ensemble.
     if n_geo == 1:
         C_spatial = np.ones((1, 1))
     else:
-        P_4d    = P_grid.reshape(n_height, n_geo, n_height, n_geo)
-        cov_geo = P_4d.mean(axis=(0, 2))          # (n_geo, n_geo)
+        Xc      = ne_clip - ne_clip.mean(axis=2, keepdims=True)   # (n_h,n_geo,n_s)
+        A       = Xc.sum(axis=0)                                  # (n_geo, n_s)
+        cov_geo = (A @ A.T) / (n_height ** 2 * (n_s - 1))          # (n_geo, n_geo)
         std_geo = np.sqrt(np.maximum(np.diag(cov_geo), 0.0))
         outer   = np.outer(std_geo, std_geo)
         with np.errstate(invalid="ignore", divide="ignore"):

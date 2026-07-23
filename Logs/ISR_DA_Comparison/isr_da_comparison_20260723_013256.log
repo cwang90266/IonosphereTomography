@@ -1,0 +1,229 @@
+[ISR-DA] Logging this run to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260723_013256.log
+[ISR-DA] Experiment config: run_gridded_kf=True ekf_grid=fibonacci ekf_grid_km=200.0 max_pts=off roi_gate=6000km filters=['gridded_kf', 'parametric_ekf']
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+[ISR-DA] Processing 1 day(s)
+  Tier 1  2025-09-22  instruments=['ESR', 'TRO']  podtc=yes
+
+[ISR-DA] Loading ISR EDP cache ...
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+         135834 profiles loaded, 85642 fitted (kindat 6400) used as ground truth
+
+======================================================================
+[Day] 2025-09-22  tier=1  instruments=['ESR', 'TRO']
+  Scanning 3713 files for metadata …
+  Found 3713 valid files across 571 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-09-22: 8 window(s) (>= 10 arcs each)
+  0125  centre=2025-09-22 01:25:00  n_occ=10  span=[2025-09-22 00:50:00 .. 2025-09-22 02:00:00)
+  0252  centre=2025-09-22 02:52:30  n_occ=25  span=[2025-09-22 02:00:00 .. 2025-09-22 03:45:00)
+  0447  centre=2025-09-22 04:47:30  n_occ=10  span=[2025-09-22 03:45:00 .. 2025-09-22 05:50:00)
+  0932  centre=2025-09-22 09:32:30  n_occ=14  span=[2025-09-22 08:55:00 .. 2025-09-22 10:10:00)
+  1115  centre=2025-09-22 11:15:00  n_occ=29  span=[2025-09-22 10:10:00 .. 2025-09-22 12:20:00)
+  1307  centre=2025-09-22 13:07:30  n_occ=16  span=[2025-09-22 12:20:00 .. 2025-09-22 13:55:00)
+  1555  centre=2025-09-22 15:55:00  n_occ=22  span=[2025-09-22 13:55:00 .. 2025-09-22 17:55:00)
+  2032  centre=2025-09-22 20:32:30  n_occ=19  span=[2025-09-22 17:55:00 .. 2025-09-22 23:10:00)
+  [IGS/TRO1] Loaded 204 arc(s) from cache.
+  [IGS/NYA1] Loaded 291 arc(s) from cache.
+  [IGS/KIR0] Loaded 322 arc(s) from cache.
+  [IGS/SOD3] Running TEC pipeline for 2025-09-22 …
+  [nav] Using multi-GNSS mixed nav: BRDC00IGS_R_20252650000_01D_MN.rnx.gz
+  [IGS/SOD3] Pipeline failed: cannot reindex or align along dimension 'sv' because the (pandas) index has duplicate values
+  [IGS/ALRT] Loaded 0 arc(s) from cache.
+  [IGS/SCOR] Loaded 388 arc(s) from cache.
+  [IGS/HOFN] Loaded 306 arc(s) from cache.
+  [IGS/REYK] Loaded 314 arc(s) from cache.
+  1 minima window(s), 1825 IGS arc(s)
+  Running 1 window(s) x 1 occultation-count bins x 3 obs modes x 2 filters ...
+  [diag] 1/1 window(s) have co-located ISR truth; dropped 0 ISR-blind window(s) (--all-windows to keep them).
+  [resume] 2025-09-22_1115_binall already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+
+[done] 0 new ISR comparison row(s) this run across 1 day(s)
+obs_mode   filter_type       n   delta_rmse m⁻³ (mean±std)  frac_improved   mean NmF2 err %   mean hmF2 err km
+--------------------------------------------------------------------------------------------------------------
+igs_only   gridded_kf       26   1.760e+10 ± 2.025e+10         26.9%             32.52              -7.31
+igs_only   parametric_ekf   24   2.292e+11 ± 4.236e+11          8.3%            232.58              -6.56
+ro_igs     gridded_kf       25   4.624e+09 ± 6.358e+10         52.0%              1.23             -38.58
+ro_igs     parametric_ekf   23   3.716e+10 ± 1.063e+11         13.0%            -12.98             -54.35
+ro_only    gridded_kf       26   4.560e+09 ± 6.254e+10         50.0%              0.77             -38.08
+ro_only    parametric_ekf   24  -4.528e+09 ± 6.612e+10         20.8%            -31.26             -63.77
+
+  foF2 (critical freq) — fraction of cases within threshold:
+  obs_mode   filter_type       n    prior|post @0.5MHz    prior|post @0.2MHz    prior|post @0.1MHz
+  igs_only   gridded_kf       26     88.2%|5.9%         88.2%|5.9%         47.1%|5.9%    
+  igs_only   parametric_ekf   24     53.3%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_igs     gridded_kf       25     87.5%|12.5%        37.5%|6.2%          0.0%|6.2%    
+  ro_igs     parametric_ekf   23     57.1%|28.6%         7.1%|7.1%          0.0%|7.1%    
+  ro_only    gridded_kf       26     88.2%|17.6%        35.3%|11.8%         0.0%|11.8%   
+  ro_only    parametric_ekf   24     60.0%|26.7%         0.0%|0.0%          0.0%|0.0%    
+
+  foE  (blanketing freq) — fraction of cases within threshold:
+  obs_mode   filter_type       n    prior|post @0.5MHz    prior|post @0.2MHz    prior|post @0.1MHz
+  igs_only   gridded_kf       26     47.1%|47.1%         0.0%|0.0%          0.0%|0.0%    
+  igs_only   parametric_ekf   24     73.3%|26.7%        33.3%|6.7%          0.0%|6.7%    
+  ro_igs     gridded_kf       25     43.8%|43.8%        37.5%|12.5%         0.0%|0.0%    
+  ro_igs     parametric_ekf   23     57.1%|0.0%         42.9%|0.0%         42.9%|0.0%    
+  ro_only    gridded_kf       26     47.1%|47.1%        41.2%|17.6%         0.0%|5.9%    
+  ro_only    parametric_ekf   24     53.3%|13.3%        46.7%|6.7%         40.0%|0.0%    
+
+  Profile fp RMSE — fraction of cases within threshold:
+  obs_mode   filter_type       n    prior|post @0.5MHz    prior|post @0.2MHz    prior|post @0.1MHz
+  igs_only   gridded_kf       26      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  igs_only   parametric_ekf   24      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_igs     gridded_kf       25      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_igs     parametric_ekf   23      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_only    gridded_kf       26      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_only    parametric_ekf   24      6.7%|0.0%          0.0%|0.0%          0.0%|0.0%    
+[ISR-DA] Frequency-domain figures saved to /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT
+  Saved: /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT/isr_convergence_vs_occ_count_below_peak_ne_mae.png
+  Saved: /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT/isr_convergence_vs_occ_count_foF2_error_mhz.png
+  Saved: /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT/isr_convergence_vs_occ_count_hf_reflection_height_error_km.png
+[ISR-DA] Log written to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260723_013256.log

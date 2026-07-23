@@ -1,0 +1,821 @@
+[ISR-DA] Logging this run to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260721_145133.log
+[ISR-DA] Output routed to /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL (metrics=isr_metrics_OUTPUT_FINAL.csv, manifest=progress_manifest_OUTPUT_FINAL.json)
+[ISR-DA] BEST-WINDOW-ONLY: one window per day (max occultations + ISR truth); occultation-count sweep runs on that window.
+[ISR-DA] Experiment config: run_gridded_kf=False ekf_grid=fibonacci ekf_grid_km=100.0 filters=['ekf_allfree', 'ekf_nmf2']
+[ISR] Processing 359 new file(s) …
+  MAD6400_2025-02-26_beata_40@uhfa.hdf5: 64 profiles
+  MAD6400_2025-02-26_beata_60@uhfa.hdf5: 199 profiles
+  MAD6400_2025-02-26_manda_60@uhf.hdf5: 31 profiles
+  MAD6400_2025-02-27_beata_60@uhfa.hdf5: 244 profiles
+  MAD6400_2025-03-03_beata_60@uhfa.hdf5: 882 profiles
+  MAD6400_2025-03-04_beata_60@uhfa.hdf5: 500 profiles
+  MAD6400_2025-03-15_beata_60@uhfa.hdf5: 239 profiles
+  MAD6400_2025-03-21_bella_60@uhf.hdf5: 196 profiles
+  MAD6400_2025-03-24_manda_60@uhf.hdf5: 246 profiles
+  MAD6400_2025-03-26_beata_60@uhfa.hdf5: 961 profiles
+  MAD6400_2025-03-27_beata_60@uhfa.hdf5: 1437 profiles
+  MAD6400_2025-03-28_beata_60@uhfa.hdf5: 1432 profiles
+  MAD6400_2025-03-29_beata_60@uhfa.hdf5: 1431 profiles
+  MAD6400_2025-03-30_beata_60@uhfa.hdf5: 1440 profiles
+  MAD6400_2025-03-31_beata_60@uhfa.hdf5: 480 profiles
+  MAD6400_2025-03-31_manda_60@uhf.hdf5: 238 profiles
+  MAD6400_2025-04-01_beata_60@uhfa.hdf5: 237 profiles
+  MAD6400_2025-04-02_beata_30@uhfa.hdf5: 438 profiles
+  MAD6400_2025-04-02_beata_60@uhfa.hdf5: 351 profiles
+  MAD6400_2025-04-03_beata_60@uhfa.hdf5: 360 profiles
+  MAD6400_2025-04-04_beata_60@uhfa.hdf5: 360 profiles
+  MAD6400_2025-04-05_beata_60@uhfa.hdf5: 356 profiles
+  MAD6400_2025-04-06_beata_60@uhfa.hdf5: 362 profiles
+  MAD6400_2025-04-07_beata_60@uhfa.hdf5: 60 profiles
+  MAD6400_2025-05-05_leo_120@uhf.hdf5: 244 profiles
+  MAD6400_2025-05-10_leo_120@uhf.hdf5: 241 profiles
+  MAD6400_2025-05-18_beata_60@uhfa.hdf5: 658 profiles
+  MAD6400_2025-05-19_beata_60@uhfa.hdf5: 1440 profiles
+  MAD6400_2025-05-20_beata_60@uhfa.hdf5: 956 profiles
+  MAD6400_2025-05-20_leo_120@uhf.hdf5: 240 profiles
+  MAD6400_2025-05-21_beata_60@uhfa.hdf5: 600 profiles
+  MAD6400_2025-07-28_beata_30@uhfa.hdf5: 25 profiles
+  MAD6400_2025-07-30_beata_60@uhfa.hdf5: 89 profiles
+  MAD6400_2025-08-01_beata_scan@uhfa.hdf5: 141 profiles
+  MAD6400_2025-08-02_beata_scan@uhfa.hdf5: 222 profiles
+  MAD6400_2025-08-03_beata_scan@uhfa.hdf5: 235 profiles
+  MAD6400_2025-08-04_beata_scan@uhfa.hdf5: 235 profiles
+  MAD6400_2025-08-05_beata_scan@uhfa.hdf5: 198 profiles
+  MAD6400_2025-08-06_beata_scan@uhfa.hdf5: 237 profiles
+  MAD6400_2025-08-07_beata_scan@uhfa.hdf5: 61 profiles
+  MAD6400_2025-08-12_beata_60@uhfa.hdf5: 350 profiles
+  MAD6400_2025-08-27_ipy_30@42m.hdf5: 2 profiles
+  MAD6400_2025-09-10_ipy_60@42m.hdf5: 62 profiles
+  MAD6400_2025-09-11_ipy_60@42m.hdf5: 80 profiles
+  MAD6400_2025-09-12_ipy_60@42m.hdf5: 195 profiles
+  MAD6400_2025-09-15_ipy_60@32mc.hdf5: 251 profiles
+  MAD6400_2025-09-15_ipy_60@42ma.hdf5: 251 profiles
+  MAD6400_2025-09-17_ipy_60@42m.hdf5: 274 profiles
+  MAD6400_2025-09-22_beata_60@uhfa.hdf5: 834 profiles
+  MAD6400_2025-09-22_ipy_60@42m.hdf5: 925 profiles
+  MAD6400_2025-09-23_beata_60@uhfa.hdf5: 1436 profiles
+  MAD6400_2025-09-23_ipy_60@42m.hdf5: 1440 profiles
+  MAD6400_2025-09-24_beata_60@uhfa.hdf5: 1114 profiles
+  MAD6400_2025-09-24_ipy_60@42m.hdf5: 1438 profiles
+  MAD6400_2025-09-25_beata_60@uhfa.hdf5: 1432 profiles
+  MAD6400_2025-09-25_ipy_60@42m.hdf5: 1440 profiles
+  MAD6400_2025-09-26_beata_60@uhfa.hdf5: 600 profiles
+  MAD6400_2025-09-26_ipy_60@42m.hdf5: 598 profiles
+  MAD6400_2025-09-26_othia_60@42m.hdf5: 96 profiles
+  MAD6400_2025-09-30_ipy_60@42m.hdf5: 290 profiles
+  MAD6400_2025-09-30_manda_60@42m.hdf5: 9 profiles
+  MAD6400_2025-09-30_othia_60@42m.hdf5: 14 profiles
+  MAD6400_2025-10-13_ipy_60@42m.hdf5: 79 profiles
+  MAD6400_2025-10-14_beata_60@uhfa.hdf5: 695 profiles
+  MAD6400_2025-10-14_ipy_30@42m.hdf5: 472 profiles
+  MAD6400_2025-10-14_ipy_60@42m.hdf5: 660 profiles
+  MAD6400_2025-10-15_beata_60@uhfa.hdf5: 1378 profiles
+  MAD6400_2025-10-15_ipy_60@42m.hdf5: 1440 profiles
+  MAD6400_2025-10-16_beata_60@uhfa.hdf5: 1425 profiles
+  MAD6400_2025-10-16_ipy_60@42m.hdf5: 1440 profiles
+  MAD6400_2025-10-17_beata_60@uhfa.hdf5: 1319 profiles
+  MAD6400_2025-10-17_ipy_60@42m.hdf5: 1439 profiles
+  MAD6400_2025-10-18_ipy_60@42m.hdf5: 1436 profiles
+  MAD6400_2025-10-19_ipy_60@42m.hdf5: 931 profiles
+  MAD6400_2025-11-03_leo_120@uhf.hdf5: 480 profiles
+  MAD6400_2025-11-04_beata_60@uhfa.hdf5: 237 profiles
+  MAD6400_2025-11-04_ipy_60@42m.hdf5: 250 profiles
+  MAD6400_2025-11-04_leo_120@uhf.hdf5: 285 profiles
+  MAD6400_2025-11-05_beata_scan@uhfa.hdf5: 340 profiles
+  MAD6400_2025-11-06_beata_60@uhfa.hdf5: 241 profiles
+  MAD6400_2025-11-06_beata_scan@uhfa.hdf5: 103 profiles
+  MAD6400_2025-11-06_ipy_60@42m.hdf5: 870 profiles
+  MAD6400_2025-11-07_ipy_60@42m.hdf5: 827 profiles
+  MAD6400_2025-11-10_beata_60@uhfa.hdf5: 360 profiles
+  MAD6400_2025-11-11_beata_60@uhfa.hdf5: 412 profiles
+  MAD6400_2025-11-11_ipy_60@42m.hdf5: 280 profiles
+  MAD6400_2025-11-12_beata_60@uhfa.hdf5: 565 profiles
+  MAD6400_2025-11-12_ipy_60@42m.hdf5: 1440 profiles
+  MAD6400_2025-11-13_beata_60@uhfa.hdf5: 337 profiles
+  MAD6400_2025-11-13_ipy_60@42m.hdf5: 1440 profiles
+  MAD6400_2025-11-14_ipy_60@42m.hdf5: 650 profiles
+  MAD6400_2025-11-15_ipy_60@42m.hdf5: 324 profiles
+  MAD6400_2025-11-16_ipy_60@42m.hdf5: 153 profiles
+  MAD6400_2025-11-16_othia_60@42m.hdf5: 174 profiles
+  MAD6400_2025-11-17_ipy_60@42m.hdf5: 321 profiles
+  MAD6400_2025-11-18_beata_60@uhfa.hdf5: 96 profiles
+  MAD6400_2025-11-18_beata_scan@uhfa.hdf5: 241 profiles
+  MAD6400_2025-11-18_ipy_60@42m.hdf5: 370 profiles
+  MAD6400_2025-11-18_othia_60@42m.hdf5: 159 profiles
+  MAD6400_2025-11-19_othia_60@42m.hdf5: 318 profiles
+  MAD6400_2025-11-20_beata_scan@uhfa.hdf5: 121 profiles
+  MAD6400_2025-11-20_othia_60@42m.hdf5: 316 profiles
+  MAD6400_2025-11-21_beata_scan@uhfa.hdf5: 41 profiles
+  MAD6400_2025-11-21_ipy_60@42m.hdf5: 90 profiles
+  MAD6400_2025-11-21_othia_60@42m.hdf5: 316 profiles
+  MAD6400_2025-11-22_ipy_60@42m.hdf5: 271 profiles
+  MAD6400_2025-11-22_othia_60@42m.hdf5: 32 profiles
+  MAD6400_2025-11-23_beata_scan@uhfa.hdf5: 160 profiles
+  MAD6400_2025-11-23_othia_60@42m.hdf5: 372 profiles
+  MAD6400_2025-11-24_beata_scan@uhfa.hdf5: 636 profiles
+  MAD6400_2025-11-24_ipy_60@42m.hdf5: 1010 profiles
+  MAD6400_2025-11-25_beata_scan@uhfa.hdf5: 1009 profiles
+  MAD6400_2025-11-25_ipy_60@42m.hdf5: 1440 profiles
+  MAD6400_2025-11-26_beata_scan@uhfa.hdf5: 1005 profiles
+  MAD6400_2025-11-26_ipy_60@42m.hdf5: 1430 profiles
+  MAD6400_2025-11-27_beata_scan@uhfa.hdf5: 1009 profiles
+  MAD6400_2025-11-27_ipy_60@42m.hdf5: 1430 profiles
+  MAD6400_2025-11-28_beata_scan@uhfa.hdf5: 1005 profiles
+  MAD6400_2025-11-28_ipy_60@42m.hdf5: 1142 profiles
+  MAD6400_2025-11-29_beata_scan@uhfa.hdf5: 356 profiles
+  MAD6400_2025-11-29_ipy_60@42m.hdf5: 480 profiles
+  MAD6400_2025-12-07_beata_60@uhfa.hdf5: 240 profiles
+  MAD6400_2025-12-08_beata_60@uhfa.hdf5: 301 profiles
+  MAD6400_2025-12-08_ipy_60@42m.hdf5: 971 profiles
+  MAD6400_2025-12-09_beata_60@uhfa.hdf5: 360 profiles
+  MAD6400_2025-12-09_ipy_60@42m.hdf5: 1074 profiles
+  MAD6400_2025-12-09_othia_60@42m.hdf5: 359 profiles
+  MAD6400_2025-12-10_ipy_60@42m.hdf5: 451 profiles
+  MAD6400_2025-12-12_ipy_60@42m.hdf5: 27 profiles
+  MAD6400_2025-12-13_manda_60@uhf.hdf5: 357 profiles
+  MAD6400_2025-12-14_beata_scan@uhfa.hdf5: 291 profiles
+  MAD6400_2025-12-14_ipy_60@42m.hdf5: 422 profiles
+  MAD6400_2025-12-14_manda_60@uhf.hdf5: 1082 profiles
+  MAD6400_2025-12-15_beata_60@uhfa.hdf5: 240 profiles
+  MAD6400_2025-12-15_beata_scan@uhfa.hdf5: 513 profiles
+  MAD6400_2025-12-15_ipy_60@42m.hdf5: 1200 profiles
+  MAD6400_2025-12-16_beata_60@uhfa.hdf5: 349 profiles
+  MAD6400_2025-12-16_beata_scan@uhfa.hdf5: 468 profiles
+  MAD6400_2025-12-16_ipy_60@42m.hdf5: 961 profiles
+  MAD6400_2025-12-17_beata_60@uhfa.hdf5: 239 profiles
+  MAD6400_2025-12-17_beata_scan@uhfa.hdf5: 530 profiles
+  MAD6400_2025-12-17_ipy_60@42m.hdf5: 540 profiles
+  MAD6400_2025-12-18_beata_60@uhfa.hdf5: 292 profiles
+  MAD6400_2025-12-18_beata_scan@uhfa.hdf5: 472 profiles
+  MAD6400_2025-12-18_ipy_60@42m.hdf5: 55 profiles
+  MAD6400_2025-12-19_beata_scan@uhfa.hdf5: 534 profiles
+  MAD6400_2025-12-20_beata_scan@uhfa.hdf5: 237 profiles
+  MAD6400_2026-01-06_beata_60@uhfa.hdf5: 239 profiles
+  MAD6400_2026-01-13_beata_60@uhfa.hdf5: 240 profiles
+  MAD6400_2026-01-13_othia_60@42m.hdf5: 120 profiles
+  MAD6400_2026-01-14_othia_60@42m.hdf5: 88 profiles
+  MAD6400_2026-01-15_othia_60@42m.hdf5: 121 profiles
+  MAD6400_2026-01-16_othia_60@42m.hdf5: 114 profiles
+  MAD6400_2026-01-20_ipy_60@42m.hdf5: 419 profiles
+  MAD6400_2026-01-20_manda_60@42m.hdf5: 55 profiles
+  MAD6400_2026-01-20_othia_60@42m.hdf5: 239 profiles
+  MAD6400_2026-01-21_othia_60@42m.hdf5: 357 profiles
+  MAD6400_2026-01-22_beata_60@uhfa.hdf5: 240 profiles
+  MAD6400_2026-01-29_beata_60@uhfa.hdf5: 240 profiles
+  MAD6400_2026-02-02_beata_60@uhfa.hdf5: 284 profiles
+  MAD6400_2026-02-02_ipy_60@42m.hdf5: 13 profiles
+  MAD6400_2026-02-02_manda_60@42m.hdf5: 69 profiles
+  MAD6400_2026-02-03_ipy_60@42m.hdf5: 9 profiles
+  MAD6400_2026-02-03_othia_60@42m.hdf5: 109 profiles
+  MAD6400_2026-02-05_beata_60@uhfa.hdf5: 242 profiles
+  MAD6400_2026-02-09_leo_60@42m.hdf5: 128 profiles
+  MAD6400_2026-02-12_beata_60@uhfa.hdf5: 219 profiles
+  MAD6400_2026-02-12_manda_60@42m.hdf5: 137 profiles
+  MAD6400_2026-02-17_beata_60@uhfa.hdf5: 240 profiles
+  MAD6300_2025-02-26_beata_40@uhfa.hdf5: 64 profiles
+  MAD6300_2025-02-26_beata_60@uhfa.hdf5: 196 profiles
+  MAD6300_2025-02-26_manda_60@uhf.hdf5: 31 profiles
+  MAD6300_2025-02-27_beata_60@uhfa.hdf5: 241 profiles
+  MAD6300_2025-03-03_beata_60@uhfa.hdf5: 874 profiles
+  MAD6300_2025-03-04_beata_60@uhfa.hdf5: 497 profiles
+  MAD6300_2025-03-15_beata_60@uhfa.hdf5: 238 profiles
+  MAD6300_2025-03-21_bella_60@uhf.hdf5: 196 profiles
+  MAD6300_2025-03-24_manda_60@uhf.hdf5: 246 profiles
+  MAD6300_2025-03-26_beata_60@uhfa.hdf5: 956 profiles
+  MAD6300_2025-03-27_beata_60@uhfa.hdf5: 1424 profiles
+  MAD6300_2025-03-28_beata_60@uhfa.hdf5: 1421 profiles
+  MAD6300_2025-03-29_beata_60@uhfa.hdf5: 1424 profiles
+  MAD6300_2025-03-30_beata_60@uhfa.hdf5: 1432 profiles
+  MAD6300_2025-03-31_beata_60@uhfa.hdf5: 478 profiles
+  MAD6300_2025-03-31_manda_60@uhf.hdf5: 238 profiles
+  MAD6300_2025-04-01_beata_60@uhfa.hdf5: 237 profiles
+  MAD6300_2025-04-02_beata_30@uhfa.hdf5: 434 profiles
+  MAD6300_2025-04-02_beata_60@uhfa.hdf5: 349 profiles
+  MAD6300_2025-04-03_beata_60@uhfa.hdf5: 358 profiles
+  MAD6300_2025-04-04_beata_60@uhfa.hdf5: 358 profiles
+  MAD6300_2025-04-05_beata_60@uhfa.hdf5: 353 profiles
+  MAD6300_2025-04-06_beata_60@uhfa.hdf5: 360 profiles
+  MAD6300_2025-04-07_beata_60@uhfa.hdf5: 60 profiles
+  MAD6300_2025-05-05_leo_120@uhf.hdf5: 244 profiles
+  MAD6300_2025-05-10_leo_120@uhf.hdf5: 241 profiles
+  MAD6300_2025-05-18_beata_60@uhfa.hdf5: 653 profiles
+  MAD6300_2025-05-19_beata_60@uhfa.hdf5: 1424 profiles
+  MAD6300_2025-05-20_beata_60@uhfa.hdf5: 946 profiles
+  MAD6300_2025-05-20_leo_120@uhf.hdf5: 240 profiles
+  MAD6300_2025-05-21_beata_60@uhfa.hdf5: 597 profiles
+  MAD6300_2025-07-28_beata_30@uhfa.hdf5: 25 profiles
+  MAD6300_2025-07-30_beata_60@uhfa.hdf5: 88 profiles
+  MAD6300_2025-08-01_beata_scan@uhfa.hdf5: 139 profiles
+  MAD6300_2025-08-02_beata_scan@uhfa.hdf5: 222 profiles
+  MAD6300_2025-08-03_beata_scan@uhfa.hdf5: 235 profiles
+  MAD6300_2025-08-04_beata_scan@uhfa.hdf5: 234 profiles
+  MAD6300_2025-08-05_beata_scan@uhfa.hdf5: 198 profiles
+  MAD6300_2025-08-06_beata_scan@uhfa.hdf5: 237 profiles
+  MAD6300_2025-08-07_beata_scan@uhfa.hdf5: 61 profiles
+  MAD6300_2025-08-12_beata_60@uhfa.hdf5: 349 profiles
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_beata_60@uhfa.hdf5: 828 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_beata_60@uhfa.hdf5: 1424 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_beata_60@uhfa.hdf5: 1109 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_beata_60@uhfa.hdf5: 1422 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_beata_60@uhfa.hdf5: 598 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_beata_60@uhfa.hdf5: 692 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_beata_60@uhfa.hdf5: 1372 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_beata_60@uhfa.hdf5: 1417 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_beata_60@uhfa.hdf5: 1311 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-03_leo_120@uhf.hdf5: 480 profiles
+  MAD6300_2025-11-04_beata_60@uhfa.hdf5: 237 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_leo_120@uhf.hdf5: 285 profiles
+  MAD6300_2025-11-05_beata_scan@uhfa.hdf5: 340 profiles
+  MAD6300_2025-11-06_beata_60@uhfa.hdf5: 240 profiles
+  MAD6300_2025-11-06_beata_scan@uhfa.hdf5: 102 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-10_beata_60@uhfa.hdf5: 357 profiles
+  MAD6300_2025-11-11_beata_60@uhfa.hdf5: 409 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_beata_60@uhfa.hdf5: 561 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_beata_60@uhfa.hdf5: 334 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_beata_60@uhfa.hdf5: 95 profiles
+  MAD6300_2025-11-18_beata_scan@uhfa.hdf5: 239 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_beata_scan@uhfa.hdf5: 120 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_beata_scan@uhfa.hdf5: 39 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_beata_scan@uhfa.hdf5: 159 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_beata_scan@uhfa.hdf5: 632 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_beata_scan@uhfa.hdf5: 1004 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_beata_scan@uhfa.hdf5: 1000 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_beata_scan@uhfa.hdf5: 1007 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_beata_scan@uhfa.hdf5: 1001 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_beata_scan@uhfa.hdf5: 355 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-07_beata_60@uhfa.hdf5: 238 profiles
+  MAD6300_2025-12-08_beata_60@uhfa.hdf5: 300 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_beata_60@uhfa.hdf5: 356 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-13_manda_60@uhf.hdf5: 357 profiles
+  MAD6300_2025-12-14_beata_scan@uhfa.hdf5: 290 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_manda_60@uhf.hdf5: 1082 profiles
+  MAD6300_2025-12-15_beata_60@uhfa.hdf5: 237 profiles
+  MAD6300_2025-12-15_beata_scan@uhfa.hdf5: 509 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_beata_60@uhfa.hdf5: 344 profiles
+  MAD6300_2025-12-16_beata_scan@uhfa.hdf5: 468 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_beata_60@uhfa.hdf5: 238 profiles
+  MAD6300_2025-12-17_beata_scan@uhfa.hdf5: 527 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_beata_60@uhfa.hdf5: 291 profiles
+  MAD6300_2025-12-18_beata_scan@uhfa.hdf5: 471 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-19_beata_scan@uhfa.hdf5: 531 profiles
+  MAD6300_2025-12-20_beata_scan@uhfa.hdf5: 236 profiles
+  MAD6300_2026-01-06_beata_60@uhfa.hdf5: 236 profiles
+  MAD6300_2026-01-13_beata_60@uhfa.hdf5: 238 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-22_beata_60@uhfa.hdf5: 239 profiles
+  MAD6300_2026-01-29_beata_60@uhfa.hdf5: 240 profiles
+  MAD6300_2026-02-02_beata_60@uhfa.hdf5: 283 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-05_beata_60@uhfa.hdf5: 240 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_beata_60@uhfa.hdf5: 218 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-17_beata_60@uhfa.hdf5: 240 profiles
+  jro20250121_130001.hdf5: 165 profiles
+  jro20250122_050005.hdf5: 283 profiles
+  jro20250123_050003.hdf5: 265 profiles
+  jro20250124_050003.hdf5: 275 profiles
+  jro20250125_050004.hdf5: 270 profiles
+  jro20250126_050005.hdf5: 280 profiles
+  jro20250127_050003.hdf5: 269 profiles
+  jro20250128_050003.hdf5: 243 profiles
+  jro20250129_050004.hdf5: 271 profiles
+  jro20250130_050005.hdf5: 286 profiles
+  jro20250131_050005.hdf5: 85 profiles
+  jro20250516_132000.hdf5: 154 profiles
+  jro20250517_050004.hdf5: 266 profiles
+  jro20250518_050004.hdf5: 255 profiles
+  jro20250519_050005.hdf5: 89 profiles
+  jro20260526_130455.hdf5: 72 profiles
+  jro20260527_050341.hdf5: 116 profiles
+  jro20260528_101613.hdf5: 94 profiles
+  jro20260529_050413.hdf5: 119 profiles
+  jro20260530_050413.hdf5: 119 profiles
+  jro20260531_050413.hdf5: 40 profiles
+[ISR] Cache updated → /home/austinhunter/IonosphereTomography/Data/ISR_Data/esr_edp_cache.pkl (135834 total profiles)
+[ISR-DA] Processing 3 day(s)
+  Tier 2  2025-08-27  instruments=['ESR']  podtc=yes
+  Tier 1  2025-09-22  instruments=['ESR', 'TRO']  podtc=yes
+  Tier 1  2025-10-17  instruments=['ESR', 'TRO']  podtc=yes
+
+[ISR-DA] Loading ISR EDP cache ...
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+         135834 profiles loaded, 85642 fitted (kindat 6400) used as ground truth
+
+======================================================================
+[Day] 2025-08-27  tier=2  instruments=['ESR']
+  Scanning 9819 files for metadata …
+  Found 9819 valid files across 755 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-08-27: 15 window(s) (>= 10 arcs each)
+  0100  centre=2025-08-27 01:00:00  n_occ=50  span=[2025-08-27 00:00:00 .. 2025-08-27 02:00:00)
+  0247  centre=2025-08-27 02:47:30  n_occ=39  span=[2025-08-27 02:00:00 .. 2025-08-27 03:35:00)
+  0422  centre=2025-08-27 04:22:30  n_occ=49  span=[2025-08-27 03:35:00 .. 2025-08-27 05:10:00)
+  0557  centre=2025-08-27 05:57:30  n_occ=56  span=[2025-08-27 05:10:00 .. 2025-08-27 06:45:00)
+  0735  centre=2025-08-27 07:35:00  n_occ=82  span=[2025-08-27 06:45:00 .. 2025-08-27 08:25:00)
+  0912  centre=2025-08-27 09:12:30  n_occ=121  span=[2025-08-27 08:25:00 .. 2025-08-27 10:00:00)
+  1050  centre=2025-08-27 10:50:00  n_occ=98  span=[2025-08-27 10:00:00 .. 2025-08-27 11:40:00)
+  1227  centre=2025-08-27 12:27:30  n_occ=62  span=[2025-08-27 11:40:00 .. 2025-08-27 13:15:00)
+  1400  centre=2025-08-27 14:00:00  n_occ=60  span=[2025-08-27 13:15:00 .. 2025-08-27 14:45:00)
+  1535  centre=2025-08-27 15:35:00  n_occ=63  span=[2025-08-27 14:45:00 .. 2025-08-27 16:25:00)
+  1717  centre=2025-08-27 17:17:30  n_occ=44  span=[2025-08-27 16:25:00 .. 2025-08-27 18:10:00)
+  1857  centre=2025-08-27 18:57:30  n_occ=46  span=[2025-08-27 18:10:00 .. 2025-08-27 19:45:00)
+  2025  centre=2025-08-27 20:25:00  n_occ=65  span=[2025-08-27 19:45:00 .. 2025-08-27 21:05:00)
+  2200  centre=2025-08-27 22:00:00  n_occ=98  span=[2025-08-27 21:05:00 .. 2025-08-27 22:55:00)
+  2327  centre=2025-08-27 23:27:30  n_occ=60  span=[2025-08-27 22:55:00 .. 2025-08-28 00:00:00)
+  [IGS/TRO1] Loaded 226 arc(s) from cache.
+  [IGS/NYA1] Loaded 325 arc(s) from cache.
+  [IGS/KIR0] Loaded 289 arc(s) from cache.
+  [IGS/SOD3] Running TEC pipeline for 2025-08-27 …
+  [nav] Using multi-GNSS mixed nav: BRDC00IGS_R_20252390000_01D_MN.rnx.gz
+  [IGS/SOD3] Pipeline failed: cannot reindex or align along dimension 'sv' because the (pandas) index has duplicate values
+  [IGS/ALRT] Loaded 0 arc(s) from cache.
+  [IGS/SCOR] Loaded 379 arc(s) from cache.
+  [IGS/HOFN] Loaded 260 arc(s) from cache.
+  [IGS/REYK] Loaded 267 arc(s) from cache.
+  15 minima window(s), 1746 IGS arc(s)
+  Running 15 window(s) x 7 occultation-count bins x 3 obs modes x 2 filters ...
+  [diag] BEST-WINDOW-ONLY: 2025-08-27 -> window 1227 (n_occ=62, n_isr_edp=2) selected from 1 ISR-truth window(s).
+EDPS: (55, 1650, 50), N_geo: 1650
+EDPS: (55, 1650, 50), N_geo: 1650
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | ro_only   | gridded_kf    
+    [diag] 2025-08-27_1227 | bin=all | ro_only   | gridded_kf     : RUNNING    (force=True, cached=True) ...
+
+────────────────────────────────────────────────────────────
+  Group : 2025-08-27_1227
+  Window: 2025-08-27_1227  |  Region: POLAR_N  |  62 occultation(s)
+────────────────────────────────────────────────────────────
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.17.0019.R24.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.17.0019.G31.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.20.0016.C25.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.21.0015.C34.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.23.0013.R05.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.23.0013.C32.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.26.0010.R14.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.33.0019.C25.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.34.0018.R24.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.37.0015.C34.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.38.0014.R14.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.38.0014.E24.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.39.0013.E03.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.40.0013.R05.01_0000.0001_nc — parse returned None
+  Parsed 48/62 files successfully.
+    [podTc2] GN04 12:35 — 711 valid rays → decimated to 178 (stride 4)
+    [podTc2] GN04 12:35 — 621 valid rays → decimated to 156 (stride 4)
+    [podTc2] GN04 12:35 — 473 valid rays → decimated to 158 (stride 3)
+    [podTc2] GN04 12:35 — 406 valid rays → decimated to 136 (stride 3)
+    [podTc2] GN04 12:36 — 431 valid rays → decimated to 144 (stride 3)
+    [podTc2] GN04 12:36 — 322 valid rays → decimated to 161 (stride 2)
+    [podTc2] GN04 12:37 — 460 valid rays → decimated to 154 (stride 3)
+    [podTc2] GN04 12:36 — 282 valid rays → decimated to 141 (stride 2)
+    [podTc2] GN04 12:36 — 324 valid rays → decimated to 162 (stride 2)
+    [podTc2] GN04 12:36 — 368 valid rays → decimated to 184 (stride 2)
+    [podTc2] GN04 12:36 — 230 valid rays → decimated to 115 (stride 2)
+    [podTc2] GN04 12:35 — 325 valid rays → decimated to 163 (stride 2)
+    [podTc2] GN04 12:35 — 416 valid rays → decimated to 139 (stride 3)
+    [podTc2] GN04 12:36 — 126 valid rays → decimated to 126 (stride 1)
+    [podTc2] YM08 12:19 — 418 valid rays → decimated to 140 (stride 3)
+    [podTc2] GN04 12:41 — 384 valid rays → decimated to 192 (stride 2)
+    [podTc2] GN05 12:50 — 438 valid rays → decimated to 146 (stride 3)
+    [podTc2] GN04 12:36 — 56 valid rays → decimated to 56 (stride 1)
+    [podTc2] YM08 12:24 — 437 valid rays → decimated to 146 (stride 3)
+    [podTc2] GN04 12:44 — 438 valid rays → decimated to 146 (stride 3)
+    [podTc2] GN05 12:52 — 417 valid rays → decimated to 139 (stride 3)
+    [podTc2] GN04 12:44 — 543 valid rays → decimated to 181 (stride 3)
+    [podTc2] GN04 12:26 — 482 valid rays → decimated to 161 (stride 3)
+    [podTc2] GN04 12:26 — 482 valid rays → decimated to 161 (stride 3)
+    [podTc2] GN05 12:52 — 270 valid rays → decimated to 135 (stride 2)
+    [podTc2] GN05 12:53 — 306 valid rays → decimated to 153 (stride 2)
+    [podTc2] GN05 12:52 — 189 valid rays → decimated to 189 (stride 1)
+    [podTc2] GN04 12:27 — 442 valid rays → decimated to 148 (stride 3)
+    [podTc2] GN04 12:27 — 442 valid rays → decimated to 148 (stride 3)
+    [podTc2] YM08 12:26 — 252 valid rays → decimated to 126 (stride 2)
+    [podTc2] YM08 12:27 — 411 valid rays → decimated to 137 (stride 3)
+    [podTc2] YM08 12:28 — 404 valid rays → decimated to 135 (stride 3)
+    [podTc2] GN05 12:50 — 394 valid rays → decimated to 197 (stride 2)
+    [podTc2] YM08 12:28 — 784 valid rays → decimated to 196 (stride 4)
+    [podTc2] GN04 12:30 — 449 valid rays → decimated to 150 (stride 3)
+    [podTc2] GN04 12:31 — 408 valid rays → decimated to 136 (stride 3)
+    [podTc2] GN05 12:52 — 57 valid rays → decimated to 57 (stride 1)
+    [podTc2] GN04 12:31 — 499 valid rays → decimated to 167 (stride 3)
+    [skip] GN05 12:53 — only 9 valid rays
+    [podTc2] GN05 12:52 — 102 valid rays → decimated to 102 (stride 1)
+    [podTc2] GN04 12:33 — 339 valid rays → decimated to 170 (stride 2)
+    [podTc2] GN04 12:34 — 452 valid rays → decimated to 151 (stride 3)
+    [podTc2] GN04 12:35 — 1821 valid rays → decimated to 183 (stride 10)
+    [podTc2] GN05 12:42 — 469 valid rays → decimated to 157 (stride 3)
+    [podTc2] GN05 12:44 — 462 valid rays → decimated to 154 (stride 3)
+    [podTc2] GN05 12:44 — 431 valid rays → decimated to 144 (stride 3)
+    [podTc2] GN05 12:52 — 88 valid rays → decimated to 88 (stride 1)
+    [podTc2] GN05 12:44 — 396 valid rays → decimated to 198 (stride 2)
+  Bbox lat [17.2, 90.0]  lon [-180.0, 180.0]  |  union vertices: 190
+  Final group: 47 occultation(s), 190 union-mesh vertices
+  Saved trim diagnostic → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-08-27_1227/bin_all/ro_only/group_2025-08-27_1227_trim.png
+  -> Building H matrices (7006 rays across 47 arc(s), single parallel sweep) …
+  -> Building H matrices:    700/7006 rays ( 10.0%)
+  -> Building H matrices:   1400/7006 rays ( 20.0%)
+  -> Building H matrices:   2100/7006 rays ( 30.0%)
+  -> Building H matrices:   2800/7006 rays ( 40.0%)
+  -> Building H matrices:   3500/7006 rays ( 50.0%)
+  -> Building H matrices:   4200/7006 rays ( 59.9%)
+  -> Building H matrices:   4900/7006 rays ( 69.9%)
+  -> Building H matrices:   5600/7006 rays ( 79.9%)
+  -> Building H matrices:   6300/7006 rays ( 89.9%)
+  -> Building H matrices:   7000/7006 rays ( 99.9%)
+  -> Building H matrices:   7006/7006 rays (100.0%)
+  Combined H shape : (7006, 10640)  (total rays = 7006)
+  Skipping sequential KF assimilation (run_sequential=False).
+  Running joint (batch) KF assimilation …
+  Skipping joint (batch) KF assimilation (skip_joint=True) — gridded KF not run; posterior aliased to prior.
+  Prior RMSE  : 36.374 TECU
+  Post  RMSE  : 36.374 TECU
+    [Abel] GN04 12:35: NmF2=3.73e+11 m⁻³  hmF2=356.6 km
+    [Abel] GN04 12:35: NmF2=3.73e+11 m⁻³  hmF2=356.6 km
+    [Abel] GN04 12:35: NmF2=5.33e+11 m⁻³  hmF2=294.9 km
+    [Abel] GN04 12:35: NmF2=5.33e+11 m⁻³  hmF2=294.9 km
+    [Abel] GN04 12:36: NmF2=4.89e+11 m⁻³  hmF2=293.1 km
+    [Abel] GN04 12:36: NmF2=4.89e+11 m⁻³  hmF2=293.1 km
+    [Abel] GN04 12:37: NmF2=4.58e+11 m⁻³  hmF2=306.6 km
+    [Abel] GN04 12:36: NmF2=4.01e+11 m⁻³  hmF2=355.3 km
+    [Abel] GN04 12:36: NmF2=5.16e+11 m⁻³  hmF2=293.1 km
+    [Abel] GN04 12:36: NmF2=5.16e+11 m⁻³  hmF2=293.1 km
+    [Abel] GN04 12:36: NmF2=2.35e+11 m⁻³  hmF2=536.6 km
+    [Abel] GN04 12:35: NmF2=4.02e+11 m⁻³  hmF2=285.6 km
+    [Abel] GN04 12:35: NmF2=4.02e+11 m⁻³  hmF2=285.6 km
+    [Abel] GN04 12:36: NmF2=1.56e+11 m⁻³  hmF2=573.2 km
+    [Abel] YM08 12:19: NmF2=4.56e+11 m⁻³  hmF2=278.7 km
+    [Abel] GN04 12:41: NmF2=4.47e+11 m⁻³  hmF2=322.9 km
+    [Abel] GN05 12:50: NmF2=4.41e+11 m⁻³  hmF2=324.4 km
+    [Abel] GN04 12:36: NmF2=1.20e+11 m⁻³  hmF2=577.6 km
+    [Abel] YM08 12:24: NmF2=3.34e+11 m⁻³  hmF2=310.3 km
+    [Abel] GN04 12:44: NmF2=5.78e+11 m⁻³  hmF2=263.7 km
+    [Abel] GN05 12:52: NmF2=4.82e+11 m⁻³  hmF2=350.0 km
+    [Abel] GN04 12:44: NmF2=6.74e+11 m⁻³  hmF2=258.4 km
+    [Abel] GN04 12:26: NmF2=6.82e+11 m⁻³  hmF2=273.6 km
+    [Abel] GN04 12:26: NmF2=6.82e+11 m⁻³  hmF2=273.6 km
+    [Abel] GN05 12:52: NmF2=3.09e+11 m⁻³  hmF2=391.0 km
+    [Abel] GN05 12:53: NmF2=3.83e+11 m⁻³  hmF2=363.0 km
+    [Abel] GN05 12:52: NmF2=2.05e+11 m⁻³  hmF2=475.6 km
+    [Abel] GN04 12:27: NmF2=3.72e+11 m⁻³  hmF2=363.5 km
+    [Abel] GN04 12:27: NmF2=3.72e+11 m⁻³  hmF2=363.5 km
+    [Abel] YM08 12:26: NmF2=3.64e+11 m⁻³  hmF2=309.7 km
+    [Abel] YM08 12:27: NmF2=4.37e+11 m⁻³  hmF2=297.0 km
+    [Abel] YM08 12:28: NmF2=4.48e+11 m⁻³  hmF2=330.2 km
+    [Abel] GN05 12:50: NmF2=5.99e+11 m⁻³  hmF2=291.8 km
+    [Abel] YM08 12:28: NmF2=5.10e+11 m⁻³  hmF2=411.1 km
+    [Abel] GN04 12:30: NmF2=4.52e+11 m⁻³  hmF2=329.9 km
+    [Abel] GN04 12:31: NmF2=4.90e+11 m⁻³  hmF2=329.5 km
+    [Abel] GN05 12:52: NmF2=1.86e+11 m⁻³  hmF2=582.0 km
+    [Abel] GN04 12:31: NmF2=4.35e+11 m⁻³  hmF2=296.5 km
+    [Abel] GN05 12:52: NmF2=1.46e+11 m⁻³  hmF2=539.2 km
+    [Abel] GN04 12:33: NmF2=4.14e+11 m⁻³  hmF2=331.0 km
+    [Abel] GN04 12:34: NmF2=5.55e+11 m⁻³  hmF2=276.3 km
+    [Abel] GN04 12:35: NmF2=3.25e+13 m⁻³  hmF2=491.0 km
+    [Abel] GN05 12:42: NmF2=3.98e+11 m⁻³  hmF2=287.6 km
+    [Abel] GN05 12:44: NmF2=4.96e+11 m⁻³  hmF2=289.9 km
+    [Abel] GN05 12:44: NmF2=4.14e+11 m⁻³  hmF2=403.5 km
+    [Abel] GN05 12:52: NmF2=1.84e+11 m⁻³  hmF2=579.2 km
+    [Abel] GN05 12:44: NmF2=4.73e+11 m⁻³  hmF2=291.2 km
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | ro_only   | gridded_kf     : DONE       (457.8s) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | ro_igs    | gridded_kf    
+    [diag] 2025-08-27_1227 | bin=all | ro_igs    | gridded_kf     : RUNNING    (force=True, cached=True) ...
+
+────────────────────────────────────────────────────────────
+  Group : 2025-08-27_1227
+  Window: 2025-08-27_1227  |  Region: POLAR_N  |  62 occultation(s)
+────────────────────────────────────────────────────────────
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.17.0019.R24.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.17.0019.G31.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.20.0016.C25.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.21.0015.C34.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.23.0013.R05.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.23.0013.C32.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.12.26.0010.R14.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.33.0019.C25.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.34.0018.R24.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.37.0015.C34.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.38.0014.R14.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.38.0014.E24.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.39.0013.E03.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.12.40.0013.R05.01_0000.0001_nc — parse returned None
+  Parsed 48/62 files successfully.
+    [podTc2] GN04 12:35 — 711 valid rays → decimated to 178 (stride 4)
+    [podTc2] GN04 12:35 — 621 valid rays → decimated to 156 (stride 4)
+    [podTc2] GN04 12:35 — 473 valid rays → decimated to 158 (stride 3)
+    [podTc2] GN04 12:35 — 406 valid rays → decimated to 136 (stride 3)
+    [podTc2] GN04 12:36 — 431 valid rays → decimated to 144 (stride 3)
+    [podTc2] GN04 12:36 — 322 valid rays → decimated to 161 (stride 2)
+    [podTc2] GN04 12:37 — 460 valid rays → decimated to 154 (stride 3)
+    [podTc2] GN04 12:36 — 282 valid rays → decimated to 141 (stride 2)
+    [podTc2] GN04 12:36 — 324 valid rays → decimated to 162 (stride 2)
+    [podTc2] GN04 12:36 — 368 valid rays → decimated to 184 (stride 2)
+    [podTc2] GN04 12:36 — 230 valid rays → decimated to 115 (stride 2)
+    [podTc2] GN04 12:35 — 325 valid rays → decimated to 163 (stride 2)
+    [podTc2] GN04 12:35 — 416 valid rays → decimated to 139 (stride 3)
+    [podTc2] GN04 12:36 — 126 valid rays → decimated to 126 (stride 1)
+    [podTc2] YM08 12:19 — 418 valid rays → decimated to 140 (stride 3)
+    [podTc2] GN04 12:41 — 384 valid rays → decimated to 192 (stride 2)
+    [podTc2] GN05 12:50 — 438 valid rays → decimated to 146 (stride 3)
+    [podTc2] GN04 12:36 — 56 valid rays → decimated to 56 (stride 1)
+    [podTc2] YM08 12:24 — 437 valid rays → decimated to 146 (stride 3)
+    [podTc2] GN04 12:44 — 438 valid rays → decimated to 146 (stride 3)
+    [podTc2] GN05 12:52 — 417 valid rays → decimated to 139 (stride 3)
+    [podTc2] GN04 12:44 — 543 valid rays → decimated to 181 (stride 3)
+    [podTc2] GN04 12:26 — 482 valid rays → decimated to 161 (stride 3)
+    [podTc2] GN04 12:26 — 482 valid rays → decimated to 161 (stride 3)
+    [podTc2] GN05 12:52 — 270 valid rays → decimated to 135 (stride 2)
+    [podTc2] GN05 12:53 — 306 valid rays → decimated to 153 (stride 2)
+    [podTc2] GN05 12:52 — 189 valid rays → decimated to 189 (stride 1)
+    [podTc2] GN04 12:27 — 442 valid rays → decimated to 148 (stride 3)
+    [podTc2] GN04 12:27 — 442 valid rays → decimated to 148 (stride 3)
+    [podTc2] YM08 12:26 — 252 valid rays → decimated to 126 (stride 2)
+    [podTc2] YM08 12:27 — 411 valid rays → decimated to 137 (stride 3)
+    [podTc2] YM08 12:28 — 404 valid rays → decimated to 135 (stride 3)
+    [podTc2] GN05 12:50 — 394 valid rays → decimated to 197 (stride 2)
+    [podTc2] YM08 12:28 — 784 valid rays → decimated to 196 (stride 4)
+    [podTc2] GN04 12:30 — 449 valid rays → decimated to 150 (stride 3)
+    [podTc2] GN04 12:31 — 408 valid rays → decimated to 136 (stride 3)
+    [podTc2] GN05 12:52 — 57 valid rays → decimated to 57 (stride 1)
+    [podTc2] GN04 12:31 — 499 valid rays → decimated to 167 (stride 3)
+    [skip] GN05 12:53 — only 9 valid rays
+    [podTc2] GN05 12:52 — 102 valid rays → decimated to 102 (stride 1)
+    [podTc2] GN04 12:33 — 339 valid rays → decimated to 170 (stride 2)
+    [podTc2] GN04 12:34 — 452 valid rays → decimated to 151 (stride 3)
+    [podTc2] GN04 12:35 — 1821 valid rays → decimated to 183 (stride 10)
+    [podTc2] GN05 12:42 — 469 valid rays → decimated to 157 (stride 3)
+    [podTc2] GN05 12:44 — 462 valid rays → decimated to 154 (stride 3)
+    [podTc2] GN05 12:44 — 431 valid rays → decimated to 144 (stride 3)
+    [podTc2] GN05 12:52 — 88 valid rays → decimated to 88 (stride 1)
+    [podTc2] GN05 12:44 — 396 valid rays → decimated to 198 (stride 2)
+  Bbox lat [17.2, 90.0]  lon [-180.0, 180.0]  |  union vertices: 190
+  Final group: 47 occultation(s), 190 union-mesh vertices
+  Saved trim diagnostic → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-08-27_1227/bin_all/ro_igs/group_2025-08-27_1227_trim.png
+  [extra] Injected 103 ground-station arc(s) → total 150 arc(s) in assimilation pool
+  -> Building H matrices (7109 rays across 150 arc(s), single parallel sweep) …
+  -> Building H matrices:    710/7109 rays ( 10.0%)
+  -> Building H matrices:   1420/7109 rays ( 20.0%)
+  -> Building H matrices:   2130/7109 rays ( 30.0%)
+  -> Building H matrices:   2840/7109 rays ( 39.9%)
+  -> Building H matrices:   3550/7109 rays ( 49.9%)
+  -> Building H matrices:   4260/7109 rays ( 59.9%)
+  -> Building H matrices:   4970/7109 rays ( 69.9%)
+  -> Building H matrices:   5680/7109 rays ( 79.9%)
+  -> Building H matrices:   6390/7109 rays ( 89.9%)
+  -> Building H matrices:   7100/7109 rays ( 99.9%)
+  -> Building H matrices:   7109/7109 rays (100.0%)
+  Combined H shape : (7109, 10640)  (total rays = 7109)
+  Skipping sequential KF assimilation (run_sequential=False).
+  Running joint (batch) KF assimilation …
+  Skipping joint (batch) KF assimilation (skip_joint=True) — gridded KF not run; posterior aliased to prior.
+  Prior RMSE  : 36.226 TECU
+  Post  RMSE  : 36.226 TECU
+    [Abel] GN04 12:35: NmF2=3.73e+11 m⁻³  hmF2=356.6 km
+    [Abel] GN04 12:35: NmF2=3.73e+11 m⁻³  hmF2=356.6 km
+    [Abel] GN04 12:35: NmF2=5.33e+11 m⁻³  hmF2=294.9 km
+    [Abel] GN04 12:35: NmF2=5.33e+11 m⁻³  hmF2=294.9 km
+    [Abel] GN04 12:36: NmF2=4.89e+11 m⁻³  hmF2=293.1 km
+    [Abel] GN04 12:36: NmF2=4.89e+11 m⁻³  hmF2=293.1 km
+    [Abel] GN04 12:37: NmF2=4.58e+11 m⁻³  hmF2=306.6 km
+    [Abel] GN04 12:36: NmF2=4.01e+11 m⁻³  hmF2=355.3 km
+    [Abel] GN04 12:36: NmF2=5.16e+11 m⁻³  hmF2=293.1 km
+    [Abel] GN04 12:36: NmF2=5.16e+11 m⁻³  hmF2=293.1 km
+    [Abel] GN04 12:36: NmF2=2.35e+11 m⁻³  hmF2=536.6 km
+    [Abel] GN04 12:35: NmF2=4.02e+11 m⁻³  hmF2=285.6 km
+    [Abel] GN04 12:35: NmF2=4.02e+11 m⁻³  hmF2=285.6 km
+    [Abel] GN04 12:36: NmF2=1.56e+11 m⁻³  hmF2=573.2 km
+    [Abel] YM08 12:19: NmF2=4.56e+11 m⁻³  hmF2=278.7 km
+    [Abel] GN04 12:41: NmF2=4.47e+11 m⁻³  hmF2=322.9 km
+    [Abel] GN05 12:50: NmF2=4.41e+11 m⁻³  hmF2=324.4 km
+    [Abel] GN04 12:36: NmF2=1.20e+11 m⁻³  hmF2=577.6 km
+    [Abel] YM08 12:24: NmF2=3.34e+11 m⁻³  hmF2=310.3 km
+    [Abel] GN04 12:44: NmF2=5.78e+11 m⁻³  hmF2=263.7 km
+    [Abel] GN05 12:52: NmF2=4.82e+11 m⁻³  hmF2=350.0 km
+    [Abel] GN04 12:44: NmF2=6.74e+11 m⁻³  hmF2=258.4 km
+    [Abel] GN04 12:26: NmF2=6.82e+11 m⁻³  hmF2=273.6 km
+    [Abel] GN04 12:26: NmF2=6.82e+11 m⁻³  hmF2=273.6 km
+    [Abel] GN05 12:52: NmF2=3.09e+11 m⁻³  hmF2=391.0 km
+    [Abel] GN05 12:53: NmF2=3.83e+11 m⁻³  hmF2=363.0 km
+    [Abel] GN05 12:52: NmF2=2.05e+11 m⁻³  hmF2=475.6 km
+    [Abel] GN04 12:27: NmF2=3.72e+11 m⁻³  hmF2=363.5 km
+    [Abel] GN04 12:27: NmF2=3.72e+11 m⁻³  hmF2=363.5 km
+    [Abel] YM08 12:26: NmF2=3.64e+11 m⁻³  hmF2=309.7 km
+    [Abel] YM08 12:27: NmF2=4.37e+11 m⁻³  hmF2=297.0 km
+    [Abel] YM08 12:28: NmF2=4.48e+11 m⁻³  hmF2=330.2 km
+    [Abel] GN05 12:50: NmF2=5.99e+11 m⁻³  hmF2=291.8 km
+    [Abel] YM08 12:28: NmF2=5.10e+11 m⁻³  hmF2=411.1 km
+    [Abel] GN04 12:30: NmF2=4.52e+11 m⁻³  hmF2=329.9 km
+    [Abel] GN04 12:31: NmF2=4.90e+11 m⁻³  hmF2=329.5 km
+    [Abel] GN05 12:52: NmF2=1.86e+11 m⁻³  hmF2=582.0 km
+    [Abel] GN04 12:31: NmF2=4.35e+11 m⁻³  hmF2=296.5 km
+    [Abel] GN05 12:52: NmF2=1.46e+11 m⁻³  hmF2=539.2 km
+    [Abel] GN04 12:33: NmF2=4.14e+11 m⁻³  hmF2=331.0 km
+    [Abel] GN04 12:34: NmF2=5.55e+11 m⁻³  hmF2=276.3 km
+    [Abel] GN04 12:35: NmF2=3.25e+13 m⁻³  hmF2=491.0 km
+    [Abel] GN05 12:42: NmF2=3.98e+11 m⁻³  hmF2=287.6 km
+    [Abel] GN05 12:44: NmF2=4.96e+11 m⁻³  hmF2=289.9 km
+    [Abel] GN05 12:44: NmF2=4.14e+11 m⁻³  hmF2=403.5 km
+    [Abel] GN05 12:52: NmF2=1.84e+11 m⁻³  hmF2=579.2 km
+    [Abel] GN05 12:44: NmF2=4.73e+11 m⁻³  hmF2=291.2 km
+    [Abel] Skipped 103 ground-station arc(s) (RO-only technique)
+/home/austinhunter/Downloads/PlanetiQ_Code/venv311/lib/python3.11/site-packages/shapely/creation.py:218: RuntimeWarning: invalid value encountered in linestrings
+  return lib.linestrings(coords, np.intc(handle_nan), out=out, **kwargs)
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | ro_igs    | gridded_kf     : DONE       (462.4s) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | igs_only  | gridded_kf    
+    [diag] 2025-08-27_1227 | bin=all | igs_only  | gridded_kf     : RUNNING    (force=True, cached=True) ...
+    [Info] Initialising information matrix (n_state=16280) …
+    [Info] arcs ingested = 103/103  |  obs rows = 103  |  Λ cond ≈ 2.33e+23
+    [Info] Solving …
+    [Prior] innovation  mean=14.82  std=22.04  n_obs=103
+    [Post ] innovation  mean=8.61  std=17.28
+    RMSE:  prior=26.560 TECU  →  post=19.312 TECU
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | igs_only  | gridded_kf     : DONE       (204.1s) -> status=ok (no 'status' key)
+  [EKF] Fibonacci ROI grid @ 100 km: 15565 points (great-circle around footprint centroid, cap=16000, 247 ROI anchor pts)
+
+[ISR-DA] Checkpoints saved — re-run to resume.
+[ISR-DA] Log written to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260721_145133.log

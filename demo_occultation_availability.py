@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -111,6 +112,21 @@ _SAT_COLOR  = {"GN04": "darkorange", "GN05": "mediumpurple", "YM08": "teal"}
 _SAT_LABEL  = {"GN04": "GNOMES-4", "GN05": "GNOMES-5", "YM08": "YAM-8"}
 _SAT_FALLBACK_MARKER = "D"
 _SAT_FALLBACK_COLOR  = "gray"
+
+
+def _sat_color(sat: str):
+    """Colour for satellite code *sat*: the explicit real-mission colour if
+    known (GN04/GN05/YM08, unchanged behaviour), otherwise a colour
+    deterministically derived from the code itself (zlib.crc32, stable
+    across processes/PYTHONHASHSEED) so that any other set of satellite
+    names -- e.g. simulated constellations such as PlanetiQ_00/ExtraLEO_00 --
+    still get distinct, reproducible colours instead of all collapsing onto
+    the same _SAT_FALLBACK_COLOR grey.
+    """
+    if sat in _SAT_COLOR:
+        return _SAT_COLOR[sat]
+    idx = zlib.crc32(str(sat).encode()) % 10
+    return plt.get_cmap("tab10")(idx)
 
 PODTC_SUFFIX = ".0001_nc"
 
@@ -310,7 +326,7 @@ def plot_occultation_availability(
         ax_bot.scatter(
             site_grp["tecmax_time"], site_grp["nearest_km"],
             s=34, marker=marker,
-            c=[_SAT_COLOR.get(sat, _SAT_FALLBACK_COLOR) for sat in site_grp["spacecraft"]],
+            c=[_sat_color(sat) for sat in site_grp["spacecraft"]],
             edgecolor="k", linewidth=0.3, alpha=0.85,
         )
     ax_bot.axhline(ISR_ROI_MAX_KM, color="k", ls="--", lw=1.0)
@@ -321,7 +337,7 @@ def plot_occultation_availability(
 
     # Two-part legend: colour = satellite, marker = closest ISR ground station.
     sat_handles = [
-        Line2D([], [], marker="o", ls="none", color=_SAT_COLOR.get(sat, _SAT_FALLBACK_COLOR),
+        Line2D([], [], marker="o", ls="none", color=_sat_color(sat),
                markeredgecolor="k", markeredgewidth=0.3, markersize=7,
                label=f"{_SAT_LABEL.get(sat, sat)} (n={int((roi['spacecraft'] == sat).sum())})")
         for sat in sorted(roi["spacecraft"].unique())
@@ -360,7 +376,7 @@ def plot_occultation_availability(
         ax_map.scatter(
             site_grp["lon"], site_grp["lat"], transform=ccrs.PlateCarree(),
             s=16, marker=marker,
-            c=[_SAT_COLOR.get(sat, _SAT_FALLBACK_COLOR) for sat in site_grp["spacecraft"]],
+            c=[_sat_color(sat) for sat in site_grp["spacecraft"]],
             edgecolor="k", linewidth=0.2, alpha=0.75, zorder=2,
         )
 
@@ -397,7 +413,7 @@ def plot_occultation_availability(
     ring_handles = [Line2D([], [], color=thresh_colors[t], lw=1.6, label=f"{t:.0f} km")
                     for t in thresholds_sorted]
     map_sat_handles = [
-        Line2D([], [], marker="o", ls="none", color=_SAT_COLOR.get(sat, _SAT_FALLBACK_COLOR),
+        Line2D([], [], marker="o", ls="none", color=_sat_color(sat),
                markeredgecolor="k", markeredgewidth=0.3, markersize=6,
                label=_SAT_LABEL.get(sat, sat))
         for sat in sorted(roi["spacecraft"].unique())
@@ -417,7 +433,7 @@ def plot_occultation_availability(
     bins = np.arange(0.0, ISR_ROI_MAX_KM + 100.0, 100.0)
     sats       = sorted(roi["spacecraft"].unique())
     sat_data   = [roi.loc[roi["spacecraft"] == sat, "nearest_km"] for sat in sats]
-    sat_colors = [_SAT_COLOR.get(sat, _SAT_FALLBACK_COLOR) for sat in sats]
+    sat_colors = [_sat_color(sat) for sat in sats]
     ax_hist.hist(sat_data, bins=bins, orientation="horizontal", stacked=True,
                  color=sat_colors, edgecolor="k", linewidth=0.3,
                  label=[_SAT_LABEL.get(sat, sat) for sat in sats])

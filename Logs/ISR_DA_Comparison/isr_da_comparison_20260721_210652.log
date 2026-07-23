@@ -1,0 +1,220 @@
+[ISR-DA] Logging this run to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260721_210652.log
+[ISR-DA] Output routed to /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL (metrics=isr_metrics_OUTPUT_FINAL.csv, manifest=progress_manifest_OUTPUT_FINAL.json)
+[ISR-DA] BEST-WINDOW-ONLY: one window per day (max occultations + ISR truth); occultation-count sweep runs on that window.
+[ISR-DA] Experiment config: run_gridded_kf=False ekf_grid=fibonacci ekf_grid_km=100.0 filters=['ekf_allfree', 'ekf_nmf2']
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+[ISR-DA] Processing 3 day(s)
+  Tier 2  2025-08-27  instruments=['ESR']  podtc=yes
+  Tier 1  2025-09-22  instruments=['ESR', 'TRO']  podtc=yes
+  Tier 1  2025-10-17  instruments=['ESR', 'TRO']  podtc=yes
+
+[ISR-DA] Loading ISR EDP cache ...
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+         135834 profiles loaded, 85642 fitted (kindat 6400) used as ground truth
+
+======================================================================
+[Day] 2025-08-27  tier=2  instruments=['ESR']
+  Scanning 9819 files for metadata …
+  Found 9819 valid files across 755 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-08-27: 15 window(s) (>= 10 arcs each)
+  0100  centre=2025-08-27 01:00:00  n_occ=50  span=[2025-08-27 00:00:00 .. 2025-08-27 02:00:00)
+  0247  centre=2025-08-27 02:47:30  n_occ=39  span=[2025-08-27 02:00:00 .. 2025-08-27 03:35:00)
+  0422  centre=2025-08-27 04:22:30  n_occ=49  span=[2025-08-27 03:35:00 .. 2025-08-27 05:10:00)
+  0557  centre=2025-08-27 05:57:30  n_occ=56  span=[2025-08-27 05:10:00 .. 2025-08-27 06:45:00)
+  0735  centre=2025-08-27 07:35:00  n_occ=82  span=[2025-08-27 06:45:00 .. 2025-08-27 08:25:00)
+  0912  centre=2025-08-27 09:12:30  n_occ=121  span=[2025-08-27 08:25:00 .. 2025-08-27 10:00:00)
+  1050  centre=2025-08-27 10:50:00  n_occ=98  span=[2025-08-27 10:00:00 .. 2025-08-27 11:40:00)
+  1227  centre=2025-08-27 12:27:30  n_occ=62  span=[2025-08-27 11:40:00 .. 2025-08-27 13:15:00)
+  1400  centre=2025-08-27 14:00:00  n_occ=60  span=[2025-08-27 13:15:00 .. 2025-08-27 14:45:00)
+  1535  centre=2025-08-27 15:35:00  n_occ=63  span=[2025-08-27 14:45:00 .. 2025-08-27 16:25:00)
+  1717  centre=2025-08-27 17:17:30  n_occ=44  span=[2025-08-27 16:25:00 .. 2025-08-27 18:10:00)
+  1857  centre=2025-08-27 18:57:30  n_occ=46  span=[2025-08-27 18:10:00 .. 2025-08-27 19:45:00)
+  2025  centre=2025-08-27 20:25:00  n_occ=65  span=[2025-08-27 19:45:00 .. 2025-08-27 21:05:00)
+  2200  centre=2025-08-27 22:00:00  n_occ=98  span=[2025-08-27 21:05:00 .. 2025-08-27 22:55:00)
+  2327  centre=2025-08-27 23:27:30  n_occ=60  span=[2025-08-27 22:55:00 .. 2025-08-28 00:00:00)
+  [IGS/TRO1] Loaded 226 arc(s) from cache.
+  [IGS/NYA1] Loaded 325 arc(s) from cache.
+  [IGS/KIR0] Loaded 289 arc(s) from cache.
+  [IGS/SOD3] Running TEC pipeline for 2025-08-27 …
+  [nav] Using multi-GNSS mixed nav: BRDC00IGS_R_20252390000_01D_MN.rnx.gz
+  [IGS/SOD3] Pipeline failed: cannot reindex or align along dimension 'sv' because the (pandas) index has duplicate values
+  [IGS/ALRT] Loaded 0 arc(s) from cache.
+  [IGS/SCOR] Loaded 379 arc(s) from cache.
+  [IGS/HOFN] Loaded 260 arc(s) from cache.
+  [IGS/REYK] Loaded 267 arc(s) from cache.
+  15 minima window(s), 1746 IGS arc(s)
+  Running 15 window(s) x 7 occultation-count bins x 3 obs modes x 2 filters ...
+  [diag] BEST-WINDOW-ONLY: 2025-08-27 -> window 1227 (n_occ=62, n_isr_edp=2) selected from 1 ISR-truth window(s).
+EDPS: (55, 1650, 50), N_geo: 1650
+EDPS: (55, 1650, 50), N_geo: 1650
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | ro_only   | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | ro_only   | gridded_kf     : CACHE HIT  (2025-08-27_1227_binall_ro_only_gridded_kf.pkl, 2.6s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | ro_igs    | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | ro_igs    | gridded_kf     : CACHE HIT  (2025-08-27_1227_binall_ro_igs_gridded_kf.pkl, 2.9s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | igs_only  | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | igs_only  | gridded_kf     : CACHE HIT  (2025-08-27_1227_binall_igs_only_gridded_kf.pkl, 0.0s load) -> status=ok (no 'status' key)
+  [EKF] Fibonacci ROI grid @ 100 km: 600 points (great-circle around footprint centroid, cap=600, 247 ROI anchor pts)

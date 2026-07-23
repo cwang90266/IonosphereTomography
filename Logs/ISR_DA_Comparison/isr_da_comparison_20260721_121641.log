@@ -1,0 +1,523 @@
+[ISR-DA] Logging this run to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260721_121641.log
+[ISR-DA] Experiment config: run_gridded_kf=False ekf_grid=fibonacci ekf_grid_km=100.0 filters=['ekf_allfree', 'ekf_nmf2']
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+[ISR-DA] Processing 3 day(s)
+  Tier 2  2025-08-27  instruments=['ESR']  podtc=yes
+  Tier 1  2025-09-22  instruments=['ESR', 'TRO']  podtc=yes
+  Tier 1  2025-10-17  instruments=['ESR', 'TRO']  podtc=yes
+
+[ISR-DA] Loading ISR EDP cache ...
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+         135834 profiles loaded, 85642 fitted (kindat 6400) used as ground truth
+
+======================================================================
+[Day] 2025-08-27  tier=2  instruments=['ESR']
+  Scanning 9819 files for metadata …
+  Found 9819 valid files across 755 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-08-27: 15 window(s) (>= 10 arcs each)
+  0100  centre=2025-08-27 01:00:00  n_occ=50  span=[2025-08-27 00:00:00 .. 2025-08-27 02:00:00)
+  0247  centre=2025-08-27 02:47:30  n_occ=39  span=[2025-08-27 02:00:00 .. 2025-08-27 03:35:00)
+  0422  centre=2025-08-27 04:22:30  n_occ=49  span=[2025-08-27 03:35:00 .. 2025-08-27 05:10:00)
+  0557  centre=2025-08-27 05:57:30  n_occ=56  span=[2025-08-27 05:10:00 .. 2025-08-27 06:45:00)
+  0735  centre=2025-08-27 07:35:00  n_occ=82  span=[2025-08-27 06:45:00 .. 2025-08-27 08:25:00)
+  0912  centre=2025-08-27 09:12:30  n_occ=121  span=[2025-08-27 08:25:00 .. 2025-08-27 10:00:00)
+  1050  centre=2025-08-27 10:50:00  n_occ=98  span=[2025-08-27 10:00:00 .. 2025-08-27 11:40:00)
+  1227  centre=2025-08-27 12:27:30  n_occ=62  span=[2025-08-27 11:40:00 .. 2025-08-27 13:15:00)
+  1400  centre=2025-08-27 14:00:00  n_occ=60  span=[2025-08-27 13:15:00 .. 2025-08-27 14:45:00)
+  1535  centre=2025-08-27 15:35:00  n_occ=63  span=[2025-08-27 14:45:00 .. 2025-08-27 16:25:00)
+  1717  centre=2025-08-27 17:17:30  n_occ=44  span=[2025-08-27 16:25:00 .. 2025-08-27 18:10:00)
+  1857  centre=2025-08-27 18:57:30  n_occ=46  span=[2025-08-27 18:10:00 .. 2025-08-27 19:45:00)
+  2025  centre=2025-08-27 20:25:00  n_occ=65  span=[2025-08-27 19:45:00 .. 2025-08-27 21:05:00)
+  2200  centre=2025-08-27 22:00:00  n_occ=98  span=[2025-08-27 21:05:00 .. 2025-08-27 22:55:00)
+  2327  centre=2025-08-27 23:27:30  n_occ=60  span=[2025-08-27 22:55:00 .. 2025-08-28 00:00:00)
+  [IGS/TRO1] Loaded 226 arc(s) from cache.
+  [IGS/NYA1] Loaded 325 arc(s) from cache.
+  [IGS/KIR0] Loaded 289 arc(s) from cache.
+  [IGS/SOD3] Running TEC pipeline for 2025-08-27 …
+  [nav] Using multi-GNSS mixed nav: BRDC00IGS_R_20252390000_01D_MN.rnx.gz
+  [IGS/SOD3] Pipeline failed: cannot reindex or align along dimension 'sv' because the (pandas) index has duplicate values
+  [IGS/ALRT] Loaded 0 arc(s) from cache.
+  [IGS/SCOR] Loaded 379 arc(s) from cache.
+  [IGS/HOFN] Loaded 260 arc(s) from cache.
+  [IGS/REYK] Loaded 267 arc(s) from cache.
+  15 minima window(s), 1746 IGS arc(s)
+  Running 15 window(s) x 7 occultation-count bins x 3 obs modes x 2 filters ...
+  [diag] Reordered 15 window(s): 1 ISR-aligned (most occultations first), 14 without ISR truth (run last)
+  [resume] 2025-08-27_1227_binall already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_1227_bin55 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_1227_bin45 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_1227_bin35 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_1227_bin25 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_1227_bin15 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_1227_bin5 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_0912_binall already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_0912_bin55 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_0912_bin45 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_0912_bin35 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_0912_bin25 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_0912_bin15 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_0912_bin5 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-08-27_1050_binall already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+EDPS: (55, 1650, 50), N_geo: 1650
+EDPS: (55, 1650, 50), N_geo: 1650
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+▶▶▶ _run_or_load START | 2025-08-27_1050 | bin=55  | ro_only   | gridded_kf    
+    [diag] 2025-08-27_1050 | bin=55  | ro_only   | gridded_kf     : RUNNING    (force=False, cached=False) ...
+
+────────────────────────────────────────────────────────────
+  Group : 2025-08-27_1050
+  Window: 2025-08-27_1050  |  Region: POLAR_N  |  55 occultation(s)
+────────────────────────────────────────────────────────────
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.41.0020.G29.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.44.0017.E33.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.45.0016.C44.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.46.0015.E05.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.47.0013.G26.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.48.0013.E31.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.48.0013.G25.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.49.0012.R04.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.10.58.0019.E33.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.10.58.0019.G29.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.01.0018.G25.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.01.0016.G25.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.01.0016.C44.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.02.0015.E05.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.03.0014.E16.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.06.0012.R04.01_0000.0001_nc — parse returned None
+  Parsed 39/55 files successfully.
+    [podTc2] YM08 10:51 — 600 valid rays → decimated to 200 (stride 3)
+    [podTc2] GN04 11:01 — 372 valid rays → decimated to 186 (stride 2)
+    [podTc2] GN04 11:01 — 460 valid rays → decimated to 154 (stride 3)
+    [podTc2] YM08 10:52 — 256 valid rays → decimated to 128 (stride 2)
+    [podTc2] YM08 10:52 — 166 valid rays → decimated to 166 (stride 1)
+    [podTc2] YM08 10:52 — 186 valid rays → decimated to 186 (stride 1)
+    [podTc2] YM08 10:53 — 380 valid rays → decimated to 190 (stride 2)
+    [podTc2] YM08 10:57 — 393 valid rays → decimated to 197 (stride 2)
+    [podTc2] YM08 10:38 — 464 valid rays → decimated to 155 (stride 3)
+    [podTc2] YM08 10:41 — 270 valid rays → decimated to 135 (stride 2)
+    [podTc2] YM08 10:41 — 270 valid rays → decimated to 135 (stride 2)
+    [podTc2] GN04 11:08 — 481 valid rays → decimated to 161 (stride 3)
+    [podTc2] GN04 11:11 — 466 valid rays → decimated to 156 (stride 3)
+    [podTc2] GN04 11:09 — 362 valid rays → decimated to 181 (stride 2)
+    [podTc2] GN04 11:03 — 134 valid rays → decimated to 134 (stride 1)
+    [podTc2] GN04 11:10 — 391 valid rays → decimated to 196 (stride 2)
+    [podTc2] GN04 11:01 — 72 valid rays → decimated to 72 (stride 1)
+    [podTc2] GN04 11:01 — 368 valid rays → decimated to 184 (stride 2)
+    [podTc2] GN04 11:02 — 446 valid rays → decimated to 149 (stride 3)
+    [podTc2] GN04 11:11 — 432 valid rays → decimated to 144 (stride 3)
+    [podTc2] YM08 10:51 — 343 valid rays → decimated to 172 (stride 2)
+    [podTc2] GN05 11:17 — 280 valid rays → decimated to 140 (stride 2)
+    [podTc2] GN04 10:56 — 429 valid rays → decimated to 143 (stride 3)
+    [podTc2] GN05 11:17 — 559 valid rays → decimated to 187 (stride 3)
+    [podTc2] GN05 11:22 — 440 valid rays → decimated to 147 (stride 3)
+    [podTc2] GN05 11:17 — 91 valid rays → decimated to 91 (stride 1)
+    [podTc2] GN04 10:59 — 416 valid rays → decimated to 139 (stride 3)
+    [podTc2] GN04 10:59 — 705 valid rays → decimated to 177 (stride 4)
+    [podTc2] GN04 10:59 — 316 valid rays → decimated to 158 (stride 2)
+    [podTc2] GN05 11:24 — 361 valid rays → decimated to 181 (stride 2)
+    [podTc2] GN05 11:06 — 482 valid rays → decimated to 161 (stride 3)
+    [podTc2] GN05 11:18 — 244 valid rays → decimated to 122 (stride 2)
+    [podTc2] GN05 11:07 — 494 valid rays → decimated to 165 (stride 3)
+    [podTc2] GN05 11:10 — 506 valid rays → decimated to 169 (stride 3)
+    [podTc2] GN05 11:10 — 506 valid rays → decimated to 169 (stride 3)
+    [podTc2] GN05 11:13 — 712 valid rays → decimated to 178 (stride 4)
+    [podTc2] GN05 11:13 — 363 valid rays → decimated to 182 (stride 2)
+    [podTc2] GN05 11:19 — 134 valid rays → decimated to 134 (stride 1)
+    [skip] GN05 11:22 — only 14 valid rays
+  Bbox lat [22.8, 90.0]  lon [-180.0, 180.0]  |  union vertices: 175
+  Final group: 38 occultation(s), 175 union-mesh vertices
+  Saved trim diagnostic → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT/2025-08-27_1050/bin_55/ro_only/group_2025-08-27_1050_trim.png
+  -> Building H matrices (6024 rays across 38 arc(s), single parallel sweep) …
+  -> Building H matrices:    602/6024 rays ( 10.0%)
+  -> Building H matrices:   1204/6024 rays ( 20.0%)
+  -> Building H matrices:   1806/6024 rays ( 30.0%)
+  -> Building H matrices:   2408/6024 rays ( 40.0%)
+  -> Building H matrices:   3010/6024 rays ( 50.0%)
+  -> Building H matrices:   3612/6024 rays ( 60.0%)
+  -> Building H matrices:   4214/6024 rays ( 70.0%)
+  -> Building H matrices:   4816/6024 rays ( 79.9%)
+  -> Building H matrices:   5418/6024 rays ( 89.9%)
+  -> Building H matrices:   6020/6024 rays ( 99.9%)
+  -> Building H matrices:   6024/6024 rays (100.0%)
+  Combined H shape : (6024, 9800)  (total rays = 6024)
+  Skipping sequential KF assimilation (run_sequential=False).
+  Running joint (batch) KF assimilation …
+  Skipping joint (batch) KF assimilation (skip_joint=True) — gridded KF not run; posterior aliased to prior.
+  Prior RMSE  : 47.680 TECU
+  Post  RMSE  : 47.680 TECU
+    [Abel] YM08 10:51: NmF2=5.32e+11 m⁻³  hmF2=263.6 km
+    [Abel] GN04 11:01: NmF2=4.24e+11 m⁻³  hmF2=311.7 km
+    [Abel] GN04 11:01: NmF2=4.24e+11 m⁻³  hmF2=311.7 km
+    [Abel] YM08 10:52: NmF2=5.61e+11 m⁻³  hmF2=267.9 km
+    [Abel] YM08 10:52: NmF2=5.90e+10 m⁻³  hmF2=525.8 km
+    [Abel] YM08 10:52: NmF2=1.87e+11 m⁻³  hmF2=415.2 km
+    [Abel] YM08 10:53: NmF2=4.11e+11 m⁻³  hmF2=264.9 km
+    [Abel] YM08 10:57: NmF2=4.49e+11 m⁻³  hmF2=264.2 km
+    [Abel] YM08 10:38: NmF2=7.33e+11 m⁻³  hmF2=261.2 km
+    [Abel] YM08 10:41: NmF2=6.14e+11 m⁻³  hmF2=305.1 km
+    [Abel] YM08 10:41: NmF2=6.14e+11 m⁻³  hmF2=305.1 km
+    [Abel] GN04 11:08: NmF2=5.70e+11 m⁻³  hmF2=257.9 km
+    [Abel] GN04 11:11: NmF2=7.17e+11 m⁻³  hmF2=274.8 km
+    [Abel] GN04 11:09: NmF2=6.56e+11 m⁻³  hmF2=272.1 km
+    [Abel] GN04 11:03: NmF2=7.42e+10 m⁻³  hmF2=562.8 km
+    [Abel] GN04 11:10: NmF2=6.48e+11 m⁻³  hmF2=263.4 km
+    [Abel] GN04 11:01: NmF2=1.16e+11 m⁻³  hmF2=570.9 km
+    [Abel] GN04 11:01: NmF2=2.13e+11 m⁻³  hmF2=476.6 km
+    [Abel] GN04 11:02: NmF2=2.42e+11 m⁻³  hmF2=474.0 km
+    [Abel] GN04 11:11: NmF2=7.36e+11 m⁻³  hmF2=285.7 km
+    [Abel] YM08 10:51: NmF2=3.94e+11 m⁻³  hmF2=331.7 km
+    [Abel] GN05 11:17: NmF2=4.57e+11 m⁻³  hmF2=346.5 km
+    [Abel] GN04 10:56: NmF2=3.47e+11 m⁻³  hmF2=285.4 km
+    [Abel] GN05 11:17: NmF2=3.99e+11 m⁻³  hmF2=254.5 km
+    [Abel] GN05 11:22: NmF2=4.75e+11 m⁻³  hmF2=290.9 km
+    [Abel] GN05 11:17: NmF2=1.15e+11 m⁻³  hmF2=559.0 km
+    [Abel] GN04 10:59: NmF2=5.99e+11 m⁻³  hmF2=273.6 km
+    [Abel] GN04 10:59: NmF2=6.39e+11 m⁻³  hmF2=275.8 km
+    [Abel] GN04 10:59: NmF2=5.44e+11 m⁻³  hmF2=303.3 km
+    [Abel] GN05 11:24: NmF2=5.64e+11 m⁻³  hmF2=268.4 km
+    [Abel] GN05 11:06: NmF2=3.92e+11 m⁻³  hmF2=304.8 km
+    [Abel] GN05 11:18: NmF2=1.79e+11 m⁻³  hmF2=543.5 km
+    [Abel] GN05 11:07: NmF2=5.73e+11 m⁻³  hmF2=284.5 km
+    [Abel] GN05 11:10: NmF2=4.26e+11 m⁻³  hmF2=317.8 km
+    [Abel] GN05 11:10: NmF2=4.26e+11 m⁻³  hmF2=317.8 km
+    [Abel] GN05 11:13: NmF2=7.23e+11 m⁻³  hmF2=282.5 km
+    [Abel] GN05 11:13: NmF2=5.86e+11 m⁻³  hmF2=279.5 km
+    [Abel] GN05 11:19: NmF2=1.52e+11 m⁻³  hmF2=525.8 km
+◀◀◀ _run_or_load END   | 2025-08-27_1050 | bin=55  | ro_only   | gridded_kf     : DONE       (330.6s) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1050 | bin=55  | ro_igs    | gridded_kf    
+    [diag] 2025-08-27_1050 | bin=55  | ro_igs    | gridded_kf     : RUNNING    (force=False, cached=False) ...
+
+────────────────────────────────────────────────────────────
+  Group : 2025-08-27_1050
+  Window: 2025-08-27_1050  |  Region: POLAR_N  |  55 occultation(s)
+────────────────────────────────────────────────────────────
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.41.0020.G29.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.44.0017.E33.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.45.0016.C44.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.46.0015.E05.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.47.0013.G26.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.48.0013.E31.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.48.0013.G25.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN04.2025.239.10.49.0012.R04.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.10.58.0019.E33.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.10.58.0019.G29.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.01.0018.G25.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.01.0016.G25.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.01.0016.C44.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.02.0015.E05.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.03.0014.E16.01_0000.0001_nc — parse returned None
+No valid descending tangent points found. Skipping.
+    [skip] podTc2_GN05.2025.239.11.06.0012.R04.01_0000.0001_nc — parse returned None
+  Parsed 39/55 files successfully.
+    [podTc2] YM08 10:51 — 600 valid rays → decimated to 200 (stride 3)
+    [podTc2] GN04 11:01 — 372 valid rays → decimated to 186 (stride 2)
+    [podTc2] GN04 11:01 — 460 valid rays → decimated to 154 (stride 3)
+    [podTc2] YM08 10:52 — 256 valid rays → decimated to 128 (stride 2)
+    [podTc2] YM08 10:52 — 166 valid rays → decimated to 166 (stride 1)
+    [podTc2] YM08 10:52 — 186 valid rays → decimated to 186 (stride 1)
+    [podTc2] YM08 10:53 — 380 valid rays → decimated to 190 (stride 2)
+    [podTc2] YM08 10:57 — 393 valid rays → decimated to 197 (stride 2)
+    [podTc2] YM08 10:38 — 464 valid rays → decimated to 155 (stride 3)
+    [podTc2] YM08 10:41 — 270 valid rays → decimated to 135 (stride 2)
+    [podTc2] YM08 10:41 — 270 valid rays → decimated to 135 (stride 2)
+    [podTc2] GN04 11:08 — 481 valid rays → decimated to 161 (stride 3)
+    [podTc2] GN04 11:11 — 466 valid rays → decimated to 156 (stride 3)
+    [podTc2] GN04 11:09 — 362 valid rays → decimated to 181 (stride 2)
+    [podTc2] GN04 11:03 — 134 valid rays → decimated to 134 (stride 1)
+    [podTc2] GN04 11:10 — 391 valid rays → decimated to 196 (stride 2)
+    [podTc2] GN04 11:01 — 72 valid rays → decimated to 72 (stride 1)
+    [podTc2] GN04 11:01 — 368 valid rays → decimated to 184 (stride 2)
+    [podTc2] GN04 11:02 — 446 valid rays → decimated to 149 (stride 3)
+    [podTc2] GN04 11:11 — 432 valid rays → decimated to 144 (stride 3)
+    [podTc2] YM08 10:51 — 343 valid rays → decimated to 172 (stride 2)
+    [podTc2] GN05 11:17 — 280 valid rays → decimated to 140 (stride 2)
+    [podTc2] GN04 10:56 — 429 valid rays → decimated to 143 (stride 3)
+    [podTc2] GN05 11:17 — 559 valid rays → decimated to 187 (stride 3)
+    [podTc2] GN05 11:22 — 440 valid rays → decimated to 147 (stride 3)
+    [podTc2] GN05 11:17 — 91 valid rays → decimated to 91 (stride 1)
+    [podTc2] GN04 10:59 — 416 valid rays → decimated to 139 (stride 3)
+    [podTc2] GN04 10:59 — 705 valid rays → decimated to 177 (stride 4)
+    [podTc2] GN04 10:59 — 316 valid rays → decimated to 158 (stride 2)
+    [podTc2] GN05 11:24 — 361 valid rays → decimated to 181 (stride 2)
+    [podTc2] GN05 11:06 — 482 valid rays → decimated to 161 (stride 3)
+    [podTc2] GN05 11:18 — 244 valid rays → decimated to 122 (stride 2)
+    [podTc2] GN05 11:07 — 494 valid rays → decimated to 165 (stride 3)
+    [podTc2] GN05 11:10 — 506 valid rays → decimated to 169 (stride 3)
+    [podTc2] GN05 11:10 — 506 valid rays → decimated to 169 (stride 3)
+    [podTc2] GN05 11:13 — 712 valid rays → decimated to 178 (stride 4)
+    [podTc2] GN05 11:13 — 363 valid rays → decimated to 182 (stride 2)
+    [podTc2] GN05 11:19 — 134 valid rays → decimated to 134 (stride 1)
+    [skip] GN05 11:22 — only 14 valid rays
+  Bbox lat [22.8, 90.0]  lon [-180.0, 180.0]  |  union vertices: 175
+  Final group: 38 occultation(s), 175 union-mesh vertices
+  Saved trim diagnostic → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT/2025-08-27_1050/bin_55/ro_igs/group_2025-08-27_1050_trim.png
+  [extra] Injected 80 ground-station arc(s) → total 118 arc(s) in assimilation pool
+  -> Building H matrices (6104 rays across 118 arc(s), single parallel sweep) …
+  -> Building H matrices:    610/6104 rays ( 10.0%)
+  -> Building H matrices:   1220/6104 rays ( 20.0%)
+  -> Building H matrices:   1830/6104 rays ( 30.0%)
+  -> Building H matrices:   2440/6104 rays ( 40.0%)
+  -> Building H matrices:   3050/6104 rays ( 50.0%)
+  -> Building H matrices:   3660/6104 rays ( 60.0%)
+  -> Building H matrices:   4270/6104 rays ( 70.0%)
+  -> Building H matrices:   4880/6104 rays ( 79.9%)
+  -> Building H matrices:   5490/6104 rays ( 89.9%)
+  -> Building H matrices:   6100/6104 rays ( 99.9%)
+  -> Building H matrices:   6104/6104 rays (100.0%)
+  Combined H shape : (6104, 9800)  (total rays = 6104)
+  Skipping sequential KF assimilation (run_sequential=False).
+  Running joint (batch) KF assimilation …
+  Skipping joint (batch) KF assimilation (skip_joint=True) — gridded KF not run; posterior aliased to prior.
+  Prior RMSE  : 47.415 TECU
+  Post  RMSE  : 47.415 TECU
+    [Abel] YM08 10:51: NmF2=5.32e+11 m⁻³  hmF2=263.6 km
+    [Abel] GN04 11:01: NmF2=4.24e+11 m⁻³  hmF2=311.7 km
+    [Abel] GN04 11:01: NmF2=4.24e+11 m⁻³  hmF2=311.7 km
+    [Abel] YM08 10:52: NmF2=5.61e+11 m⁻³  hmF2=267.9 km
+    [Abel] YM08 10:52: NmF2=5.90e+10 m⁻³  hmF2=525.8 km
+    [Abel] YM08 10:52: NmF2=1.87e+11 m⁻³  hmF2=415.2 km
+    [Abel] YM08 10:53: NmF2=4.11e+11 m⁻³  hmF2=264.9 km
+    [Abel] YM08 10:57: NmF2=4.49e+11 m⁻³  hmF2=264.2 km
+    [Abel] YM08 10:38: NmF2=7.33e+11 m⁻³  hmF2=261.2 km
+    [Abel] YM08 10:41: NmF2=6.14e+11 m⁻³  hmF2=305.1 km
+    [Abel] YM08 10:41: NmF2=6.14e+11 m⁻³  hmF2=305.1 km
+    [Abel] GN04 11:08: NmF2=5.70e+11 m⁻³  hmF2=257.9 km
+    [Abel] GN04 11:11: NmF2=7.17e+11 m⁻³  hmF2=274.8 km
+    [Abel] GN04 11:09: NmF2=6.56e+11 m⁻³  hmF2=272.1 km
+    [Abel] GN04 11:03: NmF2=7.42e+10 m⁻³  hmF2=562.8 km
+    [Abel] GN04 11:10: NmF2=6.48e+11 m⁻³  hmF2=263.4 km
+    [Abel] GN04 11:01: NmF2=1.16e+11 m⁻³  hmF2=570.9 km
+    [Abel] GN04 11:01: NmF2=2.13e+11 m⁻³  hmF2=476.6 km
+    [Abel] GN04 11:02: NmF2=2.42e+11 m⁻³  hmF2=474.0 km
+    [Abel] GN04 11:11: NmF2=7.36e+11 m⁻³  hmF2=285.7 km
+    [Abel] YM08 10:51: NmF2=3.94e+11 m⁻³  hmF2=331.7 km
+    [Abel] GN05 11:17: NmF2=4.57e+11 m⁻³  hmF2=346.5 km
+    [Abel] GN04 10:56: NmF2=3.47e+11 m⁻³  hmF2=285.4 km
+    [Abel] GN05 11:17: NmF2=3.99e+11 m⁻³  hmF2=254.5 km
+    [Abel] GN05 11:22: NmF2=4.75e+11 m⁻³  hmF2=290.9 km
+    [Abel] GN05 11:17: NmF2=1.15e+11 m⁻³  hmF2=559.0 km
+    [Abel] GN04 10:59: NmF2=5.99e+11 m⁻³  hmF2=273.6 km
+    [Abel] GN04 10:59: NmF2=6.39e+11 m⁻³  hmF2=275.8 km
+    [Abel] GN04 10:59: NmF2=5.44e+11 m⁻³  hmF2=303.3 km
+    [Abel] GN05 11:24: NmF2=5.64e+11 m⁻³  hmF2=268.4 km
+    [Abel] GN05 11:06: NmF2=3.92e+11 m⁻³  hmF2=304.8 km
+    [Abel] GN05 11:18: NmF2=1.79e+11 m⁻³  hmF2=543.5 km
+    [Abel] GN05 11:07: NmF2=5.73e+11 m⁻³  hmF2=284.5 km
+    [Abel] GN05 11:10: NmF2=4.26e+11 m⁻³  hmF2=317.8 km
+    [Abel] GN05 11:10: NmF2=4.26e+11 m⁻³  hmF2=317.8 km
+    [Abel] GN05 11:13: NmF2=7.23e+11 m⁻³  hmF2=282.5 km
+    [Abel] GN05 11:13: NmF2=5.86e+11 m⁻³  hmF2=279.5 km
+    [Abel] GN05 11:19: NmF2=1.52e+11 m⁻³  hmF2=525.8 km
+    [Abel] Skipped 80 ground-station arc(s) (RO-only technique)
+/home/austinhunter/Downloads/PlanetiQ_Code/venv311/lib/python3.11/site-packages/shapely/creation.py:218: RuntimeWarning: invalid value encountered in linestrings
+  return lib.linestrings(coords, np.intc(handle_nan), out=out, **kwargs)
+◀◀◀ _run_or_load END   | 2025-08-27_1050 | bin=55  | ro_igs    | gridded_kf     : DONE       (324.8s) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1050 | bin=55  | igs_only  | gridded_kf    
+    [diag] 2025-08-27_1050 | bin=55  | igs_only  | gridded_kf     : RUNNING    (force=False, cached=False) ...
+    [Info] Initialising information matrix (n_state=16280) …
+    [Info] arcs ingested = 80/80  |  obs rows = 80  |  Λ cond ≈ 2.48e+23
+    [Info] Solving …
+    [Prior] innovation  mean=8.86  std=18.25  n_obs=80
+    [Post ] innovation  mean=5.85  std=14.86
+    RMSE:  prior=20.286 TECU  →  post=15.974 TECU
+◀◀◀ _run_or_load END   | 2025-08-27_1050 | bin=55  | igs_only  | gridded_kf     : DONE       (173.9s) -> status=ok (no 'status' key)
+  [EKF] Fibonacci ROI grid @ 100 km: 15606 points (bbox lat[22.8,90.0] lon[-180.0,180.0])
+
+[ISR-DA] Checkpoints saved — re-run to resume.
+[ISR-DA] Log written to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260721_121641.log

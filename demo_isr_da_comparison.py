@@ -14,6 +14,7 @@ measured against real ISR electron density profiles.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import os
 import pickle
@@ -63,6 +64,7 @@ from demo_compare_kf_enkf import (
 )
 from plotIonosphereTomography import (
     ISR_MIN_VALID_GATES, _plot_group_all_modes, plot_isr_truth_comparison,
+    plot_occultation_prior_post_truth,
 )
 from test_param_iono import (
     EKF_Param, select_arcs_by_count_bin, _get_reflection_height, _fit_power_law,
@@ -107,16 +109,114 @@ DA_CACHE    = ROOT / "Data" / "DA_Cache"
 SAVE_DIR    = ROOT / "Figures" / "ISR_DA_Comparison"/ "OUTPUT"
 ISR_METRICS_CSV  = DA_CACHE / "isr_metrics.csv"
 PROGRESS_MANIFEST = DA_CACHE / "progress_manifest.json"
+LOG_DIR     = ROOT / "Logs" / "ISR_DA_Comparison"
 
-IGS_STATIONS_NORDIC = ["TRO1", "WUTH", "NYA1"]
+IGS_STATIONS_NORDIC = ["TRO1", "NYA1", "KIR0", "SOD3", "ALRT","SCOR", "HOFN", 'REYK']
 OBS_MODES    = ["ro_only", "ro_igs", "igs_only"]
 FILTER_TYPES = ["gridded_kf", "parametric_ekf"]
 POLAR_LAT_THRESHOLD = 60.0   # matches demo_group.py
 
+# ── Parametric-EKF tuning knobs ──────────────────────────────────────────────
+# Single source of truth for the EKF_Param hyperparameters used by BOTH the
+# ro/ro_igs and igs_only call sites in run_all_filters(). Defaults preserve the
+# previous hardcoded call-site behavior exactly (alpha=0.5, sigma_obs=10 TECU,
+# 100 update rays, 200-member prior, tol=5e-4, 20 iters, unscaled prior).
+# Overridable per-run via the --ekf-* CLI flags in _main_impl() (mirrors the
+# OCC_COUNT_BINS global-mutation pattern). NOTE: this supersedes the now-unused
+# EKF_PARAM_* block in test_param_iono.py, which only feeds that module's own
+# standalone __main__, not this ISR-comparison pipeline.
+EKF_ALPHA        = 0.5     # Gauss-Newton step-size damping (0,1]; lower = safer
+EKF_SIGMA_OBS    = 10.0    # observation-noise std-dev R = sigma^2 I (TECU)
+EKF_MAX_RAYS     = 100     # representative update rays per arc
+EKF_TOL          = 5e-7    # relative ||dP||/||P|| convergence tolerance
+EKF_MAX_ITER     = 20      # maximum EKF iterations (hard cap; stop on either
+                           # this OR the compound ΔP/P & TEC-RMSE gate below)
+EKF_N_MEMBERS    = 200     # prior ensemble size factoring the covariance X_c
+EKF_PRIOR_SCALE  = 1.0     # multiplier on prior param variances P_b
+
+# ── Tuned-EKF knobs (Phase 2a/2c recommended config) ─────────────────────────
+# Default OFF = legacy all-free, fixed-alpha (preserves prior pipeline output).
+# Enable the tuned config via --ekf-free / --ekf-adapt-alpha / --ekf-alpha-max /
+# --ekf-tec-rmse-tol. Recommended (dominates all-free on hmF2 + below-peak,
+# self-regulates on inconsistent data): free="log10(NmF2)", adapt_alpha=True,
+# alpha_max=1.0, tec_rmse_tol~45, alpha(start)=0.25, max_iter>=20.
+EKF_FREE_PARAMS  = None     # None = all 8 params free; else list of free names
+EKF_ADAPT_ALPHA  = False    # residual-merit adaptive step size (accelerate/damp)
+EKF_ALPHA_MAX    = 1.0      # cap on adaptive-alpha growth
+EKF_TEC_RMSE_TOL = 5.0      # compound TEC-RMSE convergence gate (TECU); None=off.
+                            # Convergence requires ΔP/P<EKF_TOL AND RMSE<this.
+
+
+def _parse_ekf_free_spec(spec: "str | None") -> "list | None":
+    """"all" (or None) -> None (all params free); "log10(NmF2),hmF2" -> list."""
+    if spec is None or spec.strip().lower() == "all":
+        return None
+    return [p.strip() for p in spec.split(",") if p.strip()]
+
+
+# ── EKF-only dense-grid experiment knobs ─────────────────────────────────────
+# Default preserves the legacy behaviour (gridded KF + single parametric EKF on
+# the RO union mesh). The Aug/Sep/Oct-2025 ISR study enables:
+#   --no-gridded-kf  : skip the gridded-KF joint solve (process_group
+#                      skip_joint=True) and drop gridded_kf from scoring/plots.
+#   --ekf-grid fibonacci --ekf-grid-km 200 : run the EKF on a dense
+#                      ROI-restricted Fibonacci sphere instead of the union mesh.
+#   --ekf-modes allfree,nmf2 : run the EKF once per named mode (distinct
+#                      filter_type labels), instead of one "parametric_ekf".
+RUN_GRIDDED_KF   = True      # False => --no-gridded-kf
+EKF_GRID_MODE    = "mesh"    # "mesh" (union mesh) | "fibonacci" (dense ROI grid)
+EKF_GRID_KM      = 200.0     # Fibonacci point spacing (km); tunable per run.
+                             # 200 km keeps the uncapped ROI grid tractable: the
+                             # EKF's dense (N_STATE*n_geo)^2 covariance scales as
+                             # 1/spacing^4, so 200 km is ~16x cheaper than 100 km.
+# Hard cap on Fibonacci grid points. The EKF's dense background covariance is
+# (N_STATE * n_geo)^2, so n_geo must stay bounded; if the footprint disk at the
+# chosen spacing exceeds this, the points closest to the centroid are kept.
+# None (default) removes the cap -- rely on the ROI gate + 200 km spacing to
+# bound n_geo instead. Set --ekf-grid-max-pts N (>0) to reinstate a hard cap.
+EKF_GRID_MAX_PTS = None
+# Domain gate (Fix 1): RO tangent points are selected by TIME window, so some
+# land thousands of km from the ISR/IGS footprint (Siberia/Bering/Mongolia when
+# the target is ESR at 78 N). Drop any RO anchor whose great-circle distance
+# from the footprint reference (robust IGS-pierce/TECmax centroid) exceeds this,
+# before it can seed the Fibonacci grid. 6000 km keeps the RO extrema out to a
+# wide radius while the reference stays anchored on the TECmax footprint; lower
+# it (e.g. 2500) to tighten the grid onto the core. None disables the gate.
+EKF_ROI_GATE_KM  = 6000.0
+
+# Registry of named EKF modes -> (filter_type label, free_params). "allfree"
+# estimates all 8 IRI params; "nmf2" freezes everything but the amplitude.
+_EKF_MODE_REGISTRY = {
+    "allfree": ("ekf_allfree", None),
+    "nmf2":    ("ekf_nmf2",    ["log10(NmF2)"]),
+}
+# None => legacy single EKF run labelled "parametric_ekf" (honours --ekf-free).
+# Else a list of (label, free_params) tuples set from --ekf-modes.
+EKF_MODES = None
+
 ISR_SITES              = ("ESR", "TRO")
 ISR_SITE_MATCH_DEG     = 0.5
 ISR_WINDOW_HALF_MINUTES = 15
+
+# When True (default) only process availability-minima windows that have a
+# co-located ISR truth profile (within ISR_WINDOW_HALF_MINUTES of an ISR_SITES
+# station); ISR-blind windows are dropped since they can never be scored.
+# --all-windows sets this False to also run (and sort last) the blind windows.
+REQUIRE_ISR_TRUTH      = True
+
+# When True, investigate ONLY the single best window per day -- the one with the
+# most RO occultations (tie-broken by most co-located ISR truth EDPs). The
+# OCC_COUNT_BINS sweep still runs on that window so the occultation-count
+# sensitivity study is preserved. Enabled by --best-window-only / --final.
+BEST_WINDOW_ONLY       = False
 ISR_ROI_MAX_KM         = 2500.0   # RO peak-tangent-point → ISR site gate (great-circle)
+
+# Minimum tangent-altitude a ray must reach to count as a "full profile" for
+# the per-occultation prior/post/truth diagnostic plot -- see the selection
+# comment in _process_window_bin for why this matters (avoids picking a
+# short, high-altitude-only arc fragment just because it's geographically
+# close to the ISR site).
+OCC_DIAG_FULL_PROFILE_MAX_ALT_KM = 100.0
 
 OCC_COUNT_BINS = [None, 55, 45, 35, 25, 15, 5]
   # None = assimilate ALL available RO occultations in the window;
@@ -129,7 +229,7 @@ MIN_ARCS_PER_WINDOW  = 10      # skip windows thinner than this
 # HF band frequencies [MHz] at which posterior/ISR radio reflection heights are
 # compared in compute_isr_metrics (mirrors analyze_hf_reflection_heights() in
 # test_param_iono.py, applied here to a single column vs a single ISR profile).
-HF_REFLECTION_FREQS_MHZ = [1.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0]
+HF_REFLECTION_FREQS_MHZ = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -228,9 +328,19 @@ def print_progress_status(priority_days: "list[dict] | None" = None,
     bin_labels = [_bin_label(b) for b in OCC_COUNT_BINS]
     n_per_cell = len(OBS_MODES) * len(FILTER_TYPES)
     window_filter_note = f" matching --window {window_key_filter}" if window_key_filter else ""
-    print(f"\n  Window x bin_count completion grid{window_filter_note} "
+    if BEST_WINDOW_ONLY:
+        isr_note = " (best ISR-truth window per day only)"
+    elif REQUIRE_ISR_TRUTH:
+        isr_note = " (ISR-truth windows only; --all-windows to include blind ones)"
+    else:
+        isr_note = ""
+    print(f"\n  Window x bin_count completion grid{window_filter_note}{isr_note} "
           f"({len(bin_labels)} bin(s): {bin_labels}; "
           f"{n_per_cell} = {len(OBS_MODES)} obs_modes x {len(FILTER_TYPES)} filters per cell):")
+
+    # Only load the ISR EDP catalogue when we actually need to gate windows on
+    # truth availability -- keeps --all-windows / --status fast otherwise.
+    _status_edps = load_edps() if REQUIRE_ISR_TRUTH else None
 
     grand_done = 0
     grand_total = 0
@@ -242,6 +352,18 @@ def print_progress_status(priority_days: "list[dict] | None" = None,
         windows = build_minima_windows_for_day(podtc_dir, date)
         if window_key_filter is not None:
             windows = [w for w in windows if w["window_key"] == window_key_filter]
+        if REQUIRE_ISR_TRUTH and _status_edps is not None:
+            # Mirror run_all_filters(): drop ISR-blind windows so the grid
+            # reflects exactly the units a real run would process.
+            _counts = {id(w): len(_isr_profiles_for_window(_status_edps,
+                                                           w["t_centre"]))
+                       for w in windows}
+            windows = [w for w in windows if _counts[id(w)] > 0]
+            if BEST_WINDOW_ONLY and windows:
+                # Same selection as run_all_filters(): most occultations,
+                # tie-broken by most ISR truth EDPs.
+                windows = [max(windows,
+                               key=lambda w: (w["n_occ"], _counts[id(w)]))]
         if not windows:
             continue
         any_windows = True
@@ -267,7 +389,9 @@ def print_progress_status(priority_days: "list[dict] | None" = None,
                   f"   {row_done:>4}/{row_total}")
 
     if not any_windows:
-        print("  No windows found for the selected day(s)" + window_filter_note + ".")
+        _blind_note = " with ISR truth" if REQUIRE_ISR_TRUTH else ""
+        print(f"  No windows found{_blind_note} for the selected day(s)"
+              + window_filter_note + ".")
     else:
         pct = 100.0 * grand_done / grand_total if grand_total else 0.0
         print(f"\n  Grid total: {grand_done}/{grand_total} unit(s) done ({pct:.1f}%)")
@@ -473,7 +597,7 @@ def load_igs_for_day(date: pd.Timestamp) -> list:
 # down to a single epoch. LEO/GNSS are (3, n_s); the rest are (n_s,).
 _IGS_ARC_PER_EPOCH_FIELDS = (
     "tec", "tangent_km", "ipp_lat", "ipp_lon",
-    "arc_time_sec", "time_s", "time_utc_h",
+    "arc_time_sec", "time_s", "time_utc_h", "elev_deg",
 )
 
 
@@ -550,7 +674,7 @@ def _build_hour_edp_cache(t_centre: pd.Timestamp) -> dict:
 
 def _build_igs_eds_occ(t_centre: pd.Timestamp, grid_lats: np.ndarray,
                         grid_lons: np.ndarray, alt_grid: np.ndarray,
-                        n_mc: int = 500) -> "SimpleNamespace":
+                        n_mc: int = 100) -> "SimpleNamespace":
     """
     Build an EDPSamples-compatible IRI Monte Carlo ensemble evaluated exactly
     at the IGS regular grid's own points (grid_lats/grid_lons from build_grid).
@@ -592,6 +716,188 @@ def _build_igs_eds_occ(t_centre: pd.Timestamp, grid_lats: np.ndarray,
     )
 
 
+# ── Dense Fibonacci-sphere grid for the parametric EKF ───────────────────────
+_EARTH_RADIUS_KM = 6371.0
+
+
+def _fibonacci_sphere_latlon(n_points: int) -> tuple[np.ndarray, np.ndarray]:
+    """Golden-spiral (Fibonacci) lattice of n_points ~evenly spaced on a sphere.
+
+    Returns (lat_deg, lon_deg) with lat in [-90, 90], lon in [-180, 180). The
+    average nearest-neighbour spacing is ~R * sqrt(4*pi / n_points).
+    """
+    n = int(max(n_points, 1))
+    i = np.arange(n, dtype=float)
+    z = 1.0 - 2.0 * (i + 0.5) / n                   # ring heights in (-1, 1)
+    lat = np.degrees(np.arcsin(np.clip(z, -1.0, 1.0)))
+    golden = np.pi * (3.0 - np.sqrt(5.0))           # golden angle (radians)
+    lon = np.degrees((golden * i) % (2.0 * np.pi))
+    lon = ((lon + 180.0) % 360.0) - 180.0
+    return lat, lon
+
+
+def _latlon_unit_vectors(lat_deg: np.ndarray, lon_deg: np.ndarray) -> np.ndarray:
+    """(N,3) unit vectors on the sphere for arrays of lat/lon in degrees."""
+    latr = np.radians(np.asarray(lat_deg, dtype=float))
+    lonr = np.radians(np.asarray(lon_deg, dtype=float))
+    cl = np.cos(latr)
+    return np.column_stack([cl * np.cos(lonr), cl * np.sin(lonr), np.sin(latr)])
+
+
+def _robust_sphere_centroid(V: np.ndarray,
+                            trim_iters: int = 3,
+                            trim_percentile: float = 90.0) -> np.ndarray:
+    """Outlier-resistant unit centroid of (N,3) unit vectors.
+
+    Iteratively computes the mean direction, drops the farthest points beyond
+    the *trim_percentile* angular distance, and recomputes -- so a handful of
+    stray anchors (e.g. RO tangent points thousands of km from the footprint)
+    cannot drag the centre. Always keeps at least three points.
+    """
+    V = np.asarray(V, dtype=float)
+    if V.shape[0] <= 3:
+        c = V.mean(axis=0)
+        n = float(np.linalg.norm(c))
+        return V[0] if n < 1e-9 else c / n
+
+    keep = np.ones(V.shape[0], dtype=bool)
+    centroid = V.mean(axis=0)
+    nrm = float(np.linalg.norm(centroid))
+    centroid = V[0] if nrm < 1e-9 else centroid / nrm
+    for _ in range(int(trim_iters)):
+        cos_to = np.clip(V[keep] @ centroid, -1.0, 1.0)
+        ang = np.arccos(cos_to)
+        thr = np.percentile(ang, float(trim_percentile))
+        idx = np.where(keep)[0]
+        new_keep = keep.copy()
+        new_keep[idx[ang > thr]] = False
+        if new_keep.sum() < 3:                             # never over-trim
+            break
+        keep = new_keep
+        c = V[keep].mean(axis=0)
+        nrm = float(np.linalg.norm(c))
+        if nrm < 1e-9:
+            break
+        centroid = c / nrm
+    return centroid
+
+
+def _fibonacci_roi_grid(roi_lats, roi_lons, spacing_km: float,
+                        margin_km: float = 200.0,
+                        max_pts: "int | None" = None,
+                        radius_percentile: float = 95.0,
+                        trim_iters: int = 3,
+                        trim_percentile: float = 90.0
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """Fibonacci-sphere grid (~spacing_km apart) covering the RO/IGS footprint.
+
+    A GLOBAL Fibonacci sphere is generated at the resolution needed for the
+    requested spacing (N ~ 4*pi*R^2 / spacing^2), then restricted by
+    GREAT-CIRCLE distance to the footprint -- NOT a lat/lon bounding box.
+
+    Why great-circle, not bbox: near the pole a physically compact footprint
+    (e.g. RO tangent points within a few 1000 km of ESR at 78 N) scatters
+    across nearly the full longitude circle, so a lat/lon bbox degenerates to
+    lon in [-180, 180] and the clipped grid becomes an entire latitude BAND
+    around the globe (~18k points at 100 km) -- most of them on the far side
+    of the pole, thousands of km from any data, which blows up both the IRI
+    Monte Carlo and the EKF's dense (N_STATE * n_geo)^2 covariance. Distance
+    from the footprint centroid keeps only the points that actually surround
+    the data.
+
+    Robustness (Fix 2): the centre is a trimmed unit centroid (see
+    _robust_sphere_centroid) so stray anchors cannot drag it, and the disk
+    radius is the *radius_percentile* of anchor distances (not the single
+    farthest point) plus *margin_km* -- so one outlier that slips past the
+    upstream gate can no longer balloon the footprint. If the result still
+    exceeds *max_pts*, the points closest to the centroid are kept (a dense
+    core centred on the footprint), bounding the EKF state size.
+    """
+    roi_lats = np.asarray(roi_lats, dtype=float)
+    roi_lons = np.asarray(roi_lons, dtype=float)
+    ok = np.isfinite(roi_lats) & np.isfinite(roi_lons)
+    roi_lats, roi_lons = roi_lats[ok], roi_lons[ok]
+    if roi_lats.size == 0:
+        return np.array([]), np.array([])
+
+    V = _latlon_unit_vectors(roi_lats, roi_lons)            # (n_roi, 3)
+    centroid = _robust_sphere_centroid(
+        V, trim_iters=trim_iters, trim_percentile=trim_percentile)
+
+    # Angular radius: percentile of anchor distances (+ physical margin), so a
+    # single outlier cannot set the radius the way arccos(min cos) would.
+    cos_to_roi = np.clip(V @ centroid, -1.0, 1.0)
+    ang_to_roi = np.arccos(cos_to_roi)
+    pct_ang = float(np.percentile(ang_to_roi, float(radius_percentile)))
+    radius_km = _EARTH_RADIUS_KM * pct_ang + float(margin_km)
+
+    n_global = int(round(4.0 * np.pi * _EARTH_RADIUS_KM ** 2 / float(spacing_km) ** 2))
+    n_global = max(n_global, 60)
+    flat, flon = _fibonacci_sphere_latlon(n_global)
+    F = _latlon_unit_vectors(flat, flon)
+    ang = np.arccos(np.clip(F @ centroid, -1.0, 1.0))
+    dist_km = _EARTH_RADIUS_KM * ang
+    keep = dist_km <= radius_km
+    klat, klon, kdist = flat[keep], flon[keep], dist_km[keep]
+
+    if max_pts is not None and klat.size > int(max_pts):
+        order = np.argsort(kdist)[:int(max_pts)]           # densest core first
+        klat, klon = klat[order], klon[order]
+
+    return klat, klon
+
+
+def _gate_ro_anchors_to_footprint(ro_points, ref_points,
+                                  gate_km: "float | None" = EKF_ROI_GATE_KM
+                                  ) -> tuple[list, int]:
+    """Drop RO anchors that sit far from the ISR/IGS footprint (Fix 1).
+
+    ``ro_points`` and ``ref_points`` are lists of ``(lat, lon)``. The gate
+    reference is the robust unit centroid of ``ref_points`` (the IGS pierce
+    points, which are physically anchored to the ground stations); if there
+    are none, it falls back to the robust centroid of the RO points themselves
+    (so a well-clustered RO-only footprint is left untouched). Any RO anchor
+    whose great-circle distance from that reference exceeds ``gate_km`` is
+    removed, and the survivors are de-duplicated.
+
+    Returns ``(kept_points, n_dropped)``.
+    """
+    ro_points = [p for p in (ro_points or [])
+                 if np.isfinite(p[0]) and np.isfinite(p[1])]
+    if not ro_points or gate_km is None:
+        # De-dupe only.
+        seen, kept = set(), []
+        for p in ro_points:
+            key = (round(float(p[0]), 4), round(float(p[1]), 4))
+            if key not in seen:
+                seen.add(key)
+                kept.append(p)
+        return kept, 0
+
+    ref = [p for p in (ref_points or [])
+           if np.isfinite(p[0]) and np.isfinite(p[1])]
+    ref_src = ref if ref else ro_points
+    Vref = _latlon_unit_vectors(np.array([p[0] for p in ref_src]),
+                                np.array([p[1] for p in ref_src]))
+    centroid = _robust_sphere_centroid(Vref)
+
+    Vro = _latlon_unit_vectors(np.array([p[0] for p in ro_points]),
+                               np.array([p[1] for p in ro_points]))
+    ang = np.arccos(np.clip(Vro @ centroid, -1.0, 1.0))
+    dist_km = _EARTH_RADIUS_KM * ang
+
+    seen, kept, n_drop = set(), [], 0
+    for p, d in zip(ro_points, dist_km):
+        if d > float(gate_km):
+            n_drop += 1
+            continue
+        key = (round(float(p[0]), 4), round(float(p[1]), 4))
+        if key not in seen:
+            seen.add(key)
+            kept.append(p)
+    return kept, n_drop
+
+
 def _adapt_igs_kf_result_for_plotting(
     result:           dict,
     *,
@@ -624,9 +930,23 @@ def _adapt_igs_kf_result_for_plotting(
     (post_sigma) — see Q1 in memory/project_isr_da_comparison_plan.md.
     A dense (n_alt*n_grid)^2 covariance here would risk the same O(n^3) RAM
     blowup the SRIF batch-update fix was written to avoid.
+
+    eds_occ is built from ``result``'s own grid_lats/grid_lons (the grid that
+    actually produced result["prior_edp"]/result["post_edp"]) rather than the
+    grid_lats/grid_lons passed in by the caller, which reflect the CURRENT
+    run's ROI/grid construction and can differ in vertex count from an older
+    cached ``result`` (e.g. a stale igs_only/gridded_kf DA_CACHE pickle from
+    before a ROI-construction code change) -- using the caller's grid in that
+    case silently produces a geolocation mesh with a different vertex count
+    than prior_edp_3d/post_edp_3d, which later crashes compute_isr_metrics's
+    cKDTree lookup with an out-of-bounds column index. Falls back to the
+    passed-in grid_lats/grid_lons for old cached results that predate the
+    "grid_lats"/"grid_lons" keys being stored on the result dict.
     """
-    clean_window = result["clean_window"]
-    eds_occ      = _build_igs_eds_occ(t_centre, grid_lats, grid_lons, alt_grid)
+    clean_window     = result["clean_window"]
+    result_grid_lats = result.get("grid_lats", grid_lats)
+    result_grid_lons = result.get("grid_lons", grid_lons)
+    eds_occ = _build_igs_eds_occ(t_centre, result_grid_lats, result_grid_lons, alt_grid)
 
     sat_ids     = [(arc.get("leo_id", "IGS"), arc.get("prn_id", "?")) for arc in clean_window]
     file_labels = [f"{leo}/{prn}" for leo, prn in sat_ids]
@@ -755,6 +1075,14 @@ def _run_parametric_ekf(
     alpha: float = 0.5,
     tol: float = 5e-4,
     max_iter: int = 20,
+    tec_rmse_tol: "float | None" = None,
+    adapt_alpha: bool = False,
+    alpha_max: float = 1.0,
+    step_clip: "float | None" = None,
+    prior_scale: float = 1.0,
+    return_diagnostics: bool = False,
+    free_params: "list | None" = None,
+    param_stages: "list | None" = None,
 ) -> dict:
     """
     Run the iterative parametric EKF (EKF_Param, test_param_iono.py) on the
@@ -789,6 +1117,13 @@ def _run_parametric_ekf(
         Maximum representative rays per arc used in the EKF update.
     alpha, tol, max_iter :
         EKF_Param step-size, convergence tolerance, and iteration cap.
+    prior_scale : float
+        Multiplier on the prior parameter-error *variances* (the N_STATE x
+        N_STATE background covariance P_b from _covariance_from_edp_samples,
+        which factors the EKF gain via X_c X_c^T). >1 loosens the prior (larger
+        steps, more data-following); <1 tightens it (more conservative, guards
+        against TEC-fit aliasing that smears the F2 peak). 1.0 = current
+        behavior. Applied as P_b *= prior_scale before ensemble generation.
 
     Returns
     -------
@@ -826,6 +1161,8 @@ def _run_parametric_ekf(
 
     # Background covariance from the same IRI ensemble the KF uses.
     P_b, C_s = _covariance_from_edp_samples(eds_occ, alt_grid)
+    if prior_scale != 1.0:
+        P_b = np.asarray(P_b, dtype=float) * float(prior_scale)
 
     model_state = IonosphericState(n_grid_points=n_geo, n_members=n_members)
     if n_geo > 1:
@@ -867,7 +1204,11 @@ def _run_parametric_ekf(
     ekf_result = EKF_Param(
         arc_truth_list, model_state, grid_lats, grid_lons, alt_grid,
         sigma_obs=sigma_obs, max_update_rays=max_update_rays,
-        alpha=alpha, tol=tol, max_iter=max_iter, jacobian_analytical = True,
+        alpha=alpha, tol=tol, max_iter=max_iter, tec_rmse_tol=tec_rmse_tol,
+        adapt_alpha=adapt_alpha, alpha_max=alpha_max, step_clip=step_clip,
+        jacobian_analytical = True,
+        prior_mean=mean_state, return_diagnostics=return_diagnostics,
+        free_params=free_params, param_stages=param_stages,
     )
     _plot_ekf_convergence(
         residual_history=ekf_result["residual_history"],
@@ -908,6 +1249,12 @@ def _run_parametric_ekf(
     # (plotIonosphereTomography.py) to render the 8-parameter readout box.
     res_ekf["prior_mean_state"]     = ekf_result["prior_mean_state"]
     res_ekf["posterior_mean_state"] = ekf_result["posterior_mean_state"]
+    # Observability diagnostics (only present when return_diagnostics=True)
+    if return_diagnostics:
+        res_ekf["prior_jacobian"]  = ekf_result.get("prior_jacobian")
+        res_ekf["prior_y_hat"]     = ekf_result.get("prior_y_hat")
+        res_ekf["prior_obs_sigma"] = ekf_result.get("prior_obs_sigma")
+        res_ekf["ekf_n_grid"]      = ekf_result.get("n_grid_points")
 
     return res_ekf
 
@@ -1008,6 +1355,13 @@ def run_all_filters(day_info: dict, windows: list[dict], igs_arcs: list,
     results: dict = {}
     all_metrics: list[dict] = []
     global_edp_cache: dict = {}
+    # Memo of the EKF Fibonacci grid + its IRI Monte-Carlo prior, keyed by
+    # group_key (window identity). The grid is built from the FULL window's
+    # occultations (bin-independent), so it is identical across the whole
+    # OCC_COUNT_BINS sweep -- computing the ~3.3M-eval prior once per window
+    # instead of once per bin (a ~7x saving), and keeping the EKF state grid
+    # fixed so the occultation-count study varies only measurement density.
+    _ekf_grid_memo: dict = {}
     progress_manifest = _load_progress_manifest()
 
     _tro = INSTRUMENTS["TRO"]
@@ -1110,9 +1464,16 @@ def run_all_filters(day_info: dict, windows: list[dict], igs_arcs: list,
         if t_centre.hour not in global_edp_cache:
             global_edp_cache.update(_build_hour_edp_cache(t_centre))
 
-        # ── Per-window/per-bin/per-obs-mode figure output directories ───────
+        # ── Per-bin/per-window/per-obs-mode figure output directories ───────
+        # Canonical layout: SAVE_DIR/bin_<label>/<window>/<obs_mode>/. This is
+        # the SAME ordering used by _plot_group_all_modes (save_dir/safe_key/
+        # mode), plot_isr_truth_comparison, and the occ-diagnostics below (all
+        # keyed off bin_save_dir = SAVE_DIR/bin_<label>), so the KF/EnKF/EKF
+        # run figures land ALONGSIDE the comparison figures for the same
+        # window+bin instead of under a divergent SAVE_DIR/<window>/bin_.../
+        # tree (the old bug: bin and window folders at different levels).
         safe_key   = _safe_group_key(group_key)
-        group_dirs = {mode: SAVE_DIR / safe_key / f"bin_{bin_label}" / mode for mode in OBS_MODES}
+        group_dirs = {mode: SAVE_DIR / f"bin_{bin_label}" / safe_key / mode for mode in OBS_MODES}
         for _d in group_dirs.values():
             _d.mkdir(parents=True, exist_ok=True)
 
@@ -1129,7 +1490,12 @@ def run_all_filters(day_info: dict, windows: list[dict], igs_arcs: list,
 
         _roi_lats = [p[0] for p in ro_roi_points + igs_roi_points]
         _roi_lons = [p[1] for p in ro_roi_points + igs_roi_points]
-        _igs_tbbox = _tight_bbox_from_points(_roi_lats, _roi_lons, margin_deg=100.0 / 111.32)
+        # 200 km margin, lat-aware (see _tight_bbox_from_points docstring in
+        # demo_group.py) so points near the edge of the RO+IGS footprint are
+        # reliably included even for near-polar/near-meridional groups where
+        # a flat lat/lon-degree margin badly under-covers physical distance
+        # in longitude.
+        _igs_tbbox = _tight_bbox_from_points(_roi_lats, _roi_lons, margin_km=200.0)
         # Near-pole groups can have RO/IGS points scattered across most of the
         # longitude circle even in a small physical area (1° longitude is a
         # tiny distance near the pole), which would otherwise blow up the
@@ -1153,6 +1519,7 @@ def run_all_filters(day_info: dict, windows: list[dict], igs_arcs: list,
             podtc_max_rays=200, extra_clean_list=None,
             roi_extra_points=igs_roi_points,
             filter_label="kf",
+            skip_joint=(not RUN_GRIDDED_KF),
         ))
         # With run_sequential=False, process_group() never runs the step-by-step
         # KF loop, so result["post_edp_3d"] is left equal to the prior (see
@@ -1172,6 +1539,7 @@ def run_all_filters(day_info: dict, windows: list[dict], igs_arcs: list,
             podtc_max_rays=200, extra_clean_list=igs_window_arcs,
             roi_extra_points=igs_roi_points,
             filter_label="kf",
+            skip_joint=(not RUN_GRIDDED_KF),
         ))
         if res_roigs is not None:
             res_roigs["post_edp_3d"] = res_roigs.get("joint_post_edp_3d", res_roigs.get("post_edp_3d"))
@@ -1217,69 +1585,171 @@ def run_all_filters(day_info: dict, windows: list[dict], igs_arcs: list,
         # ── Parametric EKF ────────────────────────────────────────────────────
         kf_results = {"ro_only": res_ro, "ro_igs": res_roigs, "igs_only": res_igs}
 
+        # EKF modes: either the named-mode set from --ekf-modes (each its own
+        # filter_type label, e.g. ekf_allfree / ekf_nmf2) or the legacy single
+        # "parametric_ekf" run honouring --ekf-free.
+        ekf_modes = (EKF_MODES if EKF_MODES is not None
+                     else [("parametric_ekf", EKF_FREE_PARAMS)])
+
+        # ── Optional dense Fibonacci-sphere grid for the EKF ─────────────────
+        # Built once per window/bin (the grid is obs-mode independent). The EKF
+        # runs on this grid instead of the RO union mesh. prior_edp_3d is the
+        # IRI mean on the same points (used only by _run_parametric_ekf's
+        # fallback path; the primary mean_state is rebuilt from IRI internally).
+        _fib_eds_occ = None
+        _fib_prior   = None
+        if EKF_GRID_MODE == "fibonacci":
+            _memo = _ekf_grid_memo.get(group_key)
+            if _memo is None:
+                # Build the EKF grid from the FULL window's occultations
+                # (full_group_meta), NOT the bin-subsampled group_meta, so the
+                # state canvas is fixed across the whole OCC_COUNT_BINS sweep --
+                # only measurement density varies per bin, not the grid itself.
+                # IGS pierce points (igs_roi_points) are already bin-independent.
+                _ro_roi_full   = _ro_extrema_points(full_group_meta)
+                # Fix 1: gate RO anchors to the IGS/ISR footprint before they
+                # become grid anchors, so time-window strays (Siberia/Bering/
+                # Mongolia when targeting ESR) can't drag the centroid/radius.
+                _ro_roi_gated, _n_gated = _gate_ro_anchors_to_footprint(
+                    _ro_roi_full, igs_roi_points, gate_km=EKF_ROI_GATE_KM)
+                if _n_gated:
+                    print(f"  [EKF] ROI gate @ {EKF_ROI_GATE_KM:.0f} km: dropped "
+                          f"{_n_gated} stray RO anchor(s) far from the IGS/ISR "
+                          f"footprint ({len(_ro_roi_gated)} RO anchor(s) kept)")
+                _roi_lats_full = [p[0] for p in _ro_roi_gated + igs_roi_points]
+                _roi_lons_full = [p[1] for p in _ro_roi_gated + igs_roi_points]
+                _fib_lats, _fib_lons = _fibonacci_roi_grid(
+                    _roi_lats_full, _roi_lons_full, EKF_GRID_KM,
+                    margin_km=200.0, max_pts=EKF_GRID_MAX_PTS)
+                print(f"  [EKF] Fibonacci ROI grid @ {EKF_GRID_KM:.0f} km: "
+                      f"{len(_fib_lats)} points "
+                      f"(great-circle around robust footprint centroid, "
+                      f"cap={EKF_GRID_MAX_PTS}, {len(_roi_lats_full)} "
+                      f"full-window ROI anchor pts; built once per window)")
+                _memo_eds   = None
+                _memo_prior = None
+                if len(_fib_lats) >= 2:
+                    _memo_eds = _build_igs_eds_occ(
+                        t_centre, _fib_lats, _fib_lons, ALT_GRID)
+                    try:
+                        _ne_all, _ = _get_iri_edp_and_features_batch(
+                            t_centre, _fib_lats.astype(float), _fib_lons.astype(float),
+                            ALT_GRID, _solar_sampling_df(t_centre))
+                        _memo_prior = _ne_all
+                    except Exception as _exc:  # noqa: BLE001
+                        print(f"  [EKF] Fibonacci prior IRI batch failed ({_exc}); "
+                              f"fallback path will use the mesh prior.")
+                else:
+                    print("  [EKF] Fibonacci ROI grid too small (<2 pts) — using "
+                          "the union-mesh grid for this window instead.")
+                _memo = {"eds_occ": _memo_eds, "prior": _memo_prior,
+                         "n_pts": len(_fib_lats)}
+                _ekf_grid_memo[group_key] = _memo
+            else:
+                print(f"  [EKF] Fibonacci ROI grid @ {EKF_GRID_KM:.0f} km: "
+                      f"{_memo['n_pts']} points (memoized for window "
+                      f"{group_key}; reused across occultation-count bins)")
+            _fib_eds_occ = _memo["eds_occ"]
+            _fib_prior   = _memo["prior"]
+
+        def _apply_grid_override(res_kf_local):
+            """Swap eds_occ/prior to the dense Fibonacci grid when available."""
+            if _fib_eds_occ is None:
+                return res_kf_local
+            out = dict(res_kf_local)
+            out["eds_occ"] = _fib_eds_occ
+            if _fib_prior is not None:
+                out["prior_edp_3d"] = _fib_prior
+            return out
+
         for obs_mode, kf_result in kf_results.items():
-            if obs_mode == "igs_only":
-                def _run_igs_ekf(kf_result=kf_result, t_centre=t_centre,
-                                  group_key=group_key):
-                    if kf_result is None:
-                        print(f"  [diag] {group_key} | igs_only  | parametric_ekf : "
-                              f"SKIPPED (upstream igs_only gridded_kf result is None)")
+            for _ekf_label, _free in ekf_modes:
+                if obs_mode == "igs_only":
+                    def _run_igs_ekf(kf_result=kf_result, t_centre=t_centre,
+                                     group_key=group_key, _free=_free,
+                                     _ekf_label=_ekf_label):
+                        if kf_result is None:
+                            print(f"  [diag] {group_key} | igs_only  | {_ekf_label} : "
+                                  f"SKIPPED (upstream igs_only data-prep is None)")
+                            return None
+                        clean_window = kf_result["clean_window"]
+                        # Use kf_result's OWN grid_lats/grid_lons (the grid that
+                        # produced kf_result["prior_edp"]); a cache hit from an
+                        # older run may have a different vertex count, and using
+                        # the current grid would desync eds_occ.geolocation from
+                        # prior_edp_3d. (Grid override below handles fibonacci.)
+                        _kf_grid_lats = kf_result.get("grid_lats", _igs_grid_lats)
+                        _kf_grid_lons = kf_result.get("grid_lons", _igs_grid_lons)
+                        eds_occ = _build_igs_eds_occ(
+                            t_centre, _kf_grid_lats, _kf_grid_lons, ALT_GRID)
+                        sat_ids = [
+                            (arc.get("leo_id", "IGS"), arc.get("prn_id", "?"))
+                            for arc in clean_window
+                        ]
+                        res_kf_adapted = dict(kf_result)
+                        res_kf_adapted["eds_occ"]       = eds_occ
+                        res_kf_adapted["clean_list"]    = clean_window
+                        res_kf_adapted["prior_edp_3d"]  = kf_result["prior_edp"]
+                        res_kf_adapted["sat_ids"]       = sat_ids
+                        res_kf_adapted["time_window"]   = group_key
+                        res_kf_adapted["region"]        = _igs_region
+                        res_kf_adapted["alt_grid"]      = ALT_GRID
+                        res_kf_adapted["file_labels"]   = [
+                            f"{leo}/{prn}" for leo, prn in sat_ids
+                        ]
+                        res_kf_adapted["lats"] = [
+                            float(arc.get("lat_tecmax_tangent", np.nan))
+                            for arc in clean_window
+                        ]
+                        res_kf_adapted["lons"] = [
+                            float(arc.get("lon_tecmax_tangent", np.nan))
+                            for arc in clean_window
+                        ]
+                        res_kf_adapted = _apply_grid_override(res_kf_adapted)
+                        return _run_parametric_ekf(
+                            res_kf=res_kf_adapted, alt_grid=ALT_GRID,
+                            save_dir=str(group_dirs["igs_only"]),
+                            group_key=f"{group_key}_igs_only_{_ekf_label}",
+                            n_members=EKF_N_MEMBERS, sigma_obs=EKF_SIGMA_OBS,
+                            max_update_rays=EKF_MAX_RAYS, alpha=EKF_ALPHA,
+                            tol=EKF_TOL, max_iter=EKF_MAX_ITER,
+                            prior_scale=EKF_PRIOR_SCALE,
+                            free_params=_free,
+                            adapt_alpha=EKF_ADAPT_ALPHA, alpha_max=EKF_ALPHA_MAX,
+                            tec_rmse_tol=EKF_TEC_RMSE_TOL,
+                        )
+
+                    _run_or_load(group_key, bin_count, obs_mode, _ekf_label, _run_igs_ekf)
+                    continue
+
+                def _run_ekf(kf_result=kf_result, obs_mode=obs_mode,
+                             _free=_free, _ekf_label=_ekf_label):
+                    if kf_result is None or kf_result.get("status") != "Success":
+                        reason = "upstream result is None" if kf_result is None else \
+                            f"upstream data-prep status={kf_result.get('status')!r} (need 'Success')"
+                        print(f"  [diag] {group_key} | {obs_mode:<9} | {_ekf_label} : "
+                              f"SKIPPED ({reason})")
                         return None
-                    clean_window = kf_result["clean_window"]
-                    eds_occ = _build_igs_eds_occ(
-                        t_centre, _igs_grid_lats, _igs_grid_lons, ALT_GRID,
-                    )
-                    sat_ids = [
-                        (arc.get("leo_id", "IGS"), arc.get("prn_id", "?"))
-                        for arc in clean_window
-                    ]
-                    res_kf_adapted = dict(kf_result)
-                    res_kf_adapted["eds_occ"]       = eds_occ
-                    res_kf_adapted["clean_list"]    = clean_window
-                    res_kf_adapted["prior_edp_3d"]  = kf_result["prior_edp"]
-                    res_kf_adapted["sat_ids"]       = sat_ids
-                    res_kf_adapted["time_window"]   = group_key
-                    res_kf_adapted["region"]        = _igs_region
-                    res_kf_adapted["alt_grid"]      = ALT_GRID
-                    res_kf_adapted["file_labels"]   = [
-                        f"{leo}/{prn}" for leo, prn in sat_ids
-                    ]
-                    res_kf_adapted["lats"] = [
-                        float(arc.get("lat_tecmax_tangent", np.nan))
-                        for arc in clean_window
-                    ]
-                    res_kf_adapted["lons"] = [
-                        float(arc.get("lon_tecmax_tangent", np.nan))
-                        for arc in clean_window
-                    ]
+                    res_kf_local = _apply_grid_override(kf_result)
                     return _run_parametric_ekf(
-                        res_kf=res_kf_adapted, alt_grid=ALT_GRID,
-                        save_dir=str(group_dirs["igs_only"]),
-                        group_key=f"{group_key}_igs_only", n_members=200,
-                        sigma_obs=10.0, max_update_rays=100,
+                        res_kf=res_kf_local, alt_grid=ALT_GRID,
+                        save_dir=str(group_dirs[obs_mode]),
+                        group_key=f"{group_key}_{obs_mode}_{_ekf_label}",
+                        n_members=EKF_N_MEMBERS, sigma_obs=EKF_SIGMA_OBS,
+                        max_update_rays=EKF_MAX_RAYS, alpha=EKF_ALPHA,
+                        tol=EKF_TOL, max_iter=EKF_MAX_ITER,
+                        prior_scale=EKF_PRIOR_SCALE,
+                        free_params=_free,
+                        adapt_alpha=EKF_ADAPT_ALPHA, alpha_max=EKF_ALPHA_MAX,
+                        tec_rmse_tol=EKF_TEC_RMSE_TOL,
                     )
+                _run_or_load(group_key, bin_count, obs_mode, _ekf_label, _run_ekf)
 
-                _run_or_load(group_key, bin_count, obs_mode, "parametric_ekf", _run_igs_ekf)
-                continue
-
-            def _run_ekf(kf_result=kf_result, obs_mode=obs_mode):
-                if kf_result is None or kf_result.get("status") != "Success":
-                    reason = "upstream result is None" if kf_result is None else \
-                        f"upstream gridded_kf status={kf_result.get('status')!r} (need 'Success')"
-                    print(f"  [diag] {group_key} | {obs_mode:<9} | parametric_ekf : "
-                          f"SKIPPED ({reason})")
-                    return None
-                return _run_parametric_ekf(
-                    res_kf=kf_result, alt_grid=ALT_GRID,
-                    save_dir=str(group_dirs[obs_mode]),
-                    group_key=f"{group_key}_{obs_mode}", n_members=200,
-                    sigma_obs=10.0, max_update_rays=100,
-                )
-            _run_or_load(group_key, bin_count, obs_mode, "parametric_ekf", _run_ekf)
-
-        # ── Per-group summary: which of the 6 (obs_mode, filter_type) combos
+        # ── Per-group summary: which of the (obs_mode, filter_type) combos
         #    actually produced a usable result vs. were skipped/failed ────────
-        print(f"  [diag] {group_key} | bin={bin_label} : summary of 6 obs_mode/filter_type combos")
+        _n_combos = len(OBS_MODES) * len(FILTER_TYPES)
+        print(f"  [diag] {group_key} | bin={bin_label} : summary of {_n_combos} "
+              f"obs_mode/filter_type combos")
         _missing = object()
         for obs_mode in OBS_MODES:
             for filter_type in FILTER_TYPES:
@@ -1381,23 +1851,149 @@ def run_all_filters(day_info: dict, windows: list[dict], igs_arcs: list,
                     edp, group_filter_results, group_key, solar, group_save_dir,
                 )
 
+        # ── Per-(obs_mode, filter_type) prior/posterior/truth occultation
+        #    diagnostics -- one representative real RO ray per combo (never
+        #    a collapsed single-epoch IGS arc), so we can actually see what
+        #    the joint update did to a ray's electron-density curtain instead
+        #    of only the aggregate RMSE/foF2 numbers.
+        #
+        #    Selection: a single group can hold several occultations of the
+        #    *same* PRN (different LEOs tracking the same GNSS satellite),
+        #    and picking purely by "closest tangent point to the ISR site"
+        #    can silently prefer a short, high-altitude-only arc fragment
+        #    (e.g. a ray that only got tracked down to ~500 km, well above
+        #    the F2 peak, but happens to sit geographically near the site)
+        #    over a geographically-farther ray that actually descends
+        #    through the whole ionosphere. So: first restrict to rays with a
+        #    genuine full profile (minimum tangent altitude below
+        #    OCC_DIAG_FULL_PROFILE_MAX_ALT_KM), then, among those, pick the
+        #    one whose TEC-max tangent point (the deepest/closest-approach
+        #    point, used elsewhere in the codebase -- see
+        #    demo_compare_kf_enkf._arc_representative_tangent -- as a proxy
+        #    for the point of maximum columnar electron content along the
+        #    ray) is nearest a co-located ISR scan, so the truth row is both
+        #    populated and geographically meaningful. Falls back to the
+        #    deepest-reaching ray available if nothing reaches below the
+        #    full-profile threshold this window.
+        occdiag_save_dir = bin_save_dir / _safe_group_key(group_key) / "occ_diagnostics"
+        diag_edp = None
+        if window_edps:
+            def _edp_dt(e):
+                t = pd.Timestamp(e["time"])
+                if t.tzinfo is not None:
+                    t = t.tz_localize(None)
+                return abs((t - t_centre).total_seconds())
+            diag_edp = min(window_edps, key=_edp_dt)
+        diag_isr_profile = _isr_edp_to_profile(diag_edp) if diag_edp is not None else None
+        diag_isr_site = (
+            (float(diag_edp["lon"]), float(diag_edp["lat"]))
+            if diag_edp is not None else None
+        )
+
+        for obs_mode in OBS_MODES:
+            for filter_type in FILTER_TYPES:
+                result = group_filter_results.get(obs_mode, {}).get(filter_type)
+                if result is None or result.get("status", "Success") != "Success":
+                    continue
+                clean_list = result.get("clean_list") or []
+                ro_indices = [
+                    i for i, occ in enumerate(clean_list)
+                    if len(occ.get("tangent_km", [])) > 1
+                ]
+                if not ro_indices:
+                    continue
+
+                def _min_tangent_alt(i, _clean_list=clean_list):
+                    return float(np.min(_clean_list[i]["tangent_km"]))
+
+                full_profile_indices = [
+                    i for i in ro_indices
+                    if _min_tangent_alt(i) < OCC_DIAG_FULL_PROFILE_MAX_ALT_KM
+                ]
+                if full_profile_indices:
+                    candidate_indices = full_profile_indices
+                else:
+                    print(f"  [occ-diag] {group_key} {obs_mode}/{filter_type}: "
+                          f"no occultation reaches below "
+                          f"{OCC_DIAG_FULL_PROFILE_MAX_ALT_KM:.0f}km tangent alt; "
+                          f"falling back to deepest-reaching ray available.")
+                    candidate_indices = ro_indices
+
+                if diag_isr_site is not None:
+                    site_lon, site_lat = diag_isr_site
+                    from demo_compare_kf_enkf import _arc_representative_tangent
+
+                    def _tec_max_dist(i, _clean_list=clean_list):
+                        occ = _clean_list[i]
+                        la, lo = _arc_representative_tangent(
+                            np.asarray(occ["LEO"]), np.asarray(occ["GNSS"])
+                        )
+                        return _haversine_km(la, lo, site_lat, site_lon)
+
+                    occ_idx = min(candidate_indices, key=_tec_max_dist)
+                else:
+                    occ_idx = min(candidate_indices, key=_min_tangent_alt)
+
+                try:
+                    plot_occultation_prior_post_truth(
+                        result, occ_idx, result.get("alt_grid", ALT_GRID), group_key,
+                        occdiag_save_dir, label=f"{obs_mode}_{filter_type}",
+                        isr_profile=diag_isr_profile, isr_site=diag_isr_site,
+                    )
+                except Exception:
+                    print(f"  [occ-diag] plot failed for {group_key} "
+                          f"{obs_mode}/{filter_type}; continuing.")
+                    traceback.print_exc()
+
         _mark_group_complete(plots_written=True)
 
-    # ── Run ISR-aligned windows first, most occultations first ───────────────
-    # A window with no co-located ISR profile can never produce an ISR
-    # comparison metric/plot (see compute_isr_metrics / window_edps above),
-    # so running those last means the runs that actually yield useful output
-    # land first instead of waiting behind a full day of ISR-blind windows.
-    def _window_priority(window: dict) -> tuple:
-        has_isr = bool(_isr_profiles_for_window(edps, window["t_centre"]))
-        return (0 if has_isr else 1, -window["n_occ"])
+    # ── Keep only windows with co-located ISR truth ──────────────────────────
+    # A window with no co-located ISR profile (within ISR_WINDOW_HALF_MINUTES
+    # of a known ISR site) can never produce an ISR comparison metric/plot
+    # (see compute_isr_metrics / window_edps above). By default we DROP those
+    # ISR-blind windows entirely so the pipeline only runs where truth
+    # verification data exists. Pass --all-windows to keep them (they are then
+    # sorted last, most-occultations-first, as before).
+    def _isr_edp_count(window: dict) -> int:
+        return len(_isr_profiles_for_window(edps, window["t_centre"]))
 
-    keyed_windows = sorted(((_window_priority(w), w) for w in windows), key=lambda p: p[0])
-    windows = [item for _, item in keyed_windows]
-    n_isr_aligned = sum(1 for key, _ in keyed_windows if key[0] == 0)
-    print(f"  [diag] Reordered {len(windows)} window(s): "
-          f"{n_isr_aligned} ISR-aligned (most occultations first), "
-          f"{len(windows) - n_isr_aligned} without ISR truth (run last)")
+    _n_total = len(windows)
+    _isr_count = {id(w): _isr_edp_count(w) for w in windows}
+    _isr_windows  = [w for w in windows if _isr_count[id(w)] > 0]
+    _blind_windows = [w for w in windows if _isr_count[id(w)] == 0]
+    # "Best" == most RO occultations, tie-broken by most ISR truth EDPs.
+    _isr_windows.sort(key=lambda w: (w["n_occ"], _isr_count[id(w)]), reverse=True)
+
+    if BEST_WINDOW_ONLY:
+        # Investigate only the single best (most occultations + ISR truth)
+        # window for this day. The OCC_COUNT_BINS sweep still runs on that one
+        # window, so the occultation-count sensitivity study is preserved.
+        if _isr_windows:
+            _best = _isr_windows[0]
+            windows = [_best]
+            print(f"  [diag] BEST-WINDOW-ONLY: {day_info.get('date')} -> "
+                  f"window {_best['window_key']} "
+                  f"(n_occ={_best['n_occ']}, "
+                  f"n_isr_edp={_isr_count[id(_best)]}) selected from "
+                  f"{len(_isr_windows)} ISR-truth window(s).")
+        else:
+            windows = []
+            print(f"  [diag] BEST-WINDOW-ONLY: no ISR-truth window for "
+                  f"{day_info.get('date')}; nothing to run.")
+    elif REQUIRE_ISR_TRUTH:
+        windows = _isr_windows
+        print(f"  [diag] {len(windows)}/{_n_total} window(s) have co-located ISR "
+              f"truth; dropped {len(_blind_windows)} ISR-blind window(s) "
+              f"(--all-windows to keep them).")
+        if not windows:
+            print(f"  [diag] No ISR-truth windows for {day_info.get('date')}; "
+                  f"nothing to run.")
+    else:
+        _blind_windows.sort(key=lambda w: -w["n_occ"])
+        windows = _isr_windows + _blind_windows
+        print(f"  [diag] Reordered {len(windows)} window(s): "
+              f"{len(_isr_windows)} ISR-aligned (most occultations first), "
+              f"{len(_blind_windows)} without ISR truth (run last).")
 
     # Each (window, bin_count) unit is processed in its own try/except so an
     # unexpected exception in one unit (ROI setup, adaptation code, etc. --
@@ -1496,6 +2092,21 @@ def compute_isr_metrics(day_info: dict, filter_results: dict, edps: list[dict]) 
             post_edp_3d  = np.asarray(result["post_edp_3d"])
             alt_grid     = np.asarray(result["alt_grid"])
             geoloc       = np.asarray(result["eds_occ"].geolocation)  # (n_geo,2): lon, lat
+
+            # Defensive guard: eds_occ.geolocation and prior_edp_3d/post_edp_3d
+            # should always share the same vertex count (they're built from
+            # the same grid), but a DA_CACHE pickle produced before a
+            # ROI/grid-construction code change can have them out of sync
+            # (see _adapt_igs_kf_result_for_plotting's docstring). Skip this
+            # combo rather than crashing the whole run's metrics computation
+            # with an out-of-bounds cKDTree column index below.
+            if prior_edp_3d.ndim < 2 or geoloc.shape[0] != prior_edp_3d.shape[1]:
+                print(f"  [warn] {group_key} bin={bin_label} {obs_mode}/{filter_type}: "
+                      f"eds_occ has {geoloc.shape[0]} vertices but prior_edp_3d has "
+                      f"{prior_edp_3d.shape[1] if prior_edp_3d.ndim >= 2 else '?'} columns "
+                      f"-- stale/mismatched cache, skipping ISR metrics for this combo "
+                      f"(re-run with --force to regenerate).")
+                continue
 
             # ── Group/filter-level diagnostics (same for every ISR site in
             #    this window -- attached to each row below for easy
@@ -2016,9 +2627,15 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
         fig.savefig(save_dir / "isr_threshold_fractions.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
 
-    # ── Figure 4: foF2 scatter, truth vs. posterior, parametric_ekf only ───
-    ekf_df = df[df["filter_type"] == "parametric_ekf"]
-    if not ekf_df.empty and {"isr_foF2", "post_foF2"}.issubset(ekf_df.columns):
+    # ── Figure 4: foF2 scatter, truth vs. posterior, per EKF filter mode ───
+    # One figure per active EKF filter_type (parametric_ekf / ekf_allfree /
+    # ekf_nmf2 / …); filename suffixed by the label so runs with several EKF
+    # modes don't clobber each other.
+    _ekf_labels = [ft for ft in df["filter_type"].unique() if ft != "gridded_kf"]
+    for _ekf_label in _ekf_labels:
+        ekf_df = df[df["filter_type"] == _ekf_label]
+        if ekf_df.empty or not {"isr_foF2", "post_foF2"}.issubset(ekf_df.columns):
+            continue
         fig, axes = plt.subplots(1, len(OBS_MODES), figsize=(6 * len(OBS_MODES), 5.5), squeeze=False)
         axes = axes[0]
         sm = None
@@ -2041,41 +2658,46 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
                 sm = sc
         if sm is not None:
             fig.colorbar(sm, ax=axes.tolist(), label="n_ro_occultations", fraction=0.03, pad=0.02)
-        fig.suptitle("parametric_ekf: ISR truth vs. posterior foF2")
-        fig.savefig(save_dir / "isr_foF2_scatter_by_mode.png", dpi=150, bbox_inches="tight")
+        fig.suptitle(f"{_ekf_label}: ISR truth vs. posterior foF2")
+        fig.savefig(save_dir / f"isr_foF2_scatter_by_mode_{_ekf_label}.png",
+                    dpi=150, bbox_inches="tight")
         plt.close(fig)
 
-    # ── Figure 5: HF propagation perspective (time series) ─────────────────
+    # ── Figure 5: HF propagation perspective (time series), per EKF mode ────
     if {"isr_foF2", "post_foF2", "isr_foE", "post_foE"}.issubset(df.columns):
-        ekf_ts_df = df[df["filter_type"] == "parametric_ekf"].sort_values("t_centre")
-        fig, axes = plt.subplots(len(ISR_SITES), 1, figsize=(11, 4.5 * len(ISR_SITES)), squeeze=False)
-        axes = axes[:, 0]
-        for ax, site in zip(axes, ISR_SITES):
-            site_df = ekf_ts_df[ekf_ts_df["instrument"] == site]
-            if site_df.empty:
-                ax.set_title(f"{site} (no data)")
+        for _ekf_label in _ekf_labels:
+            ekf_ts_df = df[df["filter_type"] == _ekf_label].sort_values("t_centre")
+            if ekf_ts_df.empty:
                 continue
-            truth = site_df.drop_duplicates(subset=["t_centre"]).sort_values("t_centre")
-            ax.plot(truth["t_centre"], truth["isr_foF2"], color="black", lw=1.6,
-                     marker="o", ms=3, label="truth foF2")
-            ax.plot(truth["t_centre"], truth["isr_foE"], color="black", lw=1.2, ls="--",
-                     marker="o", ms=3, label="truth foE")
-            for obs_mode in OBS_MODES:
-                mode_df = site_df[site_df["obs_mode"] == obs_mode].sort_values("t_centre")
-                if mode_df.empty:
+            fig, axes = plt.subplots(len(ISR_SITES), 1, figsize=(11, 4.5 * len(ISR_SITES)), squeeze=False)
+            axes = axes[:, 0]
+            for ax, site in zip(axes, ISR_SITES):
+                site_df = ekf_ts_df[ekf_ts_df["instrument"] == site]
+                if site_df.empty:
+                    ax.set_title(f"{site} (no data)")
                     continue
-                color = obs_mode_colors[obs_mode]
-                ax.plot(mode_df["t_centre"], mode_df["post_foF2"], color=color, lw=1.3,
-                         marker="s", ms=3, label=f"{obs_mode} post foF2")
-                ax.plot(mode_df["t_centre"], mode_df["post_foE"], color=color, lw=1.0, ls="--",
-                         marker="s", ms=3, label=f"{obs_mode} post foE")
-            ax.set_ylabel("Frequency [MHz]")
-            ax.set_title(f"{site}: HF propagation frequencies (parametric EKF)")
-            ax.legend(fontsize=6, ncol=3)
-        axes[-1].set_xlabel("time (t_centre)")
-        fig.tight_layout()
-        fig.savefig(save_dir / "isr_hf_propagation_timeseries.png", dpi=150, bbox_inches="tight")
-        plt.close(fig)
+                truth = site_df.drop_duplicates(subset=["t_centre"]).sort_values("t_centre")
+                ax.plot(truth["t_centre"], truth["isr_foF2"], color="black", lw=1.6,
+                         marker="o", ms=3, label="truth foF2")
+                ax.plot(truth["t_centre"], truth["isr_foE"], color="black", lw=1.2, ls="--",
+                         marker="o", ms=3, label="truth foE")
+                for obs_mode in OBS_MODES:
+                    mode_df = site_df[site_df["obs_mode"] == obs_mode].sort_values("t_centre")
+                    if mode_df.empty:
+                        continue
+                    color = obs_mode_colors[obs_mode]
+                    ax.plot(mode_df["t_centre"], mode_df["post_foF2"], color=color, lw=1.3,
+                             marker="s", ms=3, label=f"{obs_mode} post foF2")
+                    ax.plot(mode_df["t_centre"], mode_df["post_foE"], color=color, lw=1.0, ls="--",
+                             marker="s", ms=3, label=f"{obs_mode} post foE")
+                ax.set_ylabel("Frequency [MHz]")
+                ax.set_title(f"{site}: HF propagation frequencies ({_ekf_label})")
+                ax.legend(fontsize=6, ncol=3)
+            axes[-1].set_xlabel("time (t_centre)")
+            fig.tight_layout()
+            fig.savefig(save_dir / f"isr_hf_propagation_timeseries_{_ekf_label}.png",
+                        dpi=150, bbox_inches="tight")
+            plt.close(fig)
 
     print(f"[ISR-DA] Frequency-domain figures saved to {save_dir}")
 
@@ -2087,7 +2709,29 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
 _OCC_CONVERGENCE_FILTER_STYLE = {
     "gridded_kf":     dict(color="steelblue", ls="-",  marker="s"),
     "parametric_ekf": dict(color="crimson",   ls="--", marker="^"),
+    "ekf_allfree":    dict(color="crimson",   ls="--", marker="^"),
+    "ekf_nmf2":       dict(color="darkorange", ls=":", marker="D"),
 }
+
+# Fallback cycle for any EKF filter_type label not explicitly styled above.
+_EKF_STYLE_CYCLE = [
+    dict(color="crimson",    ls="--", marker="^"),
+    dict(color="darkorange", ls=":",  marker="D"),
+    dict(color="purple",     ls="-.", marker="v"),
+    dict(color="green",      ls="--", marker="P"),
+]
+
+
+def _ekf_filter_labels():
+    """EKF filter_type labels currently active (everything except gridded_kf)."""
+    return [ft for ft in FILTER_TYPES if ft != "gridded_kf"]
+
+
+def _filter_style(filter_type, _idx=0):
+    """Plot style for a filter_type, falling back to an EKF cycle entry."""
+    if filter_type in _OCC_CONVERGENCE_FILTER_STYLE:
+        return _OCC_CONVERGENCE_FILTER_STYLE[filter_type]
+    return _EKF_STYLE_CYCLE[_idx % len(_EKF_STYLE_CYCLE)]
 
 _OCC_CONVERGENCE_METRICS = {
     "below_peak_ne_mae": dict(
@@ -2301,7 +2945,71 @@ def plot_isr_convergence_vs_occ_count(
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
+class _Tee:
+    """File-like object that writes to both an underlying stream (terminal)
+    and a log file, so `print()`/traceback output is visible live *and*
+    captured for later troubleshooting (see run log at LOG_DIR)."""
+
+    def __init__(self, stream, log_fh):
+        self._stream = stream
+        self._log_fh = log_fh
+
+    def write(self, data):
+        self._stream.write(data)
+        self._log_fh.write(data)
+        return len(data)
+
+    def flush(self):
+        self._stream.flush()
+        self._log_fh.flush()
+
+    def isatty(self):
+        # argparse / some libraries check this; forward to the real stream
+        # so behaviour (e.g. colour output) is unaffected.
+        return getattr(self._stream, "isatty", lambda: False)()
+
+
+def _setup_file_logging() -> tuple[Path, "object"]:
+    """Tee stdout+stderr to a timestamped log file under LOG_DIR so a run's
+    full output can be inspected after the fact (terminal scrollback alone
+    is not enough for long/backgrounded runs). Returns (log_path, log_fh);
+    caller is responsible for closing log_fh when done."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = LOG_DIR / f"isr_da_comparison_{stamp}.log"
+    log_fh = open(log_path, "a", buffering=1)  # line-buffered
+    sys.stdout = _Tee(sys.stdout, log_fh)
+    sys.stderr = _Tee(sys.stderr, log_fh)
+    print(f"[ISR-DA] Logging this run to: {log_path}")
+    return log_path, log_fh
+
+
 def main() -> None:
+    _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
+    log_path, log_fh = _setup_file_logging()
+    try:
+        _main_impl()
+    except Exception:
+        # Make sure the traceback for an unhandled exception lands in the
+        # log file too (KeyboardInterrupt/SystemExit -- e.g. --help or the
+        # existing Ctrl-C handler -- are intentional exits, not logged as
+        # errors), then re-raise so normal process-exit behaviour is unchanged.
+        traceback.print_exc()
+        raise
+    finally:
+        print(f"[ISR-DA] Log written to: {log_path}")
+        sys.stdout, sys.stderr = _orig_stdout, _orig_stderr
+        log_fh.close()
+
+
+def _main_impl() -> None:
+    global EKF_ALPHA, EKF_SIGMA_OBS, EKF_MAX_RAYS, EKF_TOL, EKF_MAX_ITER
+    global EKF_N_MEMBERS, EKF_PRIOR_SCALE, OCC_COUNT_BINS
+    global EKF_FREE_PARAMS, EKF_ADAPT_ALPHA, EKF_ALPHA_MAX, EKF_TEC_RMSE_TOL
+    global RUN_GRIDDED_KF, EKF_GRID_MODE, EKF_GRID_KM, EKF_GRID_MAX_PTS, EKF_ROI_GATE_KM
+    global EKF_MODES, FILTER_TYPES
+    global REQUIRE_ISR_TRUTH, BEST_WINDOW_ONLY
+    global SAVE_DIR, ISR_METRICS_CSV, PROGRESS_MANIFEST
     parser = argparse.ArgumentParser(
         description="Compare KF/EKF data assimilation against ISR ground truth.")
     parser.add_argument("--force", action="store_true",
@@ -2336,6 +3044,108 @@ def main() -> None:
     parser.add_argument("--occ-bins", type=str, default=None, metavar="LIST",
                         help='Comma-separated override of OCC_COUNT_BINS, e.g. '
                              '"all,30,20,10" (each token an int or "all").')
+    # ── Parametric-EKF tuning overrides (see the EKF_* config block) ─────────
+    parser.add_argument("--ekf-alpha", type=float, default=None, metavar="A",
+                        help="Override EKF Gauss-Newton step-size damping in "
+                             f"(0,1] (default {EKF_ALPHA}).")
+    parser.add_argument("--ekf-sigma-obs", type=float, default=None, metavar="TECU",
+                        help="Override EKF observation-noise std-dev in TECU "
+                             f"(default {EKF_SIGMA_OBS}).")
+    parser.add_argument("--ekf-max-rays", type=int, default=None, metavar="N",
+                        help="Override EKF representative update rays per arc "
+                             f"(default {EKF_MAX_RAYS}).")
+    parser.add_argument("--ekf-tol", type=float, default=None, metavar="TOL",
+                        help="Override EKF relative convergence tolerance "
+                             f"(default {EKF_TOL}).")
+    parser.add_argument("--ekf-max-iter", type=int, default=None, metavar="N",
+                        help=f"Override EKF max iterations (default {EKF_MAX_ITER}).")
+    parser.add_argument("--ekf-n-members", type=int, default=None, metavar="N",
+                        help="Override EKF prior ensemble size factoring the "
+                             f"covariance (default {EKF_N_MEMBERS}).")
+    parser.add_argument("--ekf-prior-scale", type=float, default=None, metavar="S",
+                        help="Multiplier on the EKF prior parameter variances; "
+                             ">1 loosens, <1 tightens the background "
+                             f"(default {EKF_PRIOR_SCALE}).")
+    parser.add_argument("--ekf-free", type=str, default=None, metavar="SPEC",
+                        help='Free-parameter set for the EKF update: "all" '
+                             '(default, every param free) or a comma-separated '
+                             'list to freeze the rest, e.g. "log10(NmF2)" '
+                             '(tuned config: only the observable amplitude moves).')
+    parser.add_argument("--ekf-adapt-alpha", action="store_true",
+                        help="Enable residual-merit adaptive step size (grow "
+                             "alpha on descent, damp+rollback on rise). Tuned "
+                             "config; pairs with --ekf-alpha as the start value.")
+    parser.add_argument("--ekf-alpha-max", type=float, default=None, metavar="A",
+                        help="Cap on adaptive-alpha growth "
+                             f"(default {EKF_ALPHA_MAX}; only used with "
+                             "--ekf-adapt-alpha).")
+    parser.add_argument("--ekf-tec-rmse-tol", type=float, default=None, metavar="TECU",
+                        help="Compound convergence gate: also require the TEC-"
+                             "innovation RMSE below this (TECU) before declaring "
+                             "convergence (else run to --ekf-max-iter). Tuned "
+                             "config ~45.")
+    # ── EKF-only dense-grid experiment flags ─────────────────────────────────
+    parser.add_argument("--no-gridded-kf", dest="run_gridded_kf",
+                        action="store_false", default=True,
+                        help="Do NOT run the gridded KF: skip its joint batch "
+                             "solve (process_group skip_joint=True) and drop "
+                             "gridded_kf from scoring/plots. The EKF still uses "
+                             "process_group's RO data-prep (clean_list/prior).")
+    parser.add_argument("--ekf-grid", type=str, default=None,
+                        choices=["mesh", "fibonacci"], metavar="MODE",
+                        help='EKF horizontal grid: "mesh" (RO union mesh, '
+                             'default) or "fibonacci" (dense ROI-restricted '
+                             "Fibonacci sphere at --ekf-grid-km spacing).")
+    parser.add_argument("--ekf-grid-km", type=float, default=None, metavar="KM",
+                        help="Fibonacci-grid point spacing in km (only used with "
+                             f"--ekf-grid fibonacci; default {EKF_GRID_KM}).")
+    parser.add_argument("--ekf-grid-max-pts", type=int, default=None, metavar="N",
+                        help="Hard cap on Fibonacci grid points (EKF state = "
+                             "N_STATE x n_geo, covariance is n^2). If the "
+                             "footprint disk at --ekf-grid-km exceeds this, the "
+                             "points closest to the footprint centroid are kept. "
+                             "0 removes the cap (rely on the ROI gate + spacing "
+                             f"to bound n_geo). Default {EKF_GRID_MAX_PTS}.")
+    parser.add_argument("--ekf-roi-gate-km", type=float, default=None, metavar="KM",
+                        help="Great-circle gate (km): drop RO tangent anchors "
+                             "farther than this from the IGS/ISR footprint "
+                             "centroid before they seed the Fibonacci grid, so "
+                             "time-window strays can't drag the centre/radius. "
+                             f"Default {EKF_ROI_GATE_KM:.0f}; 0 disables.")
+    parser.add_argument("--ekf-modes", type=str, default=None, metavar="LIST",
+                        help='Comma list of named EKF modes to run, each as its '
+                             'own filter_type: "allfree" (all 8 params free) '
+                             'and/or "nmf2" (only log10(NmF2) free). '
+                             'E.g. "allfree,nmf2". Omit for a single '
+                             '"parametric_ekf" run honouring --ekf-free.')
+    parser.add_argument("--dates", type=str, default=None, metavar="LIST",
+                        help="Comma-separated YYYY-MM-DD dates to process "
+                             "(e.g. 2025-08-27,2025-09-22,2025-10-17). Selects "
+                             "exactly these ISR days, overriding "
+                             "--start-date/--days/--tier ordering.")
+    parser.add_argument("--all-windows", dest="require_isr_truth",
+                        action="store_false", default=True,
+                        help="Also process availability-minima windows that have "
+                             "NO co-located ISR truth profile (sorted last). "
+                             "Default: only run windows with ISR truth "
+                             "verification data.")
+    parser.add_argument("--best-window-only", action="store_true", default=False,
+                        help="Investigate ONLY the single best window per day: "
+                             "the one with the most RO occultations, tie-broken "
+                             "by most co-located ISR truth EDPs. The "
+                             "occultation-count sweep still runs on that window.")
+    parser.add_argument("--output-name", type=str, default=None, metavar="NAME",
+                        help="Figure/metrics output folder name under "
+                             "Figures/ISR_DA_Comparison/ (default OUTPUT). A "
+                             "non-default name also routes the metrics CSV and "
+                             "progress manifest to dedicated files so stats "
+                             "aren't mixed with other runs.")
+    parser.add_argument("--final", action="store_true", default=False,
+                        help="Convenience: --best-window-only + "
+                             "--output-name OUTPUT_FINAL. Investigates only the "
+                             "best (most occultations + ISR truth) window per "
+                             "day and writes figures/metrics/statistics to "
+                             "OUTPUT_FINAL.")
     resume_group = parser.add_mutually_exclusive_group()
     resume_group.add_argument(
         "--resume", dest="resume", action="store_true", default=True,
@@ -2350,7 +3160,72 @@ def main() -> None:
 
     force = args.force or not args.resume
 
-    global OCC_COUNT_BINS
+    if args.ekf_alpha is not None:        EKF_ALPHA       = args.ekf_alpha
+    if args.ekf_sigma_obs is not None:    EKF_SIGMA_OBS   = args.ekf_sigma_obs
+    if args.ekf_max_rays is not None:     EKF_MAX_RAYS    = args.ekf_max_rays
+    if args.ekf_tol is not None:          EKF_TOL         = args.ekf_tol
+    if args.ekf_max_iter is not None:     EKF_MAX_ITER    = args.ekf_max_iter
+    if args.ekf_n_members is not None:    EKF_N_MEMBERS   = args.ekf_n_members
+    if args.ekf_prior_scale is not None:  EKF_PRIOR_SCALE = args.ekf_prior_scale
+    if args.ekf_free is not None:         EKF_FREE_PARAMS  = _parse_ekf_free_spec(args.ekf_free)
+    if args.ekf_adapt_alpha:              EKF_ADAPT_ALPHA  = True
+    if args.ekf_alpha_max is not None:    EKF_ALPHA_MAX    = args.ekf_alpha_max
+    if args.ekf_tec_rmse_tol is not None: EKF_TEC_RMSE_TOL = args.ekf_tec_rmse_tol
+    if any(v is not None for v in (
+            args.ekf_alpha, args.ekf_sigma_obs, args.ekf_max_rays, args.ekf_tol,
+            args.ekf_max_iter, args.ekf_n_members, args.ekf_prior_scale,
+            args.ekf_free, args.ekf_alpha_max, args.ekf_tec_rmse_tol)) \
+            or args.ekf_adapt_alpha:
+        print(f"[ISR-DA] EKF config: alpha={EKF_ALPHA} sigma_obs={EKF_SIGMA_OBS} "
+              f"max_rays={EKF_MAX_RAYS} tol={EKF_TOL} max_iter={EKF_MAX_ITER} "
+              f"n_members={EKF_N_MEMBERS} prior_scale={EKF_PRIOR_SCALE} "
+              f"free={EKF_FREE_PARAMS} adapt_alpha={EKF_ADAPT_ALPHA} "
+              f"alpha_max={EKF_ALPHA_MAX} tec_rmse_tol={EKF_TEC_RMSE_TOL}")
+
+    # ── EKF-only dense-grid experiment configuration ─────────────────────────
+    RUN_GRIDDED_KF = bool(args.run_gridded_kf)
+    REQUIRE_ISR_TRUTH = bool(args.require_isr_truth)
+
+    # ── Best-window-only + output-folder routing (incl. --final bundle) ──────
+    BEST_WINDOW_ONLY = bool(args.best_window_only or args.final)
+    _out_name = args.output_name or ("OUTPUT_FINAL" if args.final else None)
+    if _out_name:
+        SAVE_DIR = ROOT / "Figures" / "ISR_DA_Comparison" / _out_name
+        ISR_METRICS_CSV = DA_CACHE / f"isr_metrics_{_out_name}.csv"
+        PROGRESS_MANIFEST = DA_CACHE / f"progress_manifest_{_out_name}.json"
+        print(f"[ISR-DA] Output routed to {SAVE_DIR} "
+              f"(metrics={ISR_METRICS_CSV.name}, manifest={PROGRESS_MANIFEST.name})")
+    if BEST_WINDOW_ONLY:
+        print("[ISR-DA] BEST-WINDOW-ONLY: one window per day (max occultations "
+              "+ ISR truth); occultation-count sweep runs on that window.")
+    if args.ekf_grid is not None:         EKF_GRID_MODE    = args.ekf_grid
+    if args.ekf_grid_km is not None:      EKF_GRID_KM      = args.ekf_grid_km
+    if args.ekf_grid_max_pts is not None:
+        EKF_GRID_MAX_PTS = None if args.ekf_grid_max_pts <= 0 else args.ekf_grid_max_pts
+    if args.ekf_roi_gate_km is not None:
+        EKF_ROI_GATE_KM = None if args.ekf_roi_gate_km <= 0 else args.ekf_roi_gate_km
+    if args.ekf_modes is not None:
+        _tokens = [t.strip().lower() for t in args.ekf_modes.split(",") if t.strip()]
+        _bad = [t for t in _tokens if t not in _EKF_MODE_REGISTRY]
+        if _bad:
+            parser.error(f"--ekf-modes: unknown mode(s) {_bad}; "
+                         f"choose from {sorted(_EKF_MODE_REGISTRY)}")
+        EKF_MODES = [_EKF_MODE_REGISTRY[t] for t in _tokens]
+
+    # Assemble the active filter set: gridded_kf (unless suppressed) + the EKF
+    # filter label(s). Everything downstream (results dict, metrics CSV,
+    # summarize_statistics, occ-count plots, per-group summary) iterates
+    # FILTER_TYPES, so reassigning it here reconfigures the whole pipeline.
+    _ekf_labels = ([lbl for lbl, _ in EKF_MODES] if EKF_MODES is not None
+                   else ["parametric_ekf"])
+    FILTER_TYPES = (["gridded_kf"] if RUN_GRIDDED_KF else []) + _ekf_labels
+    if (not RUN_GRIDDED_KF) or (EKF_MODES is not None) or (EKF_GRID_MODE != "mesh"):
+        _cap = "off" if EKF_GRID_MAX_PTS is None else str(EKF_GRID_MAX_PTS)
+        _gate = "off" if EKF_ROI_GATE_KM is None else f"{EKF_ROI_GATE_KM:.0f}km"
+        print(f"[ISR-DA] Experiment config: run_gridded_kf={RUN_GRIDDED_KF} "
+              f"ekf_grid={EKF_GRID_MODE} ekf_grid_km={EKF_GRID_KM} "
+              f"max_pts={_cap} roi_gate={_gate} filters={FILTER_TYPES}")
+
     if args.bin_count is not None:
         OCC_COUNT_BINS = [_parse_bin_count_value(args.bin_count)]
     elif args.occ_bins is not None:
@@ -2362,6 +3237,16 @@ def main() -> None:
         start = pd.Timestamp(args.start_date).date()
         priority_days = [d for d in priority_days if d["date"] >= start]
         priority_days.sort(key=lambda e: e["date"])  # chronological, ignore tier ordering
+
+    if args.dates is not None:
+        _want = {pd.Timestamp(t.strip()).date()
+                 for t in args.dates.split(",") if t.strip()}
+        priority_days = [d for d in priority_days if d["date"] in _want]
+        priority_days.sort(key=lambda e: e["date"])
+        _missing = sorted(_want - {d["date"] for d in priority_days})
+        if _missing:
+            print(f"[ISR-DA] WARNING: requested --dates not found as ISR days "
+                  f"(no ISR EDP cache entry): {[str(m) for m in _missing]}")
 
     if args.list_days:
         tier_counts = {1: 0, 2: 0, 3: 0}

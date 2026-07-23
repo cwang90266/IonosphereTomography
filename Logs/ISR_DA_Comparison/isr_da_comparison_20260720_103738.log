@@ -1,0 +1,540 @@
+[ISR-DA] Logging this run to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260720_103738.log
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+[ISR-DA] Processing 1 day(s)
+  Tier 2  2025-08-27  instruments=['ESR']  podtc=yes
+
+[ISR-DA] Loading ISR EDP cache ...
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+         135834 profiles loaded, 85642 fitted (kindat 6400) used as ground truth
+
+======================================================================
+[Day] 2025-08-27  tier=2  instruments=['ESR']
+  Scanning 9819 files for metadata …
+  Found 9819 valid files across 755 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-08-27: 15 window(s) (>= 10 arcs each)
+  0100  centre=2025-08-27 01:00:00  n_occ=50  span=[2025-08-27 00:00:00 .. 2025-08-27 02:00:00)
+  0247  centre=2025-08-27 02:47:30  n_occ=39  span=[2025-08-27 02:00:00 .. 2025-08-27 03:35:00)
+  0422  centre=2025-08-27 04:22:30  n_occ=49  span=[2025-08-27 03:35:00 .. 2025-08-27 05:10:00)
+  0557  centre=2025-08-27 05:57:30  n_occ=56  span=[2025-08-27 05:10:00 .. 2025-08-27 06:45:00)
+  0735  centre=2025-08-27 07:35:00  n_occ=82  span=[2025-08-27 06:45:00 .. 2025-08-27 08:25:00)
+  0912  centre=2025-08-27 09:12:30  n_occ=121  span=[2025-08-27 08:25:00 .. 2025-08-27 10:00:00)
+  1050  centre=2025-08-27 10:50:00  n_occ=98  span=[2025-08-27 10:00:00 .. 2025-08-27 11:40:00)
+  1227  centre=2025-08-27 12:27:30  n_occ=62  span=[2025-08-27 11:40:00 .. 2025-08-27 13:15:00)
+  1400  centre=2025-08-27 14:00:00  n_occ=60  span=[2025-08-27 13:15:00 .. 2025-08-27 14:45:00)
+  1535  centre=2025-08-27 15:35:00  n_occ=63  span=[2025-08-27 14:45:00 .. 2025-08-27 16:25:00)
+  1717  centre=2025-08-27 17:17:30  n_occ=44  span=[2025-08-27 16:25:00 .. 2025-08-27 18:10:00)
+  1857  centre=2025-08-27 18:57:30  n_occ=46  span=[2025-08-27 18:10:00 .. 2025-08-27 19:45:00)
+  2025  centre=2025-08-27 20:25:00  n_occ=65  span=[2025-08-27 19:45:00 .. 2025-08-27 21:05:00)
+  2200  centre=2025-08-27 22:00:00  n_occ=98  span=[2025-08-27 21:05:00 .. 2025-08-27 22:55:00)
+  2327  centre=2025-08-27 23:27:30  n_occ=60  span=[2025-08-27 22:55:00 .. 2025-08-28 00:00:00)
+  [IGS/TRO1] Loaded 226 arc(s) from cache.
+  [IGS/WUTH] Running TEC pipeline for 2025-08-27 …
+  [IGS/WUTH] Pipeline failed: No RINEX-3 observation file found in https://cddis.nasa.gov/archive/gnss/data/daily/2025/239/25d for station WUTH. Available: ['ABMF00GLP_R_20252390000_01D_30S_MO.crx.gz ', 'AC2300USA_R_20252390000_01D_15S_MO.crx.gz ', 'AC2400USA_R_20252390000_01D_15S_MO.crx.gz ', 'ACRG00GHA_R_20252390000_01D_30S_MO.crx.gz ', 'ACSO00USA_R_20252390000_01D_15S_MO.crx.gz ', 'ADIS00ETH_R_20252390000_01D_30S_MO.crx.gz ', 'AIRA00JPN_R_20252390000_01D_30S_MO.crx.gz ', 'AL2H00CAN_R_20252390000_01D_30S_MO.crx.gz ', 'ALAC00ESP_R_20252390000_01D_30S_MO.crx.gz ', 'ALB400CAN_R_20252390000_01D_30S_MO.crx.gz ']
+  [IGS/NYA1] Loaded 325 arc(s) from cache.
+  1 minima window(s), 551 IGS arc(s)
+  Running 1 window(s) x 7 occultation-count bins x 3 obs modes x 2 filters ...
+  [diag] Reordered 1 window(s): 1 ISR-aligned (most occultations first), 0 without ISR truth (run last)
+EDPS: (55, 1650, 50), N_geo: 1650
+EDPS: (55, 1650, 50), N_geo: 1650
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | ro_only   | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | ro_only   | gridded_kf     : CACHE HIT  (2025-08-27_1227_binall_ro_only_gridded_kf.pkl, 2.6s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | ro_igs    | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | ro_igs    | gridded_kf     : CACHE HIT  (2025-08-27_1227_binall_ro_igs_gridded_kf.pkl, 0.7s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | igs_only  | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | igs_only  | gridded_kf     : CACHE HIT  (2025-08-27_1227_binall_igs_only_gridded_kf.pkl, 0.0s load) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | ro_only   | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | ro_only   | parametric_ekf : CACHE HIT  (2025-08-27_1227_binall_ro_only_parametric_ekf.pkl, 0.1s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | ro_igs    | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | ro_igs    | parametric_ekf : CACHE HIT  (2025-08-27_1227_binall_ro_igs_parametric_ekf.pkl, 0.1s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=all | igs_only  | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=all | igs_only  | parametric_ekf : CACHE HIT  (2025-08-27_1227_binall_igs_only_parametric_ekf.pkl, 0.2s load) -> status=ok (no 'status' key)
+  [diag] 2025-08-27_1227 | bin=all : summary of 6 obs_mode/filter_type combos
+           ro_only   | gridded_kf     -> Success
+           ro_only   | parametric_ekf -> Success
+           ro_igs    | gridded_kf     -> Success
+           ro_igs    | parametric_ekf -> Success
+           igs_only  | gridded_kf     -> ok (no 'status' key)
+           igs_only  | parametric_ekf -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-08-27_1227 bin=all
+◀◀◀ compute_isr_metrics END   | group=2025-08-27_1227 bin=all -> 12 metric row(s)
+/home/austinhunter/IonosphereTomography/demo_isr_da_comparison.py:1827: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  combined = pd.concat([existing_df, new_df], ignore_index=True)
+
+▶▶▶ _plot_group_all_modes START | group=2025-08-27_1227
+  [diag] 2025-08-27_1227/ro_igs/gridded_kf: arc-innovation panels thinned to 47 RO + 20/51 representative IGS arcs (of 98 total)
+  [diag] 2025-08-27_1227/ro_igs/parametric_ekf: arc-innovation panels thinned to 47 RO + 20/51 representative IGS arcs (of 98 total)
+  [diag] 2025-08-27_1227/igs_only/gridded_kf: arc-innovation panels thinned to 0 RO + 20/51 representative IGS arcs (of 51 total)
+  [diag] 2025-08-27_1227/igs_only/parametric_ekf: arc-innovation panels thinned to 0 RO + 20/51 representative IGS arcs (of 51 total)
+/home/austinhunter/Downloads/PlanetiQ_Code/venv311/lib/python3.11/site-packages/shapely/creation.py:218: RuntimeWarning: invalid value encountered in linestrings
+  return lib.linestrings(coords, np.intc(handle_nan), out=out, **kwargs)
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+◀◀◀ _plot_group_all_modes END   | group=2025-08-27_1227
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=55  | ro_only   | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=55  | ro_only   | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin55_ro_only_gridded_kf.pkl, 1.5s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=55  | ro_igs    | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=55  | ro_igs    | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin55_ro_igs_gridded_kf.pkl, 1.5s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=55  | igs_only  | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=55  | igs_only  | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin55_igs_only_gridded_kf.pkl, 0.0s load) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=55  | ro_only   | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=55  | ro_only   | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin55_ro_only_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=55  | ro_igs    | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=55  | ro_igs    | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin55_ro_igs_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=55  | igs_only  | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=55  | igs_only  | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin55_igs_only_parametric_ekf.pkl, 0.1s load) -> status=ok (no 'status' key)
+  [diag] 2025-08-27_1227 | bin=55 : summary of 6 obs_mode/filter_type combos
+           ro_only   | gridded_kf     -> Success
+           ro_only   | parametric_ekf -> Success
+           ro_igs    | gridded_kf     -> Success
+           ro_igs    | parametric_ekf -> Success
+           igs_only  | gridded_kf     -> ok (no 'status' key)
+           igs_only  | parametric_ekf -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-08-27_1227 bin=55
+  [error] window 1227 bin=55 failed with an unexpected exception; skipping to the next unit so already-computed results can still be plotted.
+Traceback (most recent call last):
+  File "/home/austinhunter/IonosphereTomography/demo_isr_da_comparison.py", line 1485, in run_all_filters
+    _process_window_bin(window, bin_count)
+  File "/home/austinhunter/IonosphereTomography/demo_isr_da_comparison.py", line 1317, in _process_window_bin
+    group_metrics = compute_isr_metrics(group_day_info, group_filter_results, edps)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/austinhunter/IonosphereTomography/demo_isr_da_comparison.py", line 1613, in compute_isr_metrics
+    prior_col = prior_edp_3d[:, nearest_idx]
+                ~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+IndexError: index 241 is out of bounds for axis 1 with size 222
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=45  | ro_only   | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=45  | ro_only   | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin45_ro_only_gridded_kf.pkl, 2.2s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=45  | ro_igs    | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=45  | ro_igs    | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin45_ro_igs_gridded_kf.pkl, 2.3s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=45  | igs_only  | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=45  | igs_only  | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin45_igs_only_gridded_kf.pkl, 0.0s load) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=45  | ro_only   | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=45  | ro_only   | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin45_ro_only_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=45  | ro_igs    | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=45  | ro_igs    | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin45_ro_igs_parametric_ekf.pkl, 0.1s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=45  | igs_only  | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=45  | igs_only  | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin45_igs_only_parametric_ekf.pkl, 0.2s load) -> status=ok (no 'status' key)
+  [diag] 2025-08-27_1227 | bin=45 : summary of 6 obs_mode/filter_type combos
+           ro_only   | gridded_kf     -> Success
+           ro_only   | parametric_ekf -> Success
+           ro_igs    | gridded_kf     -> Success
+           ro_igs    | parametric_ekf -> Success
+           igs_only  | gridded_kf     -> ok (no 'status' key)
+           igs_only  | parametric_ekf -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-08-27_1227 bin=45
+◀◀◀ compute_isr_metrics END   | group=2025-08-27_1227 bin=45 -> 12 metric row(s)
+
+▶▶▶ _plot_group_all_modes START | group=2025-08-27_1227
+  [diag] 2025-08-27_1227/ro_igs/gridded_kf: arc-innovation panels thinned to 35 RO + 20/51 representative IGS arcs (of 86 total)
+  [diag] 2025-08-27_1227/ro_igs/parametric_ekf: arc-innovation panels thinned to 35 RO + 20/51 representative IGS arcs (of 86 total)
+  [diag] 2025-08-27_1227/igs_only/gridded_kf: arc-innovation panels thinned to 0 RO + 20/51 representative IGS arcs (of 51 total)
+  [diag] 2025-08-27_1227/igs_only/parametric_ekf: arc-innovation panels thinned to 0 RO + 20/51 representative IGS arcs (of 51 total)
+/home/austinhunter/Downloads/PlanetiQ_Code/venv311/lib/python3.11/site-packages/shapely/creation.py:218: RuntimeWarning: invalid value encountered in linestrings
+  return lib.linestrings(coords, np.intc(handle_nan), out=out, **kwargs)
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+◀◀◀ _plot_group_all_modes END   | group=2025-08-27_1227
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=35  | ro_only   | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=35  | ro_only   | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin35_ro_only_gridded_kf.pkl, 0.8s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=35  | ro_igs    | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=35  | ro_igs    | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin35_ro_igs_gridded_kf.pkl, 1.1s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=35  | igs_only  | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=35  | igs_only  | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin35_igs_only_gridded_kf.pkl, 0.0s load) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=35  | ro_only   | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=35  | ro_only   | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin35_ro_only_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=35  | ro_igs    | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=35  | ro_igs    | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin35_ro_igs_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=35  | igs_only  | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=35  | igs_only  | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin35_igs_only_parametric_ekf.pkl, 0.1s load) -> status=ok (no 'status' key)
+  [diag] 2025-08-27_1227 | bin=35 : summary of 6 obs_mode/filter_type combos
+           ro_only   | gridded_kf     -> Success
+           ro_only   | parametric_ekf -> Success
+           ro_igs    | gridded_kf     -> Success
+           ro_igs    | parametric_ekf -> Success
+           igs_only  | gridded_kf     -> ok (no 'status' key)
+           igs_only  | parametric_ekf -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-08-27_1227 bin=35
+  [error] window 1227 bin=35 failed with an unexpected exception; skipping to the next unit so already-computed results can still be plotted.
+Traceback (most recent call last):
+  File "/home/austinhunter/IonosphereTomography/demo_isr_da_comparison.py", line 1485, in run_all_filters
+    _process_window_bin(window, bin_count)
+  File "/home/austinhunter/IonosphereTomography/demo_isr_da_comparison.py", line 1317, in _process_window_bin
+    group_metrics = compute_isr_metrics(group_day_info, group_filter_results, edps)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/austinhunter/IonosphereTomography/demo_isr_da_comparison.py", line 1613, in compute_isr_metrics
+    prior_col = prior_edp_3d[:, nearest_idx]
+                ~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+IndexError: index 241 is out of bounds for axis 1 with size 222
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=25  | ro_only   | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=25  | ro_only   | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin25_ro_only_gridded_kf.pkl, 1.3s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=25  | ro_igs    | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=25  | ro_igs    | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin25_ro_igs_gridded_kf.pkl, 2.1s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=25  | igs_only  | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=25  | igs_only  | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin25_igs_only_gridded_kf.pkl, 0.0s load) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=25  | ro_only   | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=25  | ro_only   | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin25_ro_only_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=25  | ro_igs    | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=25  | ro_igs    | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin25_ro_igs_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=25  | igs_only  | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=25  | igs_only  | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin25_igs_only_parametric_ekf.pkl, 0.1s load) -> status=ok (no 'status' key)
+  [diag] 2025-08-27_1227 | bin=25 : summary of 6 obs_mode/filter_type combos
+           ro_only   | gridded_kf     -> Success
+           ro_only   | parametric_ekf -> Success
+           ro_igs    | gridded_kf     -> Success
+           ro_igs    | parametric_ekf -> Success
+           igs_only  | gridded_kf     -> ok (no 'status' key)
+           igs_only  | parametric_ekf -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-08-27_1227 bin=25
+◀◀◀ compute_isr_metrics END   | group=2025-08-27_1227 bin=25 -> 12 metric row(s)
+
+▶▶▶ _plot_group_all_modes START | group=2025-08-27_1227
+  [diag] 2025-08-27_1227/ro_igs/gridded_kf: arc-innovation panels thinned to 20 RO + 20/51 representative IGS arcs (of 71 total)
+  [diag] 2025-08-27_1227/ro_igs/parametric_ekf: arc-innovation panels thinned to 20 RO + 20/51 representative IGS arcs (of 71 total)
+  [diag] 2025-08-27_1227/igs_only/gridded_kf: arc-innovation panels thinned to 0 RO + 20/51 representative IGS arcs (of 51 total)
+  [diag] 2025-08-27_1227/igs_only/parametric_ekf: arc-innovation panels thinned to 0 RO + 20/51 representative IGS arcs (of 51 total)
+/home/austinhunter/Downloads/PlanetiQ_Code/venv311/lib/python3.11/site-packages/shapely/creation.py:218: RuntimeWarning: invalid value encountered in linestrings
+  return lib.linestrings(coords, np.intc(handle_nan), out=out, **kwargs)
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+◀◀◀ _plot_group_all_modes END   | group=2025-08-27_1227
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=15  | ro_only   | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=15  | ro_only   | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin15_ro_only_gridded_kf.pkl, 0.9s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=15  | ro_igs    | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=15  | ro_igs    | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin15_ro_igs_gridded_kf.pkl, 0.9s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=15  | igs_only  | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=15  | igs_only  | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin15_igs_only_gridded_kf.pkl, 0.0s load) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=15  | ro_only   | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=15  | ro_only   | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin15_ro_only_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=15  | ro_igs    | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=15  | ro_igs    | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin15_ro_igs_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=15  | igs_only  | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=15  | igs_only  | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin15_igs_only_parametric_ekf.pkl, 0.1s load) -> status=ok (no 'status' key)
+  [diag] 2025-08-27_1227 | bin=15 : summary of 6 obs_mode/filter_type combos
+           ro_only   | gridded_kf     -> Success
+           ro_only   | parametric_ekf -> Success
+           ro_igs    | gridded_kf     -> Success
+           ro_igs    | parametric_ekf -> Success
+           igs_only  | gridded_kf     -> ok (no 'status' key)
+           igs_only  | parametric_ekf -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-08-27_1227 bin=15
+◀◀◀ compute_isr_metrics END   | group=2025-08-27_1227 bin=15 -> 12 metric row(s)
+
+▶▶▶ _plot_group_all_modes START | group=2025-08-27_1227
+  [diag] 2025-08-27_1227/ro_igs/gridded_kf: arc-innovation panels thinned to 12 RO + 20/51 representative IGS arcs (of 63 total)
+  [diag] 2025-08-27_1227/ro_igs/parametric_ekf: arc-innovation panels thinned to 12 RO + 20/51 representative IGS arcs (of 63 total)
+  [diag] 2025-08-27_1227/igs_only/gridded_kf: arc-innovation panels thinned to 0 RO + 20/51 representative IGS arcs (of 51 total)
+  [diag] 2025-08-27_1227/igs_only/parametric_ekf: arc-innovation panels thinned to 0 RO + 20/51 representative IGS arcs (of 51 total)
+/home/austinhunter/Downloads/PlanetiQ_Code/venv311/lib/python3.11/site-packages/shapely/creation.py:218: RuntimeWarning: invalid value encountered in linestrings
+  return lib.linestrings(coords, np.intc(handle_nan), out=out, **kwargs)
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+  [warn] plot_kf_enkf_comparison failed for 2025-08-27_1227/igs_only: cannot reshape array of size 12210 into shape (55,185)
+◀◀◀ _plot_group_all_modes END   | group=2025-08-27_1227
+No valid descending tangent points found. Skipping.
+No valid descending tangent points found. Skipping.
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=5   | ro_only   | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=5   | ro_only   | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin5_ro_only_gridded_kf.pkl, 0.1s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=5   | ro_igs    | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=5   | ro_igs    | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin5_ro_igs_gridded_kf.pkl, 0.1s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=5   | igs_only  | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=5   | igs_only  | gridded_kf     : CACHE HIT  (2025-08-27_1227_bin5_igs_only_gridded_kf.pkl, 0.0s load) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=5   | ro_only   | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=5   | ro_only   | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin5_ro_only_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=5   | ro_igs    | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=5   | ro_igs    | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin5_ro_igs_parametric_ekf.pkl, 0.0s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-08-27_1227 | bin=5   | igs_only  | parametric_ekf
+◀◀◀ _run_or_load END   | 2025-08-27_1227 | bin=5   | igs_only  | parametric_ekf : CACHE HIT  (2025-08-27_1227_bin5_igs_only_parametric_ekf.pkl, 0.1s load) -> status=ok (no 'status' key)
+  [diag] 2025-08-27_1227 | bin=5 : summary of 6 obs_mode/filter_type combos
+           ro_only   | gridded_kf     -> Success
+           ro_only   | parametric_ekf -> Success
+           ro_igs    | gridded_kf     -> Success
+           ro_igs    | parametric_ekf -> Success
+           igs_only  | gridded_kf     -> ok (no 'status' key)
+           igs_only  | parametric_ekf -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-08-27_1227 bin=5
+◀◀◀ compute_isr_metrics END   | group=2025-08-27_1227 bin=5 -> 12 metric row(s)
+
+▶▶▶ _plot_group_all_modes START | group=2025-08-27_1227
+  [diag] 2025-08-27_1227/ro_igs/gridded_kf: arc-innovation panels thinned to 4 RO + 20/51 representative IGS arcs (of 55 total)
+  [diag] 2025-08-27_1227/ro_igs/parametric_ekf: arc-innovation panels thinned to 4 RO + 20/51 representative IGS arcs (of 55 total)
+  [diag] 2025-08-27_1227/igs_only/gridded_kf: arc-innovation panels thinned to 0 RO + 20/51 representative IGS arcs (of 51 total)
+  [diag] 2025-08-27_1227/igs_only/parametric_ekf: arc-innovation panels thinned to 0 RO + 20/51 representative IGS arcs (of 51 total)
+/home/austinhunter/Downloads/PlanetiQ_Code/venv311/lib/python3.11/site-packages/shapely/creation.py:218: RuntimeWarning: invalid value encountered in linestrings
+  return lib.linestrings(coords, np.intc(handle_nan), out=out, **kwargs)
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+/home/austinhunter/IonosphereTomography/plotIonosphereTomography.py:3873: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0, 1, 0.98])
+  [warn] plot_kf_enkf_comparison failed for 2025-08-27_1227/igs_only: cannot reshape array of size 12210 into shape (55,185)
+◀◀◀ _plot_group_all_modes END   | group=2025-08-27_1227
+
+[done] 60 new ISR comparison row(s) this run across 1 day(s)
+obs_mode   filter_type       n   delta_rmse m⁻³ (mean±std)  frac_improved   mean NmF2 err %   mean hmF2 err km
+--------------------------------------------------------------------------------------------------------------
+igs_only   gridded_kf       24   1.925e+10 ± 1.950e+10         20.8%             40.22              -2.95
+igs_only   parametric_ekf   24   2.149e+11 ± 4.281e+11          8.3%            230.98             -21.82
+ro_igs     gridded_kf       23  -7.814e+08 ± 6.118e+10         60.9%              1.65             -38.57
+ro_igs     parametric_ekf   23   3.087e+10 ± 1.103e+11         30.4%             -9.16             -39.67
+ro_only    gridded_kf       24  -6.442e+08 ± 6.030e+10         58.3%              1.27             -37.88
+ro_only    parametric_ekf   24  -1.494e+10 ± 6.359e+10         29.2%            -29.52             -52.63
+
+  foF2 (critical freq) — fraction of cases within threshold:
+  obs_mode   filter_type       n    prior|post @0.5MHz    prior|post @0.2MHz    prior|post @0.1MHz
+  igs_only   gridded_kf       24    100.0%|6.7%        100.0%|6.7%         53.3%|6.7%    
+  igs_only   parametric_ekf   24     20.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_igs     gridded_kf       23     92.9%|14.3%         0.0%|7.1%          0.0%|7.1%    
+  ro_igs     parametric_ekf   23     50.0%|28.6%        14.3%|21.4%         0.0%|14.3%   
+  ro_only    gridded_kf       24     93.3%|13.3%         0.0%|13.3%         0.0%|13.3%   
+  ro_only    parametric_ekf   24     40.0%|33.3%        13.3%|6.7%         13.3%|0.0%    
+
+  foE  (blanketing freq) — fraction of cases within threshold:
+  obs_mode   filter_type       n    prior|post @0.5MHz    prior|post @0.2MHz    prior|post @0.1MHz
+  igs_only   gridded_kf       24     53.3%|53.3%         0.0%|0.0%          0.0%|0.0%    
+  igs_only   parametric_ekf   24     53.3%|33.3%         6.7%|6.7%          6.7%|6.7%    
+  ro_igs     gridded_kf       23     42.9%|42.9%        42.9%|28.6%         0.0%|21.4%   
+  ro_igs     parametric_ekf   23     42.9%|7.1%          7.1%|0.0%          0.0%|0.0%    
+  ro_only    gridded_kf       24     46.7%|46.7%        46.7%|33.3%         0.0%|20.0%   
+  ro_only    parametric_ekf   24     26.7%|6.7%         13.3%|6.7%          0.0%|0.0%    
+
+  Profile fp RMSE — fraction of cases within threshold:
+  obs_mode   filter_type       n    prior|post @0.5MHz    prior|post @0.2MHz    prior|post @0.1MHz
+  igs_only   gridded_kf       24      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  igs_only   parametric_ekf   24      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_igs     gridded_kf       23      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_igs     parametric_ekf   23      0.0%|7.1%          0.0%|0.0%          0.0%|0.0%    
+  ro_only    gridded_kf       24      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_only    parametric_ekf   24      6.7%|0.0%          0.0%|0.0%          0.0%|0.0%    
+[ISR-DA] Frequency-domain figures saved to /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT
+  Saved: /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT/isr_convergence_vs_occ_count_below_peak_ne_mae.png
+  Saved: /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT/isr_convergence_vs_occ_count_foF2_error_mhz.png
+  Saved: /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT/isr_convergence_vs_occ_count_hf_reflection_height_error_km.png
+[ISR-DA] Log written to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260720_103738.log

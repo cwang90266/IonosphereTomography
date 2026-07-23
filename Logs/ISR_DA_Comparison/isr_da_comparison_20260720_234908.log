@@ -1,0 +1,74 @@
+[ISR-DA] Logging this run to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260720_234908.log
+usage: demo_isr_da_comparison.py [-h] [--force] [--no-plot] [--days DAYS]
+                                 [--tier {1,2,3}] [--start-date START_DATE]
+                                 [--list-days] [--status] [--bin-count COUNT]
+                                 [--window HHMM] [--occ-bins LIST]
+                                 [--ekf-alpha A] [--ekf-sigma-obs TECU]
+                                 [--ekf-max-rays N] [--ekf-tol TOL]
+                                 [--ekf-max-iter N] [--ekf-n-members N]
+                                 [--ekf-prior-scale S] [--ekf-free SPEC]
+                                 [--ekf-adapt-alpha] [--ekf-alpha-max A]
+                                 [--ekf-tec-rmse-tol TECU]
+                                 [--resume | --no-resume]
+
+Compare KF/EKF data assimilation against ISR ground truth.
+
+options:
+  -h, --help            show this help message and exit
+  --force               Ignore caches and recompute everything.
+  --no-plot             Skip figure generation.
+  --days DAYS           Limit processing to the first N priority days (after
+                        --start-date filtering, if given).
+  --tier {1,2,3}        Only process days of this priority tier (1=TRO+ESR,
+                        2=either, 3=JRO only). Default: all tiers.
+  --start-date START_DATE
+                        Begin processing at this date, YYYY-MM-DD (e.g.
+                        2025-08-27), in chronological order -- overrides the
+                        default tier-then-date priority ordering so
+                        earlier/lower-tier days aren't skipped ahead of it.
+  --list-days           Print priority-day summary and exit.
+  --status              Print resume/progress status (groups completed,
+                        filter-run outcomes, ISR metrics CSV size, and a
+                        window x bin_count completion grid) and exit without
+                        running anything.
+  --bin-count COUNT     Run only this OCC_COUNT_BINS value: an int (e.g. 30)
+                        or "all" (bin_count=None, every available RO
+                        occultation in the window). Overrides --occ-bins.
+  --window HHMM         Run only this minima-window, by window_key (e.g.
+                        "1430").
+  --occ-bins LIST       Comma-separated override of OCC_COUNT_BINS, e.g.
+                        "all,30,20,10" (each token an int or "all").
+  --ekf-alpha A         Override EKF Gauss-Newton step-size damping in (0,1]
+                        (default 0.5).
+  --ekf-sigma-obs TECU  Override EKF observation-noise std-dev in TECU
+                        (default 10.0).
+  --ekf-max-rays N      Override EKF representative update rays per arc
+                        (default 100).
+  --ekf-tol TOL         Override EKF relative convergence tolerance (default
+                        0.0005).
+  --ekf-max-iter N      Override EKF max iterations (default 20).
+  --ekf-n-members N     Override EKF prior ensemble size factoring the
+                        covariance (default 200).
+  --ekf-prior-scale S   Multiplier on the EKF prior parameter variances; >1
+                        loosens, <1 tightens the background (default 1.0).
+  --ekf-free SPEC       Free-parameter set for the EKF update: "all" (default,
+                        every param free) or a comma-separated list to freeze
+                        the rest, e.g. "log10(NmF2)" (tuned config: only the
+                        observable amplitude moves).
+  --ekf-adapt-alpha     Enable residual-merit adaptive step size (grow alpha
+                        on descent, damp+rollback on rise). Tuned config;
+                        pairs with --ekf-alpha as the start value.
+  --ekf-alpha-max A     Cap on adaptive-alpha growth (default 1.0; only used
+                        with --ekf-adapt-alpha).
+  --ekf-tec-rmse-tol TECU
+                        Compound convergence gate: also require the TEC-
+                        innovation RMSE below this (TECU) before declaring
+                        convergence (else run to --ekf-max-iter). Tuned config
+                        ~45.
+  --resume              Skip (window, bin, obs_mode, filter) units already
+                        complete in the progress manifest / DA_CACHE
+                        (default).
+  --no-resume           Force recompute every (window, bin, obs_mode, filter)
+                        unit, ignoring the progress manifest/DA_CACHE -- alias
+                        of --force for the occultation-count sweep axis.
+[ISR-DA] Log written to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260720_234908.log

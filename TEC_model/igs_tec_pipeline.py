@@ -2407,7 +2407,7 @@ class IGSTECPipeline:
         # 9. Compute TEC — serial or parallel
         obs_list:  List[dict] = []
         arc_count  = 0
-        _BAR       = 28
+        _report_every = max(1, n_tasks // 10)
 
         effective_workers = 1 if self._verbose else self._num_sv_workers
         if effective_workers > 1 and n_tasks > 1:
@@ -2425,11 +2425,10 @@ class IGSTECPipeline:
                     arc_count += len(arcs)
                     done      += 1
                     if self._show_progress and not self._verbose:
-                        filled = int(_BAR * done / max(n_tasks, 1))
-                        bar    = '█' * filled + '░' * (_BAR - filled)
-                        print(f"\r  [{self.station}] [{bar}] {done:3d}/{n_tasks} SVs"
-                              f"  {arc_count:3d} arcs",
-                              end='', flush=True)
+                        if done % _report_every == 0 or done == n_tasks:
+                            pct = 100.0 * done / max(n_tasks, 1)
+                            print(f"  [{self.station}] {done:3d}/{n_tasks} SVs "
+                                  f"({pct:5.1f}%)  {arc_count:3d} arcs", flush=True)
             if self._verbose:
                 print(f"  [{self.station}] Parallel TEC done  "
                       f"({time.time()-t0:.1f}s)", flush=True)
@@ -2441,15 +2440,14 @@ class IGSTECPipeline:
                 obs_list.extend(arcs)
                 arc_count += len(arcs)
                 if self._show_progress and not self._verbose:
-                    filled = int(_BAR * sv_done / max(n_tasks, 1))
-                    bar    = '█' * filled + '░' * (_BAR - filled)
-                    print(f"\r  [{self.station}] [{bar}] {sv_done:3d}/{n_tasks} SVs"
-                          f"  {arc_count:3d} arcs",
-                          end='', flush=True)
+                    if sv_done % _report_every == 0 or sv_done == n_tasks:
+                        pct = 100.0 * sv_done / max(n_tasks, 1)
+                        print(f"  [{self.station}] {sv_done:3d}/{n_tasks} SVs "
+                              f"({pct:5.1f}%)  {arc_count:3d} arcs", flush=True)
 
         if self._show_progress and not self._verbose:
-            print(f"\r  [{self.station}] [{'█' * _BAR}] {n_tasks}/{n_tasks} SVs"
-                  f"  {arc_count:3d} arcs  ✓", flush=True)
+            print(f"  [{self.station}] {n_tasks}/{n_tasks} SVs done  "
+                  f"{arc_count:3d} arcs", flush=True)
 
         if self._verbose:
             print(f"  [{self.station}] Pipeline complete: {len(obs_list)} arcs  "

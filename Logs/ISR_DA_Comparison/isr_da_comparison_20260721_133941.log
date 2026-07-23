@@ -1,0 +1,226 @@
+[ISR-DA] Logging this run to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260721_133941.log
+[ISR-DA] Output routed to /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL (metrics=isr_metrics_OUTPUT_FINAL.csv, manifest=progress_manifest_OUTPUT_FINAL.json)
+[ISR-DA] BEST-WINDOW-ONLY: one window per day (max occultations + ISR truth); occultation-count sweep runs on that window.
+[ISR-DA] Experiment config: run_gridded_kf=False ekf_grid=fibonacci ekf_grid_km=100.0 filters=['ekf_allfree', 'ekf_nmf2']
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+[ISR-DA][status] Progress manifest: /home/austinhunter/IonosphereTomography/Data/DA_Cache/progress_manifest_OUTPUT_FINAL.json
+  No (group, bin) units recorded as complete yet.
+
+  No ISR metrics CSV yet at /home/austinhunter/IonosphereTomography/Data/DA_Cache/isr_metrics_OUTPUT_FINAL.csv
+
+  Window x bin_count completion grid (ISR-truth windows only; --all-windows to include blind ones) (7 bin(s): ['all', '55', '45', '35', '25', '15', '5']; 6 = 3 obs_modes x 2 filters per cell):
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+  Scanning 9819 files for metadata …
+  Found 9819 valid files across 755 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-08-27: 15 window(s) (>= 10 arcs each)
+  0100  centre=2025-08-27 01:00:00  n_occ=50  span=[2025-08-27 00:00:00 .. 2025-08-27 02:00:00)
+  0247  centre=2025-08-27 02:47:30  n_occ=39  span=[2025-08-27 02:00:00 .. 2025-08-27 03:35:00)
+  0422  centre=2025-08-27 04:22:30  n_occ=49  span=[2025-08-27 03:35:00 .. 2025-08-27 05:10:00)
+  0557  centre=2025-08-27 05:57:30  n_occ=56  span=[2025-08-27 05:10:00 .. 2025-08-27 06:45:00)
+  0735  centre=2025-08-27 07:35:00  n_occ=82  span=[2025-08-27 06:45:00 .. 2025-08-27 08:25:00)
+  0912  centre=2025-08-27 09:12:30  n_occ=121  span=[2025-08-27 08:25:00 .. 2025-08-27 10:00:00)
+  1050  centre=2025-08-27 10:50:00  n_occ=98  span=[2025-08-27 10:00:00 .. 2025-08-27 11:40:00)
+  1227  centre=2025-08-27 12:27:30  n_occ=62  span=[2025-08-27 11:40:00 .. 2025-08-27 13:15:00)
+  1400  centre=2025-08-27 14:00:00  n_occ=60  span=[2025-08-27 13:15:00 .. 2025-08-27 14:45:00)
+  1535  centre=2025-08-27 15:35:00  n_occ=63  span=[2025-08-27 14:45:00 .. 2025-08-27 16:25:00)
+  1717  centre=2025-08-27 17:17:30  n_occ=44  span=[2025-08-27 16:25:00 .. 2025-08-27 18:10:00)
+  1857  centre=2025-08-27 18:57:30  n_occ=46  span=[2025-08-27 18:10:00 .. 2025-08-27 19:45:00)
+  2025  centre=2025-08-27 20:25:00  n_occ=65  span=[2025-08-27 19:45:00 .. 2025-08-27 21:05:00)
+  2200  centre=2025-08-27 22:00:00  n_occ=98  span=[2025-08-27 21:05:00 .. 2025-08-27 22:55:00)
+  2327  centre=2025-08-27 23:27:30  n_occ=60  span=[2025-08-27 22:55:00 .. 2025-08-28 00:00:00)
+
+  2025-08-27  (1 window(s)):
+    window       all      55      45      35      25      15       5     total
+    1227         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+  Scanning 3713 files for metadata …
+  Found 3713 valid files across 571 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-09-22: 8 window(s) (>= 10 arcs each)
+  0125  centre=2025-09-22 01:25:00  n_occ=10  span=[2025-09-22 00:50:00 .. 2025-09-22 02:00:00)
+  0252  centre=2025-09-22 02:52:30  n_occ=25  span=[2025-09-22 02:00:00 .. 2025-09-22 03:45:00)
+  0447  centre=2025-09-22 04:47:30  n_occ=10  span=[2025-09-22 03:45:00 .. 2025-09-22 05:50:00)
+  0932  centre=2025-09-22 09:32:30  n_occ=14  span=[2025-09-22 08:55:00 .. 2025-09-22 10:10:00)
+  1115  centre=2025-09-22 11:15:00  n_occ=29  span=[2025-09-22 10:10:00 .. 2025-09-22 12:20:00)
+  1307  centre=2025-09-22 13:07:30  n_occ=16  span=[2025-09-22 12:20:00 .. 2025-09-22 13:55:00)
+  1555  centre=2025-09-22 15:55:00  n_occ=22  span=[2025-09-22 13:55:00 .. 2025-09-22 17:55:00)
+  2032  centre=2025-09-22 20:32:30  n_occ=19  span=[2025-09-22 17:55:00 .. 2025-09-22 23:10:00)
+
+  2025-09-22  (5 window(s)):
+    window       all      55      45      35      25      15       5     total
+    0932         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1115         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1307         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1555         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    2032         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+  Scanning 3818 files for metadata …
+  Found 3818 valid files across 573 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-10-17: 7 window(s) (>= 10 arcs each)
+  0020  centre=2025-10-17 00:20:00  n_occ=11  span=[2025-10-17 00:00:00 .. 2025-10-17 00:40:00)
+  0212  centre=2025-10-17 02:12:30  n_occ=30  span=[2025-10-17 00:40:00 .. 2025-10-17 03:45:00)
+  1057  centre=2025-10-17 10:57:30  n_occ=20  span=[2025-10-17 10:10:00 .. 2025-10-17 11:45:00)
+  1230  centre=2025-10-17 12:30:00  n_occ=10  span=[2025-10-17 11:45:00 .. 2025-10-17 13:15:00)
+  1530  centre=2025-10-17 15:30:00  n_occ=34  span=[2025-10-17 13:15:00 .. 2025-10-17 17:45:00)
+  2207  centre=2025-10-17 22:07:30  n_occ=11  span=[2025-10-17 21:20:00 .. 2025-10-17 22:55:00)
+  2327  centre=2025-10-17 23:27:30  n_occ=10  span=[2025-10-17 22:55:00 .. 2025-10-18 00:00:00)
+
+  2025-10-17  (7 window(s)):
+    window       all      55      45      35      25      15       5     total
+    0020         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0212         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1057         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1230         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1530         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    2207         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    2327         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+
+  Grid total: 0/546 unit(s) done (0.0%)
+[ISR-DA] Log written to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260721_133941.log

@@ -3385,6 +3385,286 @@ def _render_globe_ax(
 
 
 
+def plot_occultation_prior_post_truth(
+    res: dict,
+    occ_idx: int,
+    alt_grid: np.ndarray,
+    group_key: str,
+    save_dir: str,
+    label: str = "",
+    isr_profile: dict | None = None,
+    isr_site: tuple[float, float] | None = None,
+) -> str | None:
+    """
+    Single-occultation "what did assimilation do to this ray?" diagnostic.
+
+    ┌───────────────────────┬─────────────────────────┐
+    │ [0,0] TEC prior/post  │ [0,1] Orthographic       │
+    │ vs. measured, vs.     │ geometry for this        │
+    │ tangent altitude      │ occultation only         │
+    ├───────────────────────┼─────────────────────────┤
+    │ [1,0] Prior Ne curtain│ [1,1] EDP-vs-alt: ISR    │
+    │ (top) / Posterior Ne  │ truth, prior & post @    │
+    │ curtain (bottom),     │ TEC-max tangent point    │
+    │ along the raypath     │                          │
+    └───────────────────────┴─────────────────────────┘
+
+    [0,0] mirrors plot_kf_enkf_comparison's TEC-vs-tangent-altitude
+    styling. [0,1] reuses _render_globe_ax with shown_indices=[occ_idx] so
+    only this ray's geometry is drawn on the ΔNe globe.
+
+    [1,0] is 2 stacked pcolormesh curtains (prior on top, posterior on
+    bottom) -- altitude (y) vs along-occultation distance (x), cividis
+    colormap, shared LogNorm scale and one shared colorbar -- built by
+    nearest-neighbour (cKDTree) lookup of each along-track tangent-point
+    (lat, lon) into eds_occ.geolocation and pulling the full altitude
+    column out of prior_edp_3d / post_edp_3d at the nearest mesh vertex,
+    i.e. genuine mesh-resolved horizontal structure along the ray (the
+    "EDP along the raypath, before + after"). A white dashed vertical line
+    marks the along-track sample closest to isr_site, if given; a magenta
+    dotted vertical line marks the ray's TEC-max tangent-point sample.
+
+    [1,1] is a plain EDP-vs-altitude line plot (log-x electron density,
+    linear-y altitude) comparing the ISR truth sounding against the
+    prior/posterior EDP columns pulled from the ray's "TEC-max" tangent
+    point -- the same deepest-tangent-altitude sample used as the TEC-max
+    proxy elsewhere in the codebase (see
+    demo_compare_kf_enkf._arc_representative_tangent), i.e. the
+    along-track column most representative of the ray's peak columnar
+    electron content.
+
+    Parameters
+    ----------
+    res         : result dict from process_group() / EKF equivalent -- must
+                  contain clean_list, eds_occ, prior_edp_3d, post_edp_3d,
+                  tec_slices (or joint_tec_slices), lats, lons, sat_ids.
+    occ_idx     : index into res["clean_list"] of the occultation to plot
+                  (must be a genuine RO ray, i.e. len(tangent_km) > 1 --
+                  collapsed single-epoch IGS arcs can't be curtain-plotted).
+    alt_grid    : shared altitude grid (km), length n_alt.
+    group_key   : used for figure title / filename.
+    save_dir    : output directory (created if missing).
+    label       : short tag (e.g. "ro_igs_gridded_kf") folded into the title
+                  and filename to disambiguate obs_mode/filter combos.
+    isr_profile : optional dict with "alt_km"/"ne" (see _isr_edp_to_profile
+                  in demo_isr_da_comparison.py) for the ISR truth row; if
+                  None, the truth row is left blank with an annotation.
+    isr_site    : optional (lon, lat) tuple for the vertical marker line.
+
+    Returns
+    -------
+    str | None : path to the saved PNG, or None if occ_idx isn't usable
+                 (too few samples / missing required result keys).
+    """
+    from matplotlib.colors import LogNorm
+    from demo_compare_kf_enkf import _tangent_latlon_single
+    from demo_verification import _haversine_km
+
+    required = ("clean_list", "eds_occ", "prior_edp_3d", "post_edp_3d")
+    if any(res.get(k) is None for k in required):
+        print(f"  [occ-diag] skip {label or group_key}: missing required result keys")
+        return None
+
+    clean_list = res["clean_list"]
+    if occ_idx < 0 or occ_idx >= len(clean_list):
+        print(f"  [occ-diag] skip {label or group_key}: occ_idx {occ_idx} out of range")
+        return None
+
+    occ = clean_list[occ_idx]
+    gnss_ecef  = np.asarray(occ["GNSS"])
+    leo_ecef   = np.asarray(occ["LEO"])
+    tangent_km = np.asarray(occ["tangent_km"])
+    n_samp = tangent_km.shape[0]
+    if n_samp < 2:
+        print(f"  [occ-diag] skip {label or group_key} occ {occ_idx}: "
+              f"only {n_samp} sample(s) -- not a genuine RO ray "
+              f"(likely a collapsed IGS arc)")
+        return None
+
+    tec_slices = res.get("tec_slices") or res.get("joint_tec_slices")
+    if not tec_slices or occ_idx >= len(tec_slices):
+        print(f"  [occ-diag] skip {label or group_key}: no tec_slices for occ {occ_idx}")
+        return None
+    sl = tec_slices[occ_idx]
+
+    alt_grid = np.asarray(alt_grid)
+    n_alt = len(alt_grid)
+
+    # ── Along-track tangent-point geometry ─────────────────────────────────
+    track_lat = np.empty(n_samp)
+    track_lon = np.empty(n_samp)
+    for i in range(n_samp):
+        la, lo = _tangent_latlon_single(gnss_ecef[:, i], leo_ecef[:, i])
+        track_lat[i] = la
+        track_lon[i] = lo
+
+    along_km = np.zeros(n_samp)
+    for i in range(1, n_samp):
+        along_km[i] = along_km[i - 1] + _haversine_km(
+            track_lat[i - 1], track_lon[i - 1], track_lat[i], track_lon[i]
+        )
+
+    # ── Nearest-mesh-vertex lookup for the curtain fields ───────────────────
+    eds_occ  = res["eds_occ"]
+    geoloc   = np.asarray(eds_occ.geolocation)                  # (n_geo,2) = lon, lat
+    mesh_pts = np.column_stack([geoloc[:, 1], geoloc[:, 0]])    # (lat, lon)
+    tree     = cKDTree(mesh_pts)
+    _dist, nearest_idx = tree.query(np.column_stack([track_lat, track_lon]))
+
+    n_geo = geoloc.shape[0]
+    prior_edp_3d = np.asarray(res["prior_edp_3d"]).reshape(n_alt, n_geo)
+    post_edp_3d  = np.asarray(res["post_edp_3d"]).reshape(n_alt, n_geo)
+
+    prior_curtain = prior_edp_3d[:, nearest_idx]   # (n_alt, n_samp)
+    post_curtain  = post_edp_3d[:, nearest_idx]    # (n_alt, n_samp)
+
+    # ── ISR truth sounding, interpolated onto alt_grid (line-plot only now) ──
+    truth_ne = np.full(n_alt, np.nan)
+    have_truth = False
+    if isr_profile is not None:
+        t_alt = np.asarray(isr_profile["alt_km"], dtype=float)
+        t_ne  = np.asarray(isr_profile["ne"], dtype=float)
+        order = np.argsort(t_alt)
+        t_alt, t_ne = t_alt[order], t_ne[order]
+        valid = np.isfinite(t_alt) & np.isfinite(t_ne)
+        if valid.sum() >= 2:
+            truth_ne = np.interp(alt_grid, t_alt[valid], t_ne[valid],
+                                  left=np.nan, right=np.nan)
+            have_truth = True
+
+    # ── TEC-max tangent point (deepest-tangent-altitude sample) -- same
+    #    proxy used by demo_compare_kf_enkf._arc_representative_tangent --
+    #    and the prior/posterior EDP columns pulled at that along-track
+    #    sample, for the EDP-vs-altitude comparison panel below.
+    tec_max_idx      = int(np.argmin(tangent_km))
+    prior_ne_tecmax  = prior_curtain[:, tec_max_idx]
+    post_ne_tecmax   = post_curtain[:, tec_max_idx]
+    tecmax_along_km  = along_km[tec_max_idx]
+
+    # along-track sample closest to isr_site, for a vertical marker line
+    site_along_km = None
+    if isr_site is not None:
+        site_lon, site_lat = isr_site
+        d_site = np.array([
+            _haversine_km(track_lat[i], track_lon[i], site_lat, site_lon)
+            for i in range(n_samp)
+        ])
+        site_along_km = along_km[int(np.argmin(d_site))]
+
+    # ── Shared colour scale across the 2 curtains ────────────────────────────
+    stacked = [prior_curtain, post_curtain]
+    finite_pos = np.concatenate([
+        c[np.isfinite(c) & (c > 0)].ravel() for c in stacked
+    ])
+    if finite_pos.size == 0:
+        finite_pos = np.array([1e9, 1e12])
+    vmin = max(float(np.percentile(finite_pos, 1)), 1e7)
+    vmax = float(np.percentile(finite_pos, 99))
+    if vmax <= vmin:
+        vmax = vmin * 10.0
+    norm = LogNorm(vmin=vmin, vmax=vmax)
+
+    # ── Figure layout ─────────────────────────────────────────────────────────
+    os.makedirs(save_dir, exist_ok=True)
+    sat_ids = res.get("sat_ids", [])
+    prn = sat_ids[occ_idx][1] if occ_idx < len(sat_ids) else f"Occ{occ_idx + 1}"
+
+    lats_c = res.get("lats")
+    lons_c = res.get("lons")
+    clon = float(np.nanmean(lons_c)) if lons_c else float(np.nanmean(track_lon))
+    clat = float(np.nanmean(lats_c)) if lats_c else float(np.nanmean(track_lat))
+    proj = ccrs.Orthographic(central_longitude=clon, central_latitude=clat)
+
+    fig = plt.figure(figsize=(14, 12))
+    title_label = f" ({label})" if label else ""
+    fig.suptitle(
+        f"Occultation Diagnostic — {prn}{title_label}\n{group_key}",
+        fontsize=13, y=1.02,
+    )
+    gs = gridspec.GridSpec(2, 2, figure=fig, wspace=0.30, hspace=0.32)
+    ax_tec = fig.add_subplot(gs[0, 0])
+    ax_geo = fig.add_subplot(gs[0, 1], projection=proj)
+    gs_raypath = gridspec.GridSpecFromSubplotSpec(
+        2, 1, subplot_spec=gs[1, 0], hspace=0.15
+    )
+    ax_pr  = fig.add_subplot(gs_raypath[0, 0])
+    ax_po  = fig.add_subplot(gs_raypath[1, 0], sharex=ax_pr, sharey=ax_pr)
+    ax_edp = fig.add_subplot(gs[1, 1])
+
+    # ── Left: TEC prior/posterior vs. measured ───────────────────────────────
+    ax_tec.plot(sl["measured"],  sl["tangent_km"], color="black",     lw=2.0,               label="Measured")
+    ax_tec.plot(sl["prior_tec"], sl["tangent_km"], color="royalblue", lw=1.8, ls="--",       label="Prior")
+    ax_tec.plot(sl["post_tec"],  sl["tangent_km"], color="firebrick", lw=1.8, ls="-.",       label="Posterior")
+    ax_tec.set_xlabel("TEC (TECU)", fontsize=10)
+    ax_tec.set_ylabel("Tangent Altitude (km)", fontsize=10)
+    ax_tec.set_title(
+        f"TEC: prior {res.get('prior_tec_rmse', float('nan')):.2f} → "
+        f"post {res.get('post_tec_rmse', float('nan')):.2f} TECU",
+        fontsize=10,
+    )
+    ax_tec.legend(fontsize=8, loc="best", framealpha=0.85)
+    ax_tec.grid(True, alpha=0.3, ls=":")
+
+    # ── Middle: single-occultation geometry ───────────────────────────────────
+    try:
+        _render_globe_ax(
+            ax_geo, fig, res, alt_grid, label or "Occ",
+            isr_site=isr_site, shown_indices=[occ_idx],
+        )
+    except Exception:
+        ax_geo.set_title("Geometry unavailable", fontsize=9)
+
+    # ── [1,0]: prior/posterior Ne curtains along the raypath (before/after) ──
+    mesh = None
+    for ax, field, title in (
+        (ax_pr, prior_curtain, "Prior"),
+        (ax_po, post_curtain,  "Posterior"),
+    ):
+        mesh = ax.pcolormesh(along_km, alt_grid, field, shading="nearest",
+                              cmap="cividis", norm=norm)
+        ax.set_ylabel("Alt (km)", fontsize=8.5)
+        ax.set_title(title, fontsize=9, loc="left")
+        ax.tick_params(labelsize=7.5)
+        if site_along_km is not None:
+            ax.axvline(site_along_km, color="white", lw=1.2, ls="--", alpha=0.85)
+        ax.axvline(tecmax_along_km, color="magenta", lw=1.2, ls=":", alpha=0.9)
+
+    ax_po.set_xlabel("Along-occultation distance (km)", fontsize=9)
+    plt.setp(ax_pr.get_xticklabels(), visible=False)
+    cbar = fig.colorbar(mesh, ax=[ax_pr, ax_po], fraction=0.046, pad=0.02)
+    cbar.set_label("Electron Density (m⁻³)", fontsize=9)
+
+    # ── [1,1]: EDP vs altitude -- ISR truth vs prior/posterior @
+    #    the ray's TEC-max tangent point ──────────────────────────────────
+    if have_truth:
+        ax_edp.plot(truth_ne, alt_grid, color="mediumseagreen", lw=2.0,
+                    label="ISR truth")
+    else:
+        ax_edp.text(0.5, 0.5, "no co-located ISR profile in window",
+                    transform=ax_edp.transAxes, ha="center", va="center",
+                    fontsize=8, color="dimgray")
+    ax_edp.plot(prior_ne_tecmax, alt_grid, color="royalblue", lw=1.8, ls="--",
+                label="Prior @ TEC-max pt")
+    ax_edp.plot(post_ne_tecmax,  alt_grid, color="firebrick", lw=1.8, ls="-.",
+                label="Posterior @ TEC-max pt")
+    ax_edp.set_xscale("log")
+    ax_edp.set_xlabel("Electron Density (m⁻³)", fontsize=9)
+    ax_edp.set_ylabel("Alt (km)", fontsize=8.5)
+    ax_edp.set_ylim(alt_grid.min(), alt_grid.max())
+    ax_edp.set_title("EDP @ TEC-max tangent point", fontsize=9, loc="left")
+    ax_edp.tick_params(labelsize=7.5)
+    ax_edp.legend(fontsize=7.5, loc="best", framealpha=0.85)
+    ax_edp.grid(True, alpha=0.3, ls=":")
+
+    safe_key   = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
+    safe_label = (label or "occ").replace("/", "_").replace(" ", "_")
+    plot_path = os.path.join(save_dir, f"occdiag_{safe_key}_{safe_label}_{prn}.png")
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    _print_saved(f"  Occultation diagnostic plot saved → {plot_path}")
+    return plot_path
+
+
 def plot_kf_enkf_comparison(
     res_kf:       dict,
     res_enkf:     dict,

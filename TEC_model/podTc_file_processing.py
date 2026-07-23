@@ -499,8 +499,10 @@ def forward_model_func(Ne_grid,grid_alt,LEO,GNSS,grid_lats,grid_lons,tangent_rad
                   
     TEC = np.zeros(LEO.shape[1])
 
+    _tec_report_every = max(1, LEO.shape[1] // 10)
     for i in range(LEO.shape[1]):
-        print(f'\rTEC Calc: {i+1}/{LEO.shape[1]} ({(i+1)/LEO.shape[1]*100:.2f}%)', end='', flush=True)
+        if (i + 1) % _tec_report_every == 0 or i + 1 == LEO.shape[1]:
+            print(f'TEC Calc: {i+1}/{LEO.shape[1]} ({(i+1)/LEO.shape[1]*100:.2f}%)', flush=True)
         if i == 0:
             Ne_x = Ne_grid[INDEX_store[i,0,:].astype(int),INDEX_store[i,1,:].astype(int),:]
             x = (6371+300) * theta[0:999]

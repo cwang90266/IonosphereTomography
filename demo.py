@@ -820,8 +820,10 @@ def section11() -> None:
         # Manual fallback: loop over sample rows and call IRI() directly,
         # mirroring the approach used in §8.
         edps = np.full((len(alt_grid), 1, len(samples)), np.nan)
+        _report_every = max(1, len(samples) // 10)
         for i_s, row in samples.iterrows():
-            print(f"  sample {i_s+1}/{len(samples)}", end="\r", flush=True)
+            if (i_s + 1) % _report_every == 0 or i_s + 1 == len(samples):
+                print(f"  sample {i_s+1}/{len(samples)}", flush=True)
             iono = IRI(
                 POINT_TIME,
                 [float(alt_grid[0]), float(alt_grid[-1]), float(alt_grid[1] - alt_grid[0])],
@@ -1191,7 +1193,7 @@ def section15(lon_point: float = -145.0, lat_point: float = 62.5, n_mc_samples: 
         
         # Display a simple progress tracker
         if (i_s + 1) % 10 == 0 or i_s == 0:
-            print(f"    Running sample {i_s + 1}/{n_mc_samples}...", end="\r", flush=True)
+            print(f"    Running sample {i_s + 1}/{n_mc_samples}...", flush=True)
             
         iono = IRI(
             TIME, ALT_KM, lat_point, lon_point,
@@ -2255,50 +2257,75 @@ def section19(podTc2_file: str, alt_grid: np.ndarray, sampling_df: pd.DataFrame)
     from Abel_Inverter import run_abel_inversion
     abel = run_abel_inversion(podTc_data)
     
-def extract_robust_f2_peak(profile: np.ndarray, alt_grid: np.ndarray, min_alt: float = 150.0, max_alt: float = 650.0):
+def extract_robust_f2_peak(profile: np.ndarray, alt_grid: np.ndarray,
+                           min_alt: float = 150.0, max_alt: float = 650.0,
+                           _half_window: int = 4, _weight_sigma_km: float = 14.0,
+                           _min_side_pts: int = 2):
     """
-    Robustly finds NmF2 and hmF2 by restricting the search to physical 
-    F-region altitudes and applying a 3-point parabolic fit for sub-grid resolution.
+    Robustly find NmF2 and hmF2 from a sampled Ne(h) profile by fitting a
+    *two-sided* (asymmetric) parabola in log(Ne).
+
+    A 3-point parabola in LINEAR Ne (the previous approach) is biased HIGH by
+    ~+6 to +16 km on the geometric altitude grid: the F2 peak is asymmetric —
+    the bottomside is steeper than the topside — and the grid spacing grows
+    with altitude, so a symmetric-parabola vertex is pulled toward the flatter
+    topside. Worse, that bias grows with bottomside breadth (B0), so a broader
+    (more physically faithful) bottomside spuriously raises the detected hmF2
+    even when the true peak height is unchanged.
+
+    The fix fits Ne(h) near the peak as two half-parabolas in log(Ne) sharing a
+    common vertex, with independent curvature above and below (so asymmetry no
+    longer biases the vertex), and Gaussian proximity weights so distant,
+    non-parabolic samples do not distort the local fit. Validated on analytic
+    profiles from observation_operator._ne_profile_ensemble (known true hmF2):
+    mean bias ~0 km with no residual B0 dependence, versus +6 km and strong B0
+    correlation for the old linear fit.
     """
-    # 1. Restrict search to physical F-region bounds
     search_mask = (alt_grid >= min_alt) & (alt_grid <= max_alt) & ~np.isnan(profile)
-    
     if not np.any(search_mask):
         return np.nan, np.nan
-        
-    # Extract the restricted window
+
     search_alts = alt_grid[search_mask]
     search_prof = profile[search_mask]
-    
-    # 2. Find the discrete maximum within the F-region window
-    local_max_idx = np.argmax(search_prof)
+
+    local_max_idx = int(np.argmax(search_prof))
     discrete_hmF2 = search_alts[local_max_idx]
     discrete_NmF2 = search_prof[local_max_idx]
-    
-    # 3. Sub-grid refinement (3-point parabolic interpolation)
-    # Only apply if the peak has neighboring points within our search window
-    if 0 < local_max_idx < len(search_prof) - 1:
-        h1, h2, h3 = search_alts[local_max_idx-1 : local_max_idx+2]
-        n1, n2, n3 = search_prof[local_max_idx-1 : local_max_idx+2]
-        
-        # Fit a parabola: Ne(h) = a*h^2 + b*h + c
+
+    lo = max(0, local_max_idx - _half_window)
+    hi = min(len(search_alts) - 1, local_max_idx + _half_window)
+    if hi - lo < 4:
+        return discrete_NmF2, discrete_hmF2   # too few points to fit — fall back
+
+    h = search_alts[lo:hi + 1]
+    y = np.log(np.maximum(search_prof[lo:hi + 1], 1.0))
+
+    # Search the vertex over one grid step either side of the discrete argmax;
+    # for each trial vertex the two-sided model is linear in (y0, k_lo, k_hi).
+    half_step = (search_alts[min(local_max_idx + 1, len(search_alts) - 1)]
+                 - search_alts[max(local_max_idx - 1, 0)]) / 2.0
+    best_sse, best_hmF2, best_NmF2 = np.inf, discrete_hmF2, discrete_NmF2
+    for h0 in np.linspace(discrete_hmF2 - half_step, discrete_hmF2 + half_step, 81):
+        d = h - h0
+        below = d < 0.0
+        if np.sum(below) < _min_side_pts or np.sum(~below) < _min_side_pts:
+            continue
+        w = np.exp(-0.5 * (d / _weight_sigma_km) ** 2)
+        A = np.column_stack([np.ones_like(d),
+                             -np.where(below, d ** 2, 0.0),
+                             -np.where(~below, d ** 2, 0.0)])
         try:
-            coeffs = np.polyfit([h1, h2, h3], [n1, n2, n3], deg=2)
-            a, b, c = coeffs
-            
-            # Ensure the parabola opens downwards (a < 0) indicating a true peak
-            if a < 0:
-                # The peak of a parabola is at h = -b / (2a)
-                refined_hmF2 = -b / (2.0 * a)
-                refined_NmF2 = (a * refined_hmF2**2) + (b * refined_hmF2) + c
-                
-                # Safety check: Ensure the interpolated peak didn't swing wildly out of bounds
-                if abs(refined_hmF2 - discrete_hmF2) <= (h3 - h1):
-                    return refined_NmF2, refined_hmF2
+            coeffs, *_ = np.linalg.lstsq(A * w[:, None], y * w, rcond=None)
         except np.linalg.LinAlgError:
-            pass # If the fit fails, quietly fall back to the discrete maximum
-            
-    return discrete_NmF2, discrete_hmF2
+            continue
+        y0, k_lo, k_hi = coeffs
+        if k_lo <= 0.0 or k_hi <= 0.0:        # must curve down on both sides
+            continue
+        sse = float(np.sum(((A @ coeffs - y) * w) ** 2))
+        if sse < best_sse:
+            best_sse, best_hmF2, best_NmF2 = sse, float(h0), float(np.exp(y0))
+
+    return best_NmF2, best_hmF2
     
 
 def _build_hourly_global_edp(args: tuple) -> tuple:

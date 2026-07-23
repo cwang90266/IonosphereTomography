@@ -445,10 +445,19 @@ def run_simulation(cfg: SimulationConfig):
 # Output generation
 # ──────────────────────────────────────────────────────────────────────────
 
-def generate_output(cfg: SimulationConfig, events: List["av.OccultationEvent"]):
+def generate_output(cfg: SimulationConfig, events: List["av.OccultationEvent"],
+                    vmax_by_radius: Optional[dict] = None):
     """Translate the recorded occultation events into the
     demo_occultation_availability.py DataFrame schema, save the 2x2 regional
     summary figure, and print a console availability summary.
+
+    Parameters
+    ----------
+    vmax_by_radius : dict, optional
+        Forwarded to av.plot_global_occultation_density() so the global
+        density figure's colorbars can be pinned to a fixed scale shared
+        across separate runs (e.g. comparing two RX constellations) instead
+        of each auto-scaling to its own peak.
 
     Returns
     -------
@@ -487,6 +496,7 @@ def generate_output(cfg: SimulationConfig, events: List["av.OccultationEvent"]):
     global_save_path = cfg.output_dir / f"global_occultation_density_{day.date()}.png"
     av.plot_global_occultation_density(
         df, day, save_path=global_save_path, ground_tracks=ground_tracks,
+        vmax_by_radius=vmax_by_radius,
     )
     print(f"  Saved global density figure → {global_save_path}")
 

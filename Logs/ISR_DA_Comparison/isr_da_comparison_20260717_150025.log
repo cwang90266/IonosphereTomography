@@ -1,0 +1,8 @@
+[ISR-DA] Logging this run to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260717_150025.log
+usage: demo_isr_da_comparison.py [-h] [--force] [--no-plot] [--days DAYS]
+                                 [--tier {1,2,3}] [--start-date START_DATE]
+                                 [--list-days] [--status] [--bin-count COUNT]
+                                 [--window HHMM] [--occ-bins LIST]
+                                 [--resume | --no-resume]
+demo_isr_da_comparison.py: error: unrecognized arguments: --end
+[ISR-DA] Log written to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260717_150025.log

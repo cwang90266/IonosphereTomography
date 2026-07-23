@@ -1,0 +1,351 @@
+[ISR-DA] Logging this run to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260723_010537.log
+[ISR-DA] Experiment config: run_gridded_kf=True ekf_grid=fibonacci ekf_grid_km=200.0 filters=['gridded_kf', 'parametric_ekf']
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+[ISR-DA][status] Progress manifest: /home/austinhunter/IonosphereTomography/Data/DA_Cache/progress_manifest.json
+  37 (group, bin) unit(s) marked complete, spanning 4 day(s) (2025-08-27 .. 2025-10-18)
+  Completed (group, bin) units per occultation-count bin:
+    bin=all  : 13
+    bin=15   : 4
+    bin=25   : 4
+    bin=35   : 4
+    bin=45   : 4
+    bin=5    : 4
+    bin=55   : 4
+  Filter-run outcomes across completed (group, bin) units:
+    bin=15   igs_only  gridded_kf     ok (no 'status' key)                          : 4
+    bin=15   igs_only  parametric_ekf ok (no 'status' key)                          : 4
+    bin=15   ro_igs    gridded_kf     Success                                       : 4
+    bin=15   ro_igs    parametric_ekf Success                                       : 4
+    bin=15   ro_only   gridded_kf     Success                                       : 4
+    bin=15   ro_only   parametric_ekf Success                                       : 4
+    bin=25   igs_only  gridded_kf     ok (no 'status' key)                          : 4
+    bin=25   igs_only  parametric_ekf ok (no 'status' key)                          : 4
+    bin=25   ro_igs    gridded_kf     Success                                       : 4
+    bin=25   ro_igs    parametric_ekf Success                                       : 4
+    bin=25   ro_only   gridded_kf     Success                                       : 4
+    bin=25   ro_only   parametric_ekf Success                                       : 4
+    bin=35   igs_only  gridded_kf     ok (no 'status' key)                          : 4
+    bin=35   igs_only  parametric_ekf ok (no 'status' key)                          : 4
+    bin=35   ro_igs    gridded_kf     Success                                       : 4
+    bin=35   ro_igs    parametric_ekf Success                                       : 4
+    bin=35   ro_only   gridded_kf     Success                                       : 4
+    bin=35   ro_only   parametric_ekf Success                                       : 4
+    bin=45   igs_only  gridded_kf     ok (no 'status' key)                          : 4
+    bin=45   igs_only  parametric_ekf ok (no 'status' key)                          : 4
+    bin=45   ro_igs    gridded_kf     Success                                       : 4
+    bin=45   ro_igs    parametric_ekf Success                                       : 4
+    bin=45   ro_only   gridded_kf     Success                                       : 4
+    bin=45   ro_only   parametric_ekf Success                                       : 4
+    bin=5    igs_only  gridded_kf     ok (no 'status' key)                          : 4
+    bin=5    igs_only  parametric_ekf ok (no 'status' key)                          : 4
+    bin=5    ro_igs    gridded_kf     Error: zero-size array to reduction operation maximum which has no identity : 1
+    bin=5    ro_igs    gridded_kf     Success                                       : 3
+    bin=5    ro_igs    parametric_ekf None                                          : 1
+    bin=5    ro_igs    parametric_ekf Success                                       : 3
+    bin=5    ro_only   gridded_kf     Error: zero-size array to reduction operation maximum which has no identity : 1
+    bin=5    ro_only   gridded_kf     Success                                       : 3
+    bin=5    ro_only   parametric_ekf None                                          : 1
+    bin=5    ro_only   parametric_ekf Success                                       : 3
+    bin=55   igs_only  gridded_kf     ok (no 'status' key)                          : 4
+    bin=55   igs_only  parametric_ekf ok (no 'status' key)                          : 4
+    bin=55   ro_igs    gridded_kf     Success                                       : 4
+    bin=55   ro_igs    parametric_ekf Success                                       : 4
+    bin=55   ro_only   gridded_kf     Success                                       : 4
+    bin=55   ro_only   parametric_ekf Success                                       : 4
+    bin=all  igs_only  gridded_kf     ok (no 'status' key)                          : 13
+    bin=all  igs_only  parametric_ekf ok (no 'status' key)                          : 13
+    bin=all  ro_igs    gridded_kf     Error: 21                                     : 1
+    bin=all  ro_igs    gridded_kf     Error: boolean index did not match indexed array along axis 0; size of axis is 1 but size of corresponding boolean axis is 179 : 1
+    bin=all  ro_igs    gridded_kf     Error: boolean index did not match indexed array along axis 0; size of axis is 1 but size of corresponding boolean axis is 191 : 1
+    bin=all  ro_igs    gridded_kf     Error: subset_region: only 1 vertices in lat=[23.732961389218037,89.42974132498517], lon=[-0.2211605256299497,0.356168948967138] : 1
+    bin=all  ro_igs    gridded_kf     Success                                       : 9
+    bin=all  ro_igs    parametric_ekf None                                          : 4
+    bin=all  ro_igs    parametric_ekf Success                                       : 9
+    bin=all  ro_only   gridded_kf     Error: 21                                     : 1
+    bin=all  ro_only   gridded_kf     Error: subset_region: only 1 vertices in lat=[23.732961389218037,89.42974132498517], lon=[-0.2211605256299497,0.356168948967138] : 1
+    bin=all  ro_only   gridded_kf     Success                                       : 11
+    bin=all  ro_only   parametric_ekf None                                          : 2
+    bin=all  ro_only   parametric_ekf Success                                       : 11
+
+  ISR metrics CSV: /home/austinhunter/IonosphereTomography/Data/DA_Cache/isr_metrics.csv
+    142 row(s), 8 group(s), date range 2025-08-27 .. 2025-10-18
+
+  Window x bin_count completion grid (ISR-truth windows only; --all-windows to include blind ones) (7 bin(s): ['all', '55', '45', '35', '25', '15', '5']; 6 = 3 obs_modes x 2 filters per cell):
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+  Scanning 3713 files for metadata …
+  Found 3713 valid files across 571 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-09-22: 8 window(s) (>= 10 arcs each)
+  0125  centre=2025-09-22 01:25:00  n_occ=10  span=[2025-09-22 00:50:00 .. 2025-09-22 02:00:00)
+  0252  centre=2025-09-22 02:52:30  n_occ=25  span=[2025-09-22 02:00:00 .. 2025-09-22 03:45:00)
+  0447  centre=2025-09-22 04:47:30  n_occ=10  span=[2025-09-22 03:45:00 .. 2025-09-22 05:50:00)
+  0932  centre=2025-09-22 09:32:30  n_occ=14  span=[2025-09-22 08:55:00 .. 2025-09-22 10:10:00)
+  1115  centre=2025-09-22 11:15:00  n_occ=29  span=[2025-09-22 10:10:00 .. 2025-09-22 12:20:00)
+  1307  centre=2025-09-22 13:07:30  n_occ=16  span=[2025-09-22 12:20:00 .. 2025-09-22 13:55:00)
+  1555  centre=2025-09-22 15:55:00  n_occ=22  span=[2025-09-22 13:55:00 .. 2025-09-22 17:55:00)
+  2032  centre=2025-09-22 20:32:30  n_occ=19  span=[2025-09-22 17:55:00 .. 2025-09-22 23:10:00)
+
+  2025-09-22  (5 window(s)):
+    window       all      55      45      35      25      15       5     total
+    0932         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1115         3/6     3/6     3/6     3/6     3/6     3/6     3/6     21/42
+    1307         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1555         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    2032         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+  Scanning 3930 files for metadata …
+  Found 3930 valid files across 601 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-09-23: 7 window(s) (>= 10 arcs each)
+  0057  centre=2025-09-23 00:57:30  n_occ=27  span=[2025-09-23 00:00:00 .. 2025-09-23 01:55:00)
+  0245  centre=2025-09-23 02:45:00  n_occ=30  span=[2025-09-23 01:55:00 .. 2025-09-23 03:35:00)
+  0445  centre=2025-09-23 04:45:00  n_occ=16  span=[2025-09-23 03:35:00 .. 2025-09-23 05:55:00)
+  1110  centre=2025-09-23 11:10:00  n_occ=20  span=[2025-09-23 10:35:00 .. 2025-09-23 11:45:00)
+  1250  centre=2025-09-23 12:50:00  n_occ=30  span=[2025-09-23 11:45:00 .. 2025-09-23 13:55:00)
+  1535  centre=2025-09-23 15:35:00  n_occ=22  span=[2025-09-23 13:55:00 .. 2025-09-23 17:15:00)
+  2112  centre=2025-09-23 21:12:30  n_occ=21  span=[2025-09-23 19:40:00 .. 2025-09-23 22:45:00)
+
+  2025-09-23  (7 window(s)):
+    window       all      55      45      35      25      15       5     total
+    0057         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0245         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0445         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1110         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1250         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1535         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    2112         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+  Scanning 3920 files for metadata …
+  Found 3920 valid files across 615 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-09-24: 8 window(s) (>= 10 arcs each)
+  0057  centre=2025-09-24 00:57:30  n_occ=25  span=[2025-09-24 00:00:00 .. 2025-09-24 01:55:00)
+  0242  centre=2025-09-24 02:42:30  n_occ=33  span=[2025-09-24 01:55:00 .. 2025-09-24 03:30:00)
+  0642  centre=2025-09-24 06:42:30  n_occ=11  span=[2025-09-24 05:55:00 .. 2025-09-24 07:30:00)
+  0927  centre=2025-09-24 09:27:30  n_occ=32  span=[2025-09-24 07:30:00 .. 2025-09-24 11:25:00)
+  1217  centre=2025-09-24 12:17:30  n_occ=46  span=[2025-09-24 11:25:00 .. 2025-09-24 13:10:00)
+  1357  centre=2025-09-24 13:57:30  n_occ=21  span=[2025-09-24 13:10:00 .. 2025-09-24 14:45:00)
+  1622  centre=2025-09-24 16:22:30  n_occ=15  span=[2025-09-24 14:45:00 .. 2025-09-24 18:00:00)
+  2022  centre=2025-09-24 20:22:30  n_occ=19  span=[2025-09-24 18:00:00 .. 2025-09-24 22:45:00)
+
+  2025-09-24  (8 window(s)):
+    window       all      55      45      35      25      15       5     total
+    0057         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0242         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0642         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0927         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1217         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1357         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1622         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    2022         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+  Scanning 3582 files for metadata …
+  Found 3582 valid files across 561 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-09-25: 4 window(s) (>= 10 arcs each)
+  0215  centre=2025-09-25 02:15:00  n_occ=26  span=[2025-09-25 01:05:00 .. 2025-09-25 03:25:00)
+  0912  centre=2025-09-25 09:12:30  n_occ=16  span=[2025-09-25 07:40:00 .. 2025-09-25 10:45:00)
+  1200  centre=2025-09-25 12:00:00  n_occ=61  span=[2025-09-25 10:45:00 .. 2025-09-25 13:15:00)
+  1402  centre=2025-09-25 14:02:30  n_occ=17  span=[2025-09-25 13:15:00 .. 2025-09-25 14:50:00)
+
+  2025-09-25  (4 window(s)):
+    window       all      55      45      35      25      15       5     total
+    0215         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0912         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1200         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1402         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+  Scanning 3587 files for metadata …
+  Found 3587 valid files across 563 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-09-26: 8 window(s) (>= 10 arcs each)
+  0047  centre=2025-09-26 00:47:30  n_occ=22  span=[2025-09-26 00:00:00 .. 2025-09-26 01:35:00)
+  0232  centre=2025-09-26 02:32:30  n_occ=22  span=[2025-09-26 01:35:00 .. 2025-09-26 03:30:00)
+  0525  centre=2025-09-26 05:25:00  n_occ=11  span=[2025-09-26 04:40:00 .. 2025-09-26 06:10:00)
+  0742  centre=2025-09-26 07:42:30  n_occ=11  span=[2025-09-26 06:10:00 .. 2025-09-26 09:15:00)
+  1027  centre=2025-09-26 10:27:30  n_occ=34  span=[2025-09-26 09:15:00 .. 2025-09-26 11:40:00)
+  1227  centre=2025-09-26 12:27:30  n_occ=18  span=[2025-09-26 11:40:00 .. 2025-09-26 13:15:00)
+  1612  centre=2025-09-26 16:12:30  n_occ=31  span=[2025-09-26 13:15:00 .. 2025-09-26 19:10:00)
+  2135  centre=2025-09-26 21:35:00  n_occ=15  span=[2025-09-26 19:10:00 .. 2025-09-27 00:00:00)
+
+  2025-09-26  (5 window(s)):
+    window       all      55      45      35      25      15       5     total
+    0047         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0232         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0525         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0742         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1027         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+  Scanning 3690 files for metadata …
+  Found 3690 valid files across 579 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-10-14: 6 window(s) (>= 10 arcs each)
+  0122  centre=2025-10-14 01:22:30  n_occ=32  span=[2025-10-14 00:00:00 .. 2025-10-14 02:45:00)
+  0532  centre=2025-10-14 05:32:30  n_occ=25  span=[2025-10-14 02:45:00 .. 2025-10-14 08:20:00)
+  0915  centre=2025-10-14 09:15:00  n_occ=18  span=[2025-10-14 08:20:00 .. 2025-10-14 10:10:00)
+  1115  centre=2025-10-14 11:15:00  n_occ=30  span=[2025-10-14 10:10:00 .. 2025-10-14 12:20:00)
+  1452  centre=2025-10-14 14:52:30  n_occ=43  span=[2025-10-14 12:20:00 .. 2025-10-14 17:25:00)
+  2125  centre=2025-10-14 21:25:00  n_occ=10  span=[2025-10-14 20:10:00 .. 2025-10-14 22:40:00)
+
+  2025-10-14  (4 window(s)):
+    window       all      55      45      35      25      15       5     total
+    0915         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1115         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1452         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    2125         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+  Scanning 3429 files for metadata …
+  Found 3429 valid files across 564 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-10-15: 5 window(s) (>= 10 arcs each)
+  0120  centre=2025-10-15 01:20:00  n_occ=36  span=[2025-10-15 00:00:00 .. 2025-10-15 02:40:00)
+  0920  centre=2025-10-15 09:20:00  n_occ=14  span=[2025-10-15 08:20:00 .. 2025-10-15 10:20:00)
+  1110  centre=2025-10-15 11:10:00  n_occ=22  span=[2025-10-15 10:20:00 .. 2025-10-15 12:00:00)
+  1235  centre=2025-10-15 12:35:00  n_occ=19  span=[2025-10-15 12:00:00 .. 2025-10-15 13:10:00)
+  1430  centre=2025-10-15 14:30:00  n_occ=24  span=[2025-10-15 13:10:00 .. 2025-10-15 15:50:00)
+
+  2025-10-15  (5 window(s)):
+    window       all      55      45      35      25      15       5     total
+    0120         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    0920         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1110         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1235         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+    1430         0/6     0/6     0/6     0/6     0/6     0/6     0/6      0/42
+  Scanning 3275 files for metadata …

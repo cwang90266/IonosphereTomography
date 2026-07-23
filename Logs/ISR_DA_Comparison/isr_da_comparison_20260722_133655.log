@@ -1,0 +1,1011 @@
+[ISR-DA] Logging this run to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260722_133655.log
+[ISR-DA] Output routed to /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL (metrics=isr_metrics_OUTPUT_FINAL.csv, manifest=progress_manifest_OUTPUT_FINAL.json)
+[ISR-DA] BEST-WINDOW-ONLY: one window per day (max occultations + ISR truth); occultation-count sweep runs on that window.
+[ISR-DA] Experiment config: run_gridded_kf=False ekf_grid=fibonacci ekf_grid_km=100.0 filters=['ekf_allfree', 'ekf_nmf2']
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+[ISR-DA] Processing 1 day(s)
+  Tier 1  2025-09-22  instruments=['ESR', 'TRO']  podtc=yes
+
+[ISR-DA] Loading ISR EDP cache ...
+[ISR] Loading cache esr_edp_cache.pkl … 135834 profiles from 285 files
+[ISR] Processing 74 new file(s) …
+  MAD6300_2025-08-27_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-09-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@32mc.hdf5: 0 profiles
+  MAD6300_2025-09-15_ipy_60@42ma.hdf5: 0 profiles
+  MAD6300_2025-09-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-23_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-26_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2025-09-30_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_30@42m.hdf5: 0 profiles
+  MAD6300_2025-10-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-10-19_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-04_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-06_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-07_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-11_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-13_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-18_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-19_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-22_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-23_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-24_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-25_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-26_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-27_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-28_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-11-29_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-08_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-09_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-10_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-12_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-14_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-15_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-16_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-17_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2025-12-18_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-13_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-14_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-15_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-16_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-20_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-01-21_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-02_manda_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_ipy_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-03_othia_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-09_leo_60@42m.hdf5: 0 profiles
+  MAD6300_2026-02-12_manda_60@42m.hdf5: 0 profiles
+         135834 profiles loaded, 85642 fitted (kindat 6400) used as ground truth
+
+======================================================================
+[Day] 2025-09-22  tier=1  instruments=['ESR', 'TRO']
+  Scanning 3713 files for metadata …
+  Found 3713 valid files across 571 geographic groups (48 30-min windows).
+[ISR-DA][minima-windows] 2025-09-22: 8 window(s) (>= 10 arcs each)
+  0125  centre=2025-09-22 01:25:00  n_occ=10  span=[2025-09-22 00:50:00 .. 2025-09-22 02:00:00)
+  0252  centre=2025-09-22 02:52:30  n_occ=25  span=[2025-09-22 02:00:00 .. 2025-09-22 03:45:00)
+  0447  centre=2025-09-22 04:47:30  n_occ=10  span=[2025-09-22 03:45:00 .. 2025-09-22 05:50:00)
+  0932  centre=2025-09-22 09:32:30  n_occ=14  span=[2025-09-22 08:55:00 .. 2025-09-22 10:10:00)
+  1115  centre=2025-09-22 11:15:00  n_occ=29  span=[2025-09-22 10:10:00 .. 2025-09-22 12:20:00)
+  1307  centre=2025-09-22 13:07:30  n_occ=16  span=[2025-09-22 12:20:00 .. 2025-09-22 13:55:00)
+  1555  centre=2025-09-22 15:55:00  n_occ=22  span=[2025-09-22 13:55:00 .. 2025-09-22 17:55:00)
+  2032  centre=2025-09-22 20:32:30  n_occ=19  span=[2025-09-22 17:55:00 .. 2025-09-22 23:10:00)
+  [IGS/TRO1] Loaded 204 arc(s) from cache.
+  [IGS/NYA1] Loaded 291 arc(s) from cache.
+  [IGS/KIR0] Loaded 322 arc(s) from cache.
+  [IGS/SOD3] Running TEC pipeline for 2025-09-22 …
+  [nav] Using multi-GNSS mixed nav: BRDC00IGS_R_20252650000_01D_MN.rnx.gz
+  [IGS/SOD3] Pipeline failed: cannot reindex or align along dimension 'sv' because the (pandas) index has duplicate values
+  [IGS/ALRT] Loaded 0 arc(s) from cache.
+  [IGS/SCOR] Loaded 388 arc(s) from cache.
+  [IGS/HOFN] Loaded 306 arc(s) from cache.
+  [IGS/REYK] Loaded 314 arc(s) from cache.
+  8 minima window(s), 1825 IGS arc(s)
+  Running 8 window(s) x 7 occultation-count bins x 3 obs modes x 2 filters ...
+  [diag] BEST-WINDOW-ONLY: 2025-09-22 -> window 1115 (n_occ=29, n_isr_edp=61) selected from 5 ISR-truth window(s).
+  [resume] 2025-09-22_1115_binall already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-09-22_1115_bin55 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+  [resume] 2025-09-22_1115_bin45 already marked complete in the progress manifest (metrics+plots written on a previous run) -- skipping. Use --force to redo it.
+EDPS: (55, 1650, 50), N_geo: 1650
+EDPS: (55, 1650, 50), N_geo: 1650
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=35  | ro_only   | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=35  | ro_only   | gridded_kf     : CACHE HIT  (2025-09-22_1115_bin35_ro_only_gridded_kf.pkl, 0.2s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=35  | ro_igs    | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=35  | ro_igs    | gridded_kf     : CACHE HIT  (2025-09-22_1115_bin35_ro_igs_gridded_kf.pkl, 0.2s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=35  | igs_only  | gridded_kf    
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=35  | igs_only  | gridded_kf     : CACHE HIT  (2025-09-22_1115_bin35_igs_only_gridded_kf.pkl, 0.0s load) -> status=ok (no 'status' key)
+  [EKF] Fibonacci ROI grid @ 100 km: 600 points (great-circle around footprint centroid, cap=600, 193 full-window ROI anchor pts; built once per window)
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=35  | ro_only   | ekf_allfree   
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=35  | ro_only   | ekf_allfree    : CACHE HIT  (2025-09-22_1115_bin35_ro_only_ekf_allfree.pkl, 0.5s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=35  | ro_only   | ekf_nmf2      
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=35  | ro_only   | ekf_nmf2       : CACHE HIT  (2025-09-22_1115_bin35_ro_only_ekf_nmf2.pkl, 0.5s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=35  | ro_igs    | ekf_allfree   
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=35  | ro_igs    | ekf_allfree    : CACHE HIT  (2025-09-22_1115_bin35_ro_igs_ekf_allfree.pkl, 0.5s load) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=35  | ro_igs    | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=35  | ro_igs    | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 135 arc(s) …
+  [EKF] 135 arcs  |  4920 profile rays  |  2536 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-9.84  std=47.27  max_abs=200.95 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:11<?, ?it/s, RMSE=48.279TECU, a=0.50, rel_dP=1.48e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:11<03:45, 11.87s/it, RMSE=48.279TECU, a=0.50, rel_dP=1.48e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:24<03:45, 11.87s/it, RMSE=37.005TECU, a=0.50, rel_dP=8.16e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:24<03:40, 12.26s/it, RMSE=37.005TECU, a=0.50, rel_dP=8.16e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:36<03:40, 12.26s/it, RMSE=33.209TECU, a=0.50, rel_dP=5.14e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:36<03:28, 12.26s/it, RMSE=33.209TECU, a=0.50, rel_dP=5.14e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:48<03:28, 12.26s/it, RMSE=31.800TECU, a=0.50, rel_dP=3.36e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:48<03:12, 12.04s/it, RMSE=31.800TECU, a=0.50, rel_dP=3.36e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [01:00<03:12, 12.04s/it, RMSE=31.200TECU, a=0.50, rel_dP=2.31e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [01:00<03:00, 12.06s/it, RMSE=31.200TECU, a=0.50, rel_dP=2.31e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [01:12<03:00, 12.06s/it, RMSE=30.891TECU, a=0.50, rel_dP=1.70e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [01:12<02:50, 12.16s/it, RMSE=30.891TECU, a=0.50, rel_dP=1.70e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [01:24<02:50, 12.16s/it, RMSE=30.702TECU, a=0.50, rel_dP=1.35e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [01:24<02:37, 12.13s/it, RMSE=30.702TECU, a=0.50, rel_dP=1.35e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [01:37<02:37, 12.13s/it, RMSE=30.571TECU, a=0.50, rel_dP=1.14e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [01:37<02:27, 12.30s/it, RMSE=30.571TECU, a=0.50, rel_dP=1.14e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [01:48<02:27, 12.30s/it, RMSE=30.471TECU, a=0.50, rel_dP=9.95e-06]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:48<02:12, 12.02s/it, RMSE=30.471TECU, a=0.50, rel_dP=9.95e-06]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [02:00<02:12, 12.02s/it, RMSE=30.391TECU, a=0.50, rel_dP=8.86e-06]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [02:00<01:59, 11.97s/it, RMSE=30.391TECU, a=0.50, rel_dP=8.86e-06]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [02:12<01:59, 11.97s/it, RMSE=30.325TECU, a=0.50, rel_dP=7.97e-06]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [02:12<01:48, 12.03s/it, RMSE=30.325TECU, a=0.50, rel_dP=7.97e-06]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [02:24<01:48, 12.03s/it, RMSE=30.268TECU, a=0.50, rel_dP=7.23e-06]  [EKF] iterating [analytical]:  60%|######    | 12/20 [02:24<01:34, 11.85s/it, RMSE=30.268TECU, a=0.50, rel_dP=7.23e-06]  [EKF] iterating [analytical]:  60%|######    | 12/20 [02:36<01:34, 11.85s/it, RMSE=30.219TECU, a=0.50, rel_dP=6.59e-06]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [02:36<01:23, 11.90s/it, RMSE=30.219TECU, a=0.50, rel_dP=6.59e-06]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [02:48<01:23, 11.90s/it, RMSE=30.175TECU, a=0.50, rel_dP=6.05e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [02:48<01:11, 11.91s/it, RMSE=30.175TECU, a=0.50, rel_dP=6.05e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [02:59<01:11, 11.91s/it, RMSE=30.136TECU, a=0.50, rel_dP=5.58e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [02:59<00:58, 11.69s/it, RMSE=30.136TECU, a=0.50, rel_dP=5.58e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [03:12<00:58, 11.69s/it, RMSE=30.100TECU, a=0.50, rel_dP=5.18e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [03:12<00:47, 11.95s/it, RMSE=30.100TECU, a=0.50, rel_dP=5.18e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [03:23<00:47, 11.95s/it, RMSE=30.068TECU, a=0.50, rel_dP=4.84e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [03:23<00:35, 11.78s/it, RMSE=30.068TECU, a=0.50, rel_dP=4.84e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [03:35<00:35, 11.78s/it, RMSE=30.038TECU, a=0.50, rel_dP=4.54e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [03:35<00:23, 11.76s/it, RMSE=30.038TECU, a=0.50, rel_dP=4.54e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [03:47<00:23, 11.76s/it, RMSE=30.010TECU, a=0.50, rel_dP=4.28e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [03:47<00:11, 11.91s/it, RMSE=30.010TECU, a=0.50, rel_dP=4.28e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [03:59<00:11, 11.91s/it, RMSE=29.983TECU, a=0.50, rel_dP=4.06e-06]  [EKF] iterating [analytical]: 100%|##########| 20/20 [03:59<00:00, 11.96s/it, RMSE=29.983TECU, a=0.50, rel_dP=4.06e-06]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 4.06e-06, RMSE=29.98TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-3.87  std=29.71  max_abs=113.86 TECU
+  [EKF] Prior RMSE 48.803 TECU  →  Post RMSE 30.016 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_35/ro_igs/2025-09-22_1115_ro_igs_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=35  | ro_igs    | ekf_nmf2       : DONE       (669.5s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=35  | igs_only  | ekf_allfree   
+    [diag] 2025-09-22_1115 | bin=35  | igs_only  | ekf_allfree    : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 106 arc(s) …
+  [EKF] 106 arcs  |  106 profile rays  |  106 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=17.09  std=18.54  max_abs=73.62 TECU
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.62e-02]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:09,  2.09it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.62e-02]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:01<00:09,  2.09it/s, RMSE=20.837TECU, a=0.50, rel_dP=1.72e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:09,  1.94it/s, RMSE=20.837TECU, a=0.50, rel_dP=1.72e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:09,  1.94it/s, RMSE=18.889TECU, a=0.50, rel_dP=1.12e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:01<00:08,  1.97it/s, RMSE=18.889TECU, a=0.50, rel_dP=1.12e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:02<00:08,  1.97it/s, RMSE=18.102TECU, a=0.50, rel_dP=1.12e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.99it/s, RMSE=18.102TECU, a=0.50, rel_dP=1.12e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.99it/s, RMSE=17.706TECU, a=0.50, rel_dP=9.50e-03]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:02<00:07,  1.94it/s, RMSE=17.706TECU, a=0.50, rel_dP=9.50e-03]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:03<00:07,  1.94it/s, RMSE=17.452TECU, a=0.50, rel_dP=1.07e-02]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.97it/s, RMSE=17.452TECU, a=0.50, rel_dP=1.07e-02]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.97it/s, RMSE=17.266TECU, a=0.50, rel_dP=7.81e-03]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:03<00:06,  1.98it/s, RMSE=17.266TECU, a=0.50, rel_dP=7.81e-03]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:04<00:06,  1.98it/s, RMSE=17.113TECU, a=0.50, rel_dP=1.45e-02]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:05,  2.02it/s, RMSE=17.113TECU, a=0.50, rel_dP=1.45e-02]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:05,  2.02it/s, RMSE=16.976TECU, a=0.50, rel_dP=9.90e-03]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:04<00:05,  2.01it/s, RMSE=16.976TECU, a=0.50, rel_dP=9.90e-03]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:05<00:05,  2.01it/s, RMSE=16.856TECU, a=0.50, rel_dP=1.23e-02]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:04,  2.00it/s, RMSE=16.856TECU, a=0.50, rel_dP=1.23e-02]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:04,  2.00it/s, RMSE=16.738TECU, a=0.50, rel_dP=1.11e-02]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:05<00:04,  1.99it/s, RMSE=16.738TECU, a=0.50, rel_dP=1.11e-02]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:06<00:04,  1.99it/s, RMSE=16.666TECU, a=0.50, rel_dP=7.33e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.98it/s, RMSE=16.666TECU, a=0.50, rel_dP=7.33e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.98it/s, RMSE=16.592TECU, a=0.50, rel_dP=6.99e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:06<00:03,  1.95it/s, RMSE=16.592TECU, a=0.50, rel_dP=6.99e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:07<00:03,  1.95it/s, RMSE=16.515TECU, a=0.50, rel_dP=8.02e-03]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:03,  1.99it/s, RMSE=16.515TECU, a=0.50, rel_dP=8.02e-03]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:03,  1.99it/s, RMSE=16.445TECU, a=0.50, rel_dP=2.64e-02]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:07<00:02,  2.00it/s, RMSE=16.445TECU, a=0.50, rel_dP=2.64e-02]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:08<00:02,  2.00it/s, RMSE=16.356TECU, a=0.50, rel_dP=1.31e-02]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:01,  2.01it/s, RMSE=16.356TECU, a=0.50, rel_dP=1.31e-02]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:01,  2.01it/s, RMSE=16.284TECU, a=0.50, rel_dP=1.66e-02]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:08<00:01,  2.00it/s, RMSE=16.284TECU, a=0.50, rel_dP=1.66e-02]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:09<00:01,  2.00it/s, RMSE=16.241TECU, a=0.50, rel_dP=3.24e-02]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:00,  2.00it/s, RMSE=16.241TECU, a=0.50, rel_dP=3.24e-02]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:00,  2.00it/s, RMSE=16.209TECU, a=0.50, rel_dP=8.35e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:09<00:00,  1.99it/s, RMSE=16.209TECU, a=0.50, rel_dP=8.35e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:10<00:00,  1.99it/s, RMSE=16.131TECU, a=0.50, rel_dP=2.66e-02]  [EKF] iterating [analytical]: 100%|##########| 20/20 [00:10<00:00,  2.01it/s, RMSE=16.131TECU, a=0.50, rel_dP=2.66e-02]                                                                                                                           [EKF] reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 2.66e-02, RMSE=16.13TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=0.10  std=16.06  max_abs=58.35 TECU
+  [EKF] Prior RMSE 25.212 TECU  →  Post RMSE 16.061 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_35/igs_only/2025-09-22_1115_igs_only_ekf_allfree_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=35  | igs_only  | ekf_allfree    : DONE       (449.3s) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=35  | igs_only  | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=35  | igs_only  | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 106 arc(s) …
+  [EKF] 106 arcs  |  106 profile rays  |  106 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=17.09  std=18.54  max_abs=73.62 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.46e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:08,  2.16it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.46e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:08,  2.16it/s, RMSE=20.292TECU, a=0.50, rel_dP=9.58e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:00<00:08,  2.06it/s, RMSE=20.292TECU, a=0.50, rel_dP=9.58e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:08,  2.06it/s, RMSE=18.823TECU, a=0.50, rel_dP=4.76e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:01<00:08,  1.91it/s, RMSE=18.823TECU, a=0.50, rel_dP=4.76e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:02<00:08,  1.91it/s, RMSE=18.225TECU, a=0.50, rel_dP=2.81e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.91it/s, RMSE=18.225TECU, a=0.50, rel_dP=2.81e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.91it/s, RMSE=17.897TECU, a=0.50, rel_dP=2.01e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:02<00:07,  1.92it/s, RMSE=17.897TECU, a=0.50, rel_dP=2.01e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:03<00:07,  1.92it/s, RMSE=17.670TECU, a=0.50, rel_dP=1.68e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.92it/s, RMSE=17.670TECU, a=0.50, rel_dP=1.68e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.92it/s, RMSE=17.494TECU, a=0.50, rel_dP=1.51e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:03<00:06,  1.90it/s, RMSE=17.494TECU, a=0.50, rel_dP=1.51e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:04<00:06,  1.90it/s, RMSE=17.348TECU, a=0.50, rel_dP=1.40e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:06,  1.87it/s, RMSE=17.348TECU, a=0.50, rel_dP=1.40e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:06,  1.87it/s, RMSE=17.222TECU, a=0.50, rel_dP=1.31e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:04<00:05,  1.92it/s, RMSE=17.222TECU, a=0.50, rel_dP=1.31e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:05<00:05,  1.92it/s, RMSE=17.111TECU, a=0.50, rel_dP=1.24e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:05,  1.95it/s, RMSE=17.111TECU, a=0.50, rel_dP=1.24e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:05,  1.95it/s, RMSE=17.013TECU, a=0.50, rel_dP=1.17e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:05<00:04,  1.88it/s, RMSE=17.013TECU, a=0.50, rel_dP=1.17e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:06<00:04,  1.88it/s, RMSE=16.923TECU, a=0.50, rel_dP=1.11e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.89it/s, RMSE=16.923TECU, a=0.50, rel_dP=1.11e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.89it/s, RMSE=16.842TECU, a=0.50, rel_dP=1.05e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:06<00:03,  1.90it/s, RMSE=16.842TECU, a=0.50, rel_dP=1.05e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:07<00:03,  1.90it/s, RMSE=16.768TECU, a=0.50, rel_dP=9.91e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:03,  1.89it/s, RMSE=16.768TECU, a=0.50, rel_dP=9.91e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:03,  1.89it/s, RMSE=16.701TECU, a=0.50, rel_dP=9.38e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:07<00:02,  1.82it/s, RMSE=16.701TECU, a=0.50, rel_dP=9.38e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:08<00:02,  1.82it/s, RMSE=16.638TECU, a=0.50, rel_dP=8.88e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:02,  1.83it/s, RMSE=16.638TECU, a=0.50, rel_dP=8.88e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:02,  1.83it/s, RMSE=16.581TECU, a=0.50, rel_dP=8.40e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:08<00:01,  1.88it/s, RMSE=16.581TECU, a=0.50, rel_dP=8.40e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:09<00:01,  1.88it/s, RMSE=16.528TECU, a=0.50, rel_dP=7.95e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:01,  1.90it/s, RMSE=16.528TECU, a=0.50, rel_dP=7.95e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:01,  1.90it/s, RMSE=16.480TECU, a=0.50, rel_dP=7.53e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:09<00:00,  1.90it/s, RMSE=16.480TECU, a=0.50, rel_dP=7.53e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:10<00:00,  1.90it/s, RMSE=16.436TECU, a=0.50, rel_dP=7.12e-06]  [EKF] iterating [analytical]: 100%|##########| 20/20 [00:10<00:00,  1.89it/s, RMSE=16.436TECU, a=0.50, rel_dP=7.12e-06]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 7.12e-06, RMSE=16.44TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=1.29  std=16.34  max_abs=57.37 TECU
+  [EKF] Prior RMSE 25.212 TECU  →  Post RMSE 16.395 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_35/igs_only/2025-09-22_1115_igs_only_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=35  | igs_only  | ekf_nmf2       : DONE       (454.9s) -> status=ok (no 'status' key)
+  [diag] 2025-09-22_1115 | bin=35 : summary of 6 obs_mode/filter_type combos
+           ro_only   | ekf_allfree    -> Success
+           ro_only   | ekf_nmf2       -> Success
+           ro_igs    | ekf_allfree    -> Success
+           ro_igs    | ekf_nmf2       -> Success
+           igs_only  | ekf_allfree    -> ok (no 'status' key)
+           igs_only  | ekf_nmf2       -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-09-22_1115 bin=35
+◀◀◀ compute_isr_metrics END   | group=2025-09-22_1115 bin=35 -> 366 metric row(s)
+
+▶▶▶ _plot_group_all_modes START | group=2025-09-22_1115
+  [skip] group summary metrics plot for 2025-09-22_1115: no data in any config
+◀◀◀ _plot_group_all_modes END   | group=2025-09-22_1115
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=25  | ro_only   | gridded_kf    
+    [diag] 2025-09-22_1115 | bin=25  | ro_only   | gridded_kf     : RUNNING    (force=False, cached=False) ...
+
+────────────────────────────────────────────────────────────
+  Group : 2025-09-22_1115
+  Window: 2025-09-22_1115  |  Region: POLAR_N  |  25 occultation(s)
+────────────────────────────────────────────────────────────
+  Parsed 25/25 files successfully.
+    [podTc2] GN05 10:58 — 432 valid rays → decimated to 144 (stride 3)
+    [podTc2] GN05 10:45 — 451 valid rays → decimated to 151 (stride 3)
+    [podTc2] YM08 11:06 — 345 valid rays → decimated to 173 (stride 2)
+    [podTc2] YM08 11:13 — 435 valid rays → decimated to 145 (stride 3)
+    [podTc2] YM08 11:06 — 1403 valid rays → decimated to 176 (stride 8)
+    [podTc2] YM08 11:11 — 345 valid rays → decimated to 173 (stride 2)
+    [podTc2] YM08 11:01 — 352 valid rays → decimated to 176 (stride 2)
+    [podTc2] YM08 11:02 — 427 valid rays → decimated to 143 (stride 3)
+    [podTc2] YM08 11:02 — 453 valid rays → decimated to 151 (stride 3)
+    [podTc2] YM08 11:01 — 348 valid rays → decimated to 174 (stride 2)
+    [podTc2] YM08 11:04 — 359 valid rays → decimated to 180 (stride 2)
+    [podTc2] YM08 11:04 — 543 valid rays → decimated to 181 (stride 3)
+    [podTc2] YM08 11:04 — 570 valid rays → decimated to 190 (stride 3)
+    [podTc2] GN04 11:41 — 443 valid rays → decimated to 148 (stride 3)
+    [podTc2] GN04 11:48 — 460 valid rays → decimated to 154 (stride 3)
+    [podTc2] GN04 11:46 — 486 valid rays → decimated to 162 (stride 3)
+    [podTc2] GN04 11:49 — 598 valid rays → decimated to 200 (stride 3)
+    [podTc2] GN04 11:51 — 370 valid rays → decimated to 185 (stride 2)
+    [podTc2] GN04 11:49 — 502 valid rays → decimated to 168 (stride 3)
+    [podTc2] GN04 11:31 — 378 valid rays → decimated to 189 (stride 2)
+    [podTc2] GN04 11:31 — 378 valid rays → decimated to 189 (stride 2)
+    [podTc2] GN04 11:31 — 433 valid rays → decimated to 145 (stride 3)
+    [podTc2] GN04 11:33 — 437 valid rays → decimated to 146 (stride 3)
+    [podTc2] GN04 11:33 — 437 valid rays → decimated to 146 (stride 3)
+    [podTc2] GN04 11:39 — 456 valid rays → decimated to 152 (stride 3)
+  Bbox lat [32.4, 87.2]  lon [-37.0, 36.9]  |  union vertices: 60
+  Final group: 25 occultation(s), 60 union-mesh vertices
+  Saved trim diagnostic → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_25/ro_only/group_2025-09-22_1115_trim.png
+  -> Building H matrices (4141 rays across 25 arc(s), single parallel sweep) …
+  -> Building H matrices:    414/4141 rays ( 10.0%)
+  -> Building H matrices:    828/4141 rays ( 20.0%)
+  -> Building H matrices:   1242/4141 rays ( 30.0%)
+  -> Building H matrices:   1656/4141 rays ( 40.0%)
+  -> Building H matrices:   2070/4141 rays ( 50.0%)
+  -> Building H matrices:   2484/4141 rays ( 60.0%)
+  -> Building H matrices:   2898/4141 rays ( 70.0%)
+  -> Building H matrices:   3312/4141 rays ( 80.0%)
+  -> Building H matrices:   3726/4141 rays ( 90.0%)
+  -> Building H matrices:   4140/4141 rays (100.0%)
+  -> Building H matrices:   4141/4141 rays (100.0%)
+  Combined H shape : (4141, 3360)  (total rays = 4141)
+  Skipping sequential KF assimilation (run_sequential=False).
+  Running joint (batch) KF assimilation …
+  Skipping joint (batch) KF assimilation (skip_joint=True) — gridded KF not run; posterior aliased to prior.
+  Prior RMSE  : 49.197 TECU
+  Post  RMSE  : 49.197 TECU
+    [Abel] GN05 10:58: NmF2=7.90e+11 m⁻³  hmF2=296.4 km
+    [Abel] GN05 10:45: NmF2=3.46e+11 m⁻³  hmF2=321.9 km
+    [Abel] YM08 11:06: NmF2=1.16e+12 m⁻³  hmF2=290.9 km
+    [Abel] YM08 11:13: NmF2=4.07e+11 m⁻³  hmF2=313.4 km
+    [Abel] YM08 11:06: NmF2=8.74e+11 m⁻³  hmF2=342.1 km
+    [Abel] YM08 11:11: NmF2=5.09e+11 m⁻³  hmF2=285.1 km
+    [Abel] YM08 11:01: NmF2=6.02e+11 m⁻³  hmF2=288.8 km
+    [Abel] YM08 11:02: NmF2=5.26e+11 m⁻³  hmF2=278.0 km
+    [Abel] YM08 11:02: NmF2=6.01e+11 m⁻³  hmF2=281.8 km
+    [Abel] YM08 11:01: NmF2=6.27e+11 m⁻³  hmF2=266.4 km
+    [Abel] YM08 11:04: NmF2=3.66e+11 m⁻³  hmF2=263.8 km
+    [Abel] YM08 11:04: NmF2=4.45e+11 m⁻³  hmF2=338.9 km
+    [Abel] YM08 11:04: NmF2=4.74e+11 m⁻³  hmF2=318.3 km
+    [Abel] GN04 11:41: NmF2=2.31e+11 m⁻³  hmF2=433.3 km
+    [Abel] GN04 11:48: NmF2=1.11e+12 m⁻³  hmF2=302.0 km
+    [Abel] GN04 11:46: NmF2=1.10e+12 m⁻³  hmF2=297.5 km
+    [Abel] GN04 11:49: NmF2=6.54e+11 m⁻³  hmF2=292.1 km
+    [Abel] GN04 11:51: NmF2=1.34e+12 m⁻³  hmF2=297.0 km
+    [Abel] GN04 11:49: NmF2=1.41e+12 m⁻³  hmF2=303.1 km
+    [Abel] GN04 11:31: NmF2=9.39e+11 m⁻³  hmF2=317.1 km
+    [Abel] GN04 11:31: NmF2=9.39e+11 m⁻³  hmF2=317.1 km
+    [Abel] GN04 11:31: NmF2=4.20e+11 m⁻³  hmF2=309.4 km
+    [Abel] GN04 11:33: NmF2=5.30e+11 m⁻³  hmF2=271.3 km
+    [Abel] GN04 11:33: NmF2=5.30e+11 m⁻³  hmF2=271.3 km
+    [Abel] GN04 11:39: NmF2=1.01e+12 m⁻³  hmF2=304.3 km
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=25  | ro_only   | gridded_kf     : DONE       (131.4s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=25  | ro_igs    | gridded_kf    
+    [diag] 2025-09-22_1115 | bin=25  | ro_igs    | gridded_kf     : RUNNING    (force=False, cached=False) ...
+
+────────────────────────────────────────────────────────────
+  Group : 2025-09-22_1115
+  Window: 2025-09-22_1115  |  Region: POLAR_N  |  25 occultation(s)
+────────────────────────────────────────────────────────────
+  Parsed 25/25 files successfully.
+    [podTc2] GN05 10:58 — 432 valid rays → decimated to 144 (stride 3)
+    [podTc2] GN05 10:45 — 451 valid rays → decimated to 151 (stride 3)
+    [podTc2] YM08 11:06 — 345 valid rays → decimated to 173 (stride 2)
+    [podTc2] YM08 11:13 — 435 valid rays → decimated to 145 (stride 3)
+    [podTc2] YM08 11:06 — 1403 valid rays → decimated to 176 (stride 8)
+    [podTc2] YM08 11:11 — 345 valid rays → decimated to 173 (stride 2)
+    [podTc2] YM08 11:01 — 352 valid rays → decimated to 176 (stride 2)
+    [podTc2] YM08 11:02 — 427 valid rays → decimated to 143 (stride 3)
+    [podTc2] YM08 11:02 — 453 valid rays → decimated to 151 (stride 3)
+    [podTc2] YM08 11:01 — 348 valid rays → decimated to 174 (stride 2)
+    [podTc2] YM08 11:04 — 359 valid rays → decimated to 180 (stride 2)
+    [podTc2] YM08 11:04 — 543 valid rays → decimated to 181 (stride 3)
+    [podTc2] YM08 11:04 — 570 valid rays → decimated to 190 (stride 3)
+    [podTc2] GN04 11:41 — 443 valid rays → decimated to 148 (stride 3)
+    [podTc2] GN04 11:48 — 460 valid rays → decimated to 154 (stride 3)
+    [podTc2] GN04 11:46 — 486 valid rays → decimated to 162 (stride 3)
+    [podTc2] GN04 11:49 — 598 valid rays → decimated to 200 (stride 3)
+    [podTc2] GN04 11:51 — 370 valid rays → decimated to 185 (stride 2)
+    [podTc2] GN04 11:49 — 502 valid rays → decimated to 168 (stride 3)
+    [podTc2] GN04 11:31 — 378 valid rays → decimated to 189 (stride 2)
+    [podTc2] GN04 11:31 — 378 valid rays → decimated to 189 (stride 2)
+    [podTc2] GN04 11:31 — 433 valid rays → decimated to 145 (stride 3)
+    [podTc2] GN04 11:33 — 437 valid rays → decimated to 146 (stride 3)
+    [podTc2] GN04 11:33 — 437 valid rays → decimated to 146 (stride 3)
+    [podTc2] GN04 11:39 — 456 valid rays → decimated to 152 (stride 3)
+  Bbox lat [32.4, 87.2]  lon [-37.0, 36.9]  |  union vertices: 60
+  Final group: 25 occultation(s), 60 union-mesh vertices
+  Saved trim diagnostic → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_25/ro_igs/group_2025-09-22_1115_trim.png
+  [extra] Injected 106 ground-station arc(s) → total 131 arc(s) in assimilation pool
+  -> Building H matrices (4247 rays across 131 arc(s), single parallel sweep) …
+  -> Building H matrices:    424/4247 rays ( 10.0%)
+  -> Building H matrices:    848/4247 rays ( 20.0%)
+  -> Building H matrices:   1272/4247 rays ( 30.0%)
+  -> Building H matrices:   1696/4247 rays ( 39.9%)
+  -> Building H matrices:   2120/4247 rays ( 49.9%)
+  -> Building H matrices:   2544/4247 rays ( 59.9%)
+  -> Building H matrices:   2968/4247 rays ( 69.9%)
+  -> Building H matrices:   3392/4247 rays ( 79.9%)
+  -> Building H matrices:   3816/4247 rays ( 89.9%)
+  -> Building H matrices:   4240/4247 rays ( 99.8%)
+  -> Building H matrices:   4247/4247 rays (100.0%)
+  Combined H shape : (4247, 3360)  (total rays = 4247)
+  Skipping sequential KF assimilation (run_sequential=False).
+  Running joint (batch) KF assimilation …
+  Skipping joint (batch) KF assimilation (skip_joint=True) — gridded KF not run; posterior aliased to prior.
+  Prior RMSE  : 48.788 TECU
+  Post  RMSE  : 48.788 TECU
+    [Abel] GN05 10:58: NmF2=7.90e+11 m⁻³  hmF2=296.4 km
+    [Abel] GN05 10:45: NmF2=3.46e+11 m⁻³  hmF2=321.9 km
+    [Abel] YM08 11:06: NmF2=1.16e+12 m⁻³  hmF2=290.9 km
+    [Abel] YM08 11:13: NmF2=4.07e+11 m⁻³  hmF2=313.4 km
+    [Abel] YM08 11:06: NmF2=8.74e+11 m⁻³  hmF2=342.1 km
+    [Abel] YM08 11:11: NmF2=5.09e+11 m⁻³  hmF2=285.1 km
+    [Abel] YM08 11:01: NmF2=6.02e+11 m⁻³  hmF2=288.8 km
+    [Abel] YM08 11:02: NmF2=5.26e+11 m⁻³  hmF2=278.0 km
+    [Abel] YM08 11:02: NmF2=6.01e+11 m⁻³  hmF2=281.8 km
+    [Abel] YM08 11:01: NmF2=6.27e+11 m⁻³  hmF2=266.4 km
+    [Abel] YM08 11:04: NmF2=3.66e+11 m⁻³  hmF2=263.8 km
+    [Abel] YM08 11:04: NmF2=4.45e+11 m⁻³  hmF2=338.9 km
+    [Abel] YM08 11:04: NmF2=4.74e+11 m⁻³  hmF2=318.3 km
+    [Abel] GN04 11:41: NmF2=2.31e+11 m⁻³  hmF2=433.3 km
+    [Abel] GN04 11:48: NmF2=1.11e+12 m⁻³  hmF2=302.0 km
+    [Abel] GN04 11:46: NmF2=1.10e+12 m⁻³  hmF2=297.5 km
+    [Abel] GN04 11:49: NmF2=6.54e+11 m⁻³  hmF2=292.1 km
+    [Abel] GN04 11:51: NmF2=1.34e+12 m⁻³  hmF2=297.0 km
+    [Abel] GN04 11:49: NmF2=1.41e+12 m⁻³  hmF2=303.1 km
+    [Abel] GN04 11:31: NmF2=9.39e+11 m⁻³  hmF2=317.1 km
+    [Abel] GN04 11:31: NmF2=9.39e+11 m⁻³  hmF2=317.1 km
+    [Abel] GN04 11:31: NmF2=4.20e+11 m⁻³  hmF2=309.4 km
+    [Abel] GN04 11:33: NmF2=5.30e+11 m⁻³  hmF2=271.3 km
+    [Abel] GN04 11:33: NmF2=5.30e+11 m⁻³  hmF2=271.3 km
+    [Abel] GN04 11:39: NmF2=1.01e+12 m⁻³  hmF2=304.3 km
+    [Abel] Skipped 106 ground-station arc(s) (RO-only technique)
+/home/austinhunter/Downloads/PlanetiQ_Code/venv311/lib/python3.11/site-packages/shapely/creation.py:218: RuntimeWarning: invalid value encountered in linestrings
+  return lib.linestrings(coords, np.intc(handle_nan), out=out, **kwargs)
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=25  | ro_igs    | gridded_kf     : DONE       (132.1s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=25  | igs_only  | gridded_kf    
+    [diag] 2025-09-22_1115 | bin=25  | igs_only  | gridded_kf     : RUNNING    (force=False, cached=False) ...
+    [Info] Initialising information matrix (n_state=12155) …
+    [Info] arcs ingested = 106/106  |  obs rows = 106  |  Λ cond ≈ 3.67e+23
+    [Info] Solving …
+    [Prior] innovation  mean=24.44  std=18.32  n_obs=106
+    [Post ] innovation  mean=16.36  std=14.50
+    RMSE:  prior=30.542 TECU  →  post=21.864 TECU
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=25  | igs_only  | gridded_kf     : DONE       (120.4s) -> status=ok (no 'status' key)
+  [EKF] Fibonacci ROI grid @ 100 km: 600 points (memoized for window 2025-09-22_1115; reused across occultation-count bins)
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=25  | ro_only   | ekf_allfree   
+    [diag] 2025-09-22_1115 | bin=25  | ro_only   | ekf_allfree    : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 25 arc(s) …
+  [EKF] 25 arcs  |  4141 profile rays  |  2090 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-10.21  std=48.91  max_abs=200.95 TECU
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:09<?, ?it/s, RMSE=49.966TECU, a=0.50, rel_dP=1.82e-01]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:09<02:52,  9.06s/it, RMSE=49.966TECU, a=0.50, rel_dP=1.82e-01]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:19<02:52,  9.06s/it, RMSE=34.366TECU, a=0.50, rel_dP=3.10e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:19<02:54,  9.68s/it, RMSE=34.366TECU, a=0.50, rel_dP=3.10e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:29<02:54,  9.68s/it, RMSE=22.553TECU, a=0.50, rel_dP=2.09e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:29<02:46,  9.77s/it, RMSE=22.553TECU, a=0.50, rel_dP=2.09e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:38<02:46,  9.77s/it, RMSE=18.856TECU, a=0.50, rel_dP=1.36e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:38<02:33,  9.57s/it, RMSE=18.856TECU, a=0.50, rel_dP=1.36e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:48<02:33,  9.57s/it, RMSE=17.605TECU, a=0.50, rel_dP=9.38e-03]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:48<02:29,  9.96s/it, RMSE=17.605TECU, a=0.50, rel_dP=9.38e-03]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:58<02:29,  9.96s/it, RMSE=17.102TECU, a=0.50, rel_dP=7.67e-03]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:58<02:19,  9.93s/it, RMSE=17.102TECU, a=0.50, rel_dP=7.67e-03]  [EKF] iterating [analytical]:  30%|###       | 6/20 [01:07<02:19,  9.93s/it, RMSE=16.838TECU, a=0.50, rel_dP=7.12e-03]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [01:07<02:05,  9.66s/it, RMSE=16.838TECU, a=0.50, rel_dP=7.12e-03]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [01:17<02:05,  9.66s/it, RMSE=16.659TECU, a=0.50, rel_dP=6.73e-03]  [EKF] iterating [analytical]:  40%|####      | 8/20 [01:17<01:55,  9.66s/it, RMSE=16.659TECU, a=0.50, rel_dP=6.73e-03]  [EKF] iterating [analytical]:  40%|####      | 8/20 [01:26<01:55,  9.66s/it, RMSE=16.518TECU, a=0.50, rel_dP=6.56e-03]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:26<01:45,  9.57s/it, RMSE=16.518TECU, a=0.50, rel_dP=6.56e-03]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:36<01:45,  9.57s/it, RMSE=16.397TECU, a=0.50, rel_dP=6.06e-03]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:36<01:37,  9.71s/it, RMSE=16.397TECU, a=0.50, rel_dP=6.06e-03]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:46<01:37,  9.71s/it, RMSE=16.290TECU, a=0.50, rel_dP=5.86e-03]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:46<01:26,  9.61s/it, RMSE=16.290TECU, a=0.50, rel_dP=5.86e-03]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:56<01:26,  9.61s/it, RMSE=16.193TECU, a=0.50, rel_dP=5.38e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:56<01:17,  9.72s/it, RMSE=16.193TECU, a=0.50, rel_dP=5.38e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [02:05<01:17,  9.72s/it, RMSE=16.105TECU, a=0.50, rel_dP=4.98e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [02:05<01:07,  9.69s/it, RMSE=16.105TECU, a=0.50, rel_dP=4.98e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [02:15<01:07,  9.69s/it, RMSE=16.024TECU, a=0.50, rel_dP=5.09e-03]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [02:15<00:58,  9.74s/it, RMSE=16.024TECU, a=0.50, rel_dP=5.09e-03]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [02:25<00:58,  9.74s/it, RMSE=15.949TECU, a=0.50, rel_dP=4.36e-03]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [02:25<00:49,  9.83s/it, RMSE=15.949TECU, a=0.50, rel_dP=4.36e-03]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [02:35<00:49,  9.83s/it, RMSE=15.879TECU, a=0.50, rel_dP=4.75e-03]  [EKF] iterating [analytical]:  80%|########  | 16/20 [02:35<00:39,  9.75s/it, RMSE=15.879TECU, a=0.50, rel_dP=4.75e-03]  [EKF] iterating [analytical]:  80%|########  | 16/20 [02:45<00:39,  9.75s/it, RMSE=15.813TECU, a=0.50, rel_dP=3.93e-03]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [02:45<00:29,  9.83s/it, RMSE=15.813TECU, a=0.50, rel_dP=3.93e-03]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [02:55<00:29,  9.83s/it, RMSE=15.751TECU, a=0.50, rel_dP=3.77e-03]  [EKF] iterating [analytical]:  90%|######### | 18/20 [02:55<00:19,  9.90s/it, RMSE=15.751TECU, a=0.50, rel_dP=3.77e-03]  [EKF] iterating [analytical]:  90%|######### | 18/20 [03:05<00:19,  9.90s/it, RMSE=15.693TECU, a=0.50, rel_dP=4.74e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [03:05<00:09,  9.90s/it, RMSE=15.693TECU, a=0.50, rel_dP=4.74e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [03:15<00:09,  9.90s/it, RMSE=15.638TECU, a=0.50, rel_dP=4.81e-03]  [EKF] iterating [analytical]: 100%|##########| 20/20 [03:15<00:00,  9.97s/it, RMSE=15.638TECU, a=0.50, rel_dP=4.81e-03]                                                                                                                           [EKF] reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 4.81e-03, RMSE=15.64TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=0.03  std=15.58  max_abs=92.44 TECU
+  [EKF] Prior RMSE 50.126 TECU  →  Post RMSE 15.591 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_25/ro_only/2025-09-22_1115_ro_only_ekf_allfree_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=25  | ro_only   | ekf_allfree    : DONE       (622.0s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=25  | ro_only   | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=25  | ro_only   | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 25 arc(s) …
+  [EKF] 25 arcs  |  4141 profile rays  |  2090 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-10.21  std=48.91  max_abs=200.95 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:10<?, ?it/s, RMSE=49.966TECU, a=0.50, rel_dP=1.54e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:10<03:16, 10.34s/it, RMSE=49.966TECU, a=0.50, rel_dP=1.54e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:20<03:16, 10.34s/it, RMSE=37.783TECU, a=0.50, rel_dP=8.17e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:20<03:01, 10.10s/it, RMSE=37.783TECU, a=0.50, rel_dP=8.17e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:30<03:01, 10.10s/it, RMSE=33.736TECU, a=0.50, rel_dP=5.15e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:30<02:51, 10.10s/it, RMSE=33.736TECU, a=0.50, rel_dP=5.15e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:40<02:51, 10.10s/it, RMSE=32.227TECU, a=0.50, rel_dP=3.47e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:40<02:41, 10.12s/it, RMSE=32.227TECU, a=0.50, rel_dP=3.47e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:50<02:41, 10.12s/it, RMSE=31.583TECU, a=0.50, rel_dP=2.49e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:50<02:30, 10.00s/it, RMSE=31.583TECU, a=0.50, rel_dP=2.49e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [01:00<02:30, 10.00s/it, RMSE=31.256TECU, a=0.50, rel_dP=1.91e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [01:00<02:21, 10.08s/it, RMSE=31.256TECU, a=0.50, rel_dP=1.91e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [01:10<02:21, 10.08s/it, RMSE=31.061TECU, a=0.50, rel_dP=1.56e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [01:10<02:11, 10.08s/it, RMSE=31.061TECU, a=0.50, rel_dP=1.56e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [01:20<02:11, 10.08s/it, RMSE=30.931TECU, a=0.50, rel_dP=1.33e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [01:20<01:58,  9.85s/it, RMSE=30.931TECU, a=0.50, rel_dP=1.33e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [01:29<01:58,  9.85s/it, RMSE=30.835TECU, a=0.50, rel_dP=1.17e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:29<01:47,  9.75s/it, RMSE=30.835TECU, a=0.50, rel_dP=1.17e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:39<01:47,  9.75s/it, RMSE=30.760TECU, a=0.50, rel_dP=1.04e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:39<01:36,  9.67s/it, RMSE=30.760TECU, a=0.50, rel_dP=1.04e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:49<01:36,  9.67s/it, RMSE=30.700TECU, a=0.50, rel_dP=9.47e-06]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:49<01:28,  9.83s/it, RMSE=30.700TECU, a=0.50, rel_dP=9.47e-06]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:58<01:28,  9.83s/it, RMSE=30.649TECU, a=0.50, rel_dP=8.67e-06]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:58<01:16,  9.60s/it, RMSE=30.649TECU, a=0.50, rel_dP=8.67e-06]  [EKF] iterating [analytical]:  60%|######    | 12/20 [02:07<01:16,  9.60s/it, RMSE=30.605TECU, a=0.50, rel_dP=8.01e-06]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [02:07<01:07,  9.59s/it, RMSE=30.605TECU, a=0.50, rel_dP=8.01e-06]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [02:17<01:07,  9.59s/it, RMSE=30.566TECU, a=0.50, rel_dP=7.45e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [02:17<00:57,  9.65s/it, RMSE=30.566TECU, a=0.50, rel_dP=7.45e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [02:27<00:57,  9.65s/it, RMSE=30.531TECU, a=0.50, rel_dP=6.97e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [02:27<00:48,  9.75s/it, RMSE=30.531TECU, a=0.50, rel_dP=6.97e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [02:37<00:48,  9.75s/it, RMSE=30.499TECU, a=0.50, rel_dP=6.55e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [02:37<00:38,  9.71s/it, RMSE=30.499TECU, a=0.50, rel_dP=6.55e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [02:46<00:38,  9.71s/it, RMSE=30.470TECU, a=0.50, rel_dP=6.18e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [02:46<00:28,  9.65s/it, RMSE=30.470TECU, a=0.50, rel_dP=6.18e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [02:56<00:28,  9.65s/it, RMSE=30.443TECU, a=0.50, rel_dP=5.85e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [02:56<00:19,  9.61s/it, RMSE=30.443TECU, a=0.50, rel_dP=5.85e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [03:06<00:19,  9.61s/it, RMSE=30.418TECU, a=0.50, rel_dP=5.56e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [03:06<00:09,  9.66s/it, RMSE=30.418TECU, a=0.50, rel_dP=5.56e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [03:15<00:09,  9.66s/it, RMSE=30.394TECU, a=0.50, rel_dP=5.30e-06]  [EKF] iterating [analytical]: 100%|##########| 20/20 [03:15<00:00,  9.48s/it, RMSE=30.394TECU, a=0.50, rel_dP=5.30e-06]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 5.30e-06, RMSE=30.39TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-4.42  std=30.05  max_abs=116.34 TECU
+  [EKF] Prior RMSE 50.126 TECU  →  Post RMSE 30.391 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_25/ro_only/2025-09-22_1115_ro_only_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=25  | ro_only   | ekf_nmf2       : DONE       (614.1s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=25  | ro_igs    | ekf_allfree   
+    [diag] 2025-09-22_1115 | bin=25  | ro_igs    | ekf_allfree    : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 131 arc(s) …
+  [EKF] 131 arcs  |  4247 profile rays  |  2196 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-8.89  std=48.25  max_abs=200.95 TECU
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:10<?, ?it/s, RMSE=49.058TECU, a=0.50, rel_dP=1.23e-01]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:10<03:10, 10.04s/it, RMSE=49.058TECU, a=0.50, rel_dP=1.23e-01]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:20<03:10, 10.04s/it, RMSE=33.127TECU, a=0.50, rel_dP=2.63e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:20<03:05, 10.32s/it, RMSE=33.127TECU, a=0.50, rel_dP=2.63e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:30<03:05, 10.32s/it, RMSE=22.554TECU, a=0.50, rel_dP=2.48e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:30<02:51, 10.07s/it, RMSE=22.554TECU, a=0.50, rel_dP=2.48e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:40<02:51, 10.07s/it, RMSE=19.275TECU, a=0.50, rel_dP=1.82e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:40<02:39,  9.95s/it, RMSE=19.275TECU, a=0.50, rel_dP=1.82e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:50<02:39,  9.95s/it, RMSE=18.141TECU, a=0.50, rel_dP=1.39e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:50<02:30, 10.04s/it, RMSE=18.141TECU, a=0.50, rel_dP=1.39e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [01:00<02:30, 10.04s/it, RMSE=17.662TECU, a=0.50, rel_dP=1.07e-02]  [EKF] iterating [analytical]:  30%|###       | 6/20 [01:00<02:21, 10.10s/it, RMSE=17.662TECU, a=0.50, rel_dP=1.07e-02]  [EKF] iterating [analytical]:  30%|###       | 6/20 [01:10<02:21, 10.10s/it, RMSE=17.396TECU, a=0.50, rel_dP=1.02e-02]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [01:10<02:12, 10.22s/it, RMSE=17.396TECU, a=0.50, rel_dP=1.02e-02]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [01:21<02:12, 10.22s/it, RMSE=17.209TECU, a=0.50, rel_dP=1.66e-02]  [EKF] iterating [analytical]:  40%|####      | 8/20 [01:21<02:02, 10.23s/it, RMSE=17.209TECU, a=0.50, rel_dP=1.66e-02]  [EKF] iterating [analytical]:  40%|####      | 8/20 [01:30<02:02, 10.23s/it, RMSE=17.049TECU, a=0.50, rel_dP=1.06e-02]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:30<01:49,  9.94s/it, RMSE=17.049TECU, a=0.50, rel_dP=1.06e-02]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:40<01:49,  9.94s/it, RMSE=16.906TECU, a=0.50, rel_dP=1.18e-02]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:40<01:40, 10.05s/it, RMSE=16.906TECU, a=0.50, rel_dP=1.18e-02]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:50<01:40, 10.05s/it, RMSE=16.772TECU, a=0.50, rel_dP=1.16e-02]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:50<01:30, 10.04s/it, RMSE=16.772TECU, a=0.50, rel_dP=1.16e-02]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [02:01<01:30, 10.04s/it, RMSE=16.644TECU, a=0.50, rel_dP=7.56e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [02:01<01:20, 10.12s/it, RMSE=16.644TECU, a=0.50, rel_dP=7.56e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [02:11<01:20, 10.12s/it, RMSE=16.527TECU, a=0.50, rel_dP=7.04e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [02:11<01:10, 10.06s/it, RMSE=16.527TECU, a=0.50, rel_dP=7.04e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [02:21<01:10, 10.06s/it, RMSE=16.420TECU, a=0.50, rel_dP=6.17e-03]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [02:21<01:00, 10.10s/it, RMSE=16.420TECU, a=0.50, rel_dP=6.17e-03]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [02:30<01:00, 10.10s/it, RMSE=16.338TECU, a=0.50, rel_dP=1.34e-02]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [02:31<00:49,  9.99s/it, RMSE=16.338TECU, a=0.50, rel_dP=1.34e-02]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [02:41<00:49,  9.99s/it, RMSE=16.356TECU, a=0.50, rel_dP=7.41e-03]  [EKF] iterating [analytical]:  80%|########  | 16/20 [02:41<00:40, 10.01s/it, RMSE=16.356TECU, a=0.50, rel_dP=7.41e-03]  [EKF] iterating [analytical]:  80%|########  | 16/20 [02:51<00:40, 10.01s/it, RMSE=16.409TECU, a=0.50, rel_dP=6.47e-03]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [02:51<00:30, 10.19s/it, RMSE=16.409TECU, a=0.50, rel_dP=6.47e-03]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [03:01<00:30, 10.19s/it, RMSE=16.444TECU, a=0.50, rel_dP=7.35e-03]  [EKF] iterating [analytical]:  90%|######### | 18/20 [03:01<00:20, 10.21s/it, RMSE=16.444TECU, a=0.50, rel_dP=7.35e-03]  [EKF] iterating [analytical]:  90%|######### | 18/20 [03:12<00:20, 10.21s/it, RMSE=16.526TECU, a=0.50, rel_dP=8.68e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [03:12<00:10, 10.35s/it, RMSE=16.526TECU, a=0.50, rel_dP=8.68e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [03:22<00:10, 10.35s/it, RMSE=16.619TECU, a=0.50, rel_dP=9.20e-03]  [EKF] iterating [analytical]: 100%|##########| 20/20 [03:22<00:00, 10.17s/it, RMSE=16.619TECU, a=0.50, rel_dP=9.20e-03]                                                                                                                           [EKF] reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 9.20e-03, RMSE=16.62TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-2.24  std=16.57  max_abs=105.95 TECU
+  [EKF] Prior RMSE 49.657 TECU  →  Post RMSE 16.532 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_25/ro_igs/2025-09-22_1115_ro_igs_ekf_allfree_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=25  | ro_igs    | ekf_allfree    : DONE       (621.9s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=25  | ro_igs    | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=25  | ro_igs    | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 131 arc(s) …
+  [EKF] 131 arcs  |  4247 profile rays  |  2196 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-8.89  std=48.25  max_abs=200.95 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:10<?, ?it/s, RMSE=49.058TECU, a=0.50, rel_dP=1.50e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:10<03:15, 10.31s/it, RMSE=49.058TECU, a=0.50, rel_dP=1.50e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:20<03:15, 10.31s/it, RMSE=37.309TECU, a=0.50, rel_dP=7.72e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:20<03:03, 10.20s/it, RMSE=37.309TECU, a=0.50, rel_dP=7.72e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:30<03:03, 10.20s/it, RMSE=33.476TECU, a=0.50, rel_dP=4.74e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:30<02:52, 10.14s/it, RMSE=33.476TECU, a=0.50, rel_dP=4.74e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:40<02:52, 10.14s/it, RMSE=32.082TECU, a=0.50, rel_dP=3.20e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:40<02:40, 10.01s/it, RMSE=32.082TECU, a=0.50, rel_dP=3.20e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:50<02:40, 10.01s/it, RMSE=31.497TECU, a=0.50, rel_dP=2.38e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:50<02:30, 10.05s/it, RMSE=31.497TECU, a=0.50, rel_dP=2.38e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [01:00<02:30, 10.05s/it, RMSE=31.201TECU, a=0.50, rel_dP=1.91e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [01:00<02:20, 10.06s/it, RMSE=31.201TECU, a=0.50, rel_dP=1.91e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [01:10<02:20, 10.06s/it, RMSE=31.024TECU, a=0.50, rel_dP=1.61e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [01:10<02:10, 10.07s/it, RMSE=31.024TECU, a=0.50, rel_dP=1.61e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [01:20<02:10, 10.07s/it, RMSE=30.903TECU, a=0.50, rel_dP=1.40e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [01:20<02:00, 10.02s/it, RMSE=30.903TECU, a=0.50, rel_dP=1.40e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [01:29<02:00, 10.02s/it, RMSE=30.813TECU, a=0.50, rel_dP=1.23e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:29<01:46,  9.69s/it, RMSE=30.813TECU, a=0.50, rel_dP=1.23e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:39<01:46,  9.69s/it, RMSE=30.742TECU, a=0.50, rel_dP=1.10e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:39<01:38,  9.89s/it, RMSE=30.742TECU, a=0.50, rel_dP=1.10e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:49<01:38,  9.89s/it, RMSE=30.684TECU, a=0.50, rel_dP=9.87e-06]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:49<01:29,  9.95s/it, RMSE=30.684TECU, a=0.50, rel_dP=9.87e-06]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [02:00<01:29,  9.95s/it, RMSE=30.635TECU, a=0.50, rel_dP=8.95e-06]  [EKF] iterating [analytical]:  60%|######    | 12/20 [02:00<01:20, 10.08s/it, RMSE=30.635TECU, a=0.50, rel_dP=8.95e-06]  [EKF] iterating [analytical]:  60%|######    | 12/20 [02:10<01:20, 10.08s/it, RMSE=30.593TECU, a=0.50, rel_dP=8.18e-06]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [02:10<01:10, 10.03s/it, RMSE=30.593TECU, a=0.50, rel_dP=8.18e-06]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [02:19<01:10, 10.03s/it, RMSE=30.555TECU, a=0.50, rel_dP=7.54e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [02:19<00:59,  9.86s/it, RMSE=30.555TECU, a=0.50, rel_dP=7.54e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [02:29<00:59,  9.86s/it, RMSE=30.521TECU, a=0.50, rel_dP=6.99e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [02:29<00:49,  9.98s/it, RMSE=30.521TECU, a=0.50, rel_dP=6.99e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [02:39<00:49,  9.98s/it, RMSE=30.490TECU, a=0.50, rel_dP=6.53e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [02:39<00:39,  9.92s/it, RMSE=30.490TECU, a=0.50, rel_dP=6.53e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [02:50<00:39,  9.92s/it, RMSE=30.461TECU, a=0.50, rel_dP=6.14e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [02:50<00:30, 10.14s/it, RMSE=30.461TECU, a=0.50, rel_dP=6.14e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [03:00<00:30, 10.14s/it, RMSE=30.434TECU, a=0.50, rel_dP=5.80e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [03:00<00:20, 10.11s/it, RMSE=30.434TECU, a=0.50, rel_dP=5.80e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [03:09<00:20, 10.11s/it, RMSE=30.410TECU, a=0.50, rel_dP=5.51e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [03:09<00:09,  9.93s/it, RMSE=30.410TECU, a=0.50, rel_dP=5.51e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [03:20<00:09,  9.93s/it, RMSE=30.386TECU, a=0.50, rel_dP=5.25e-06]  [EKF] iterating [analytical]: 100%|##########| 20/20 [03:20<00:00, 10.06s/it, RMSE=30.386TECU, a=0.50, rel_dP=5.25e-06]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 5.25e-06, RMSE=30.39TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-3.69  std=30.14  max_abs=113.53 TECU
+  [EKF] Prior RMSE 49.657 TECU  →  Post RMSE 30.413 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_25/ro_igs/2025-09-22_1115_ro_igs_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=25  | ro_igs    | ekf_nmf2       : DONE       (619.5s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=25  | igs_only  | ekf_allfree   
+    [diag] 2025-09-22_1115 | bin=25  | igs_only  | ekf_allfree    : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 106 arc(s) …
+  [EKF] 106 arcs  |  106 profile rays  |  106 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=17.09  std=18.54  max_abs=73.62 TECU
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s, RMSE=25.212TECU, a=0.50, rel_dP=3.06e-02]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:08,  2.28it/s, RMSE=25.212TECU, a=0.50, rel_dP=3.06e-02]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:08,  2.28it/s, RMSE=20.924TECU, a=0.50, rel_dP=2.41e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:00<00:08,  2.02it/s, RMSE=20.924TECU, a=0.50, rel_dP=2.41e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:08,  2.02it/s, RMSE=18.920TECU, a=0.50, rel_dP=2.02e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:01<00:08,  1.98it/s, RMSE=18.920TECU, a=0.50, rel_dP=2.02e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:01<00:08,  1.98it/s, RMSE=18.137TECU, a=0.50, rel_dP=1.84e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:01<00:08,  1.98it/s, RMSE=18.137TECU, a=0.50, rel_dP=1.84e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.98it/s, RMSE=17.753TECU, a=0.50, rel_dP=2.16e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:02<00:07,  1.97it/s, RMSE=17.753TECU, a=0.50, rel_dP=2.16e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:02<00:07,  1.97it/s, RMSE=17.497TECU, a=0.50, rel_dP=2.91e-02]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:02<00:07,  1.99it/s, RMSE=17.497TECU, a=0.50, rel_dP=2.91e-02]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.99it/s, RMSE=17.359TECU, a=0.50, rel_dP=1.12e-02]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:03<00:06,  1.96it/s, RMSE=17.359TECU, a=0.50, rel_dP=1.12e-02]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:03<00:06,  1.96it/s, RMSE=17.213TECU, a=0.50, rel_dP=3.59e-02]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:03<00:05,  2.02it/s, RMSE=17.213TECU, a=0.50, rel_dP=3.59e-02]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:05,  2.02it/s, RMSE=17.069TECU, a=0.50, rel_dP=5.05e-03]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:04<00:05,  2.02it/s, RMSE=17.069TECU, a=0.50, rel_dP=5.05e-03]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:04<00:05,  2.02it/s, RMSE=16.976TECU, a=0.50, rel_dP=1.93e-02]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:04<00:04,  2.06it/s, RMSE=16.976TECU, a=0.50, rel_dP=1.93e-02]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:04,  2.06it/s, RMSE=16.873TECU, a=0.50, rel_dP=1.58e-02]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:05<00:04,  2.01it/s, RMSE=16.873TECU, a=0.50, rel_dP=1.58e-02]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:05<00:04,  2.01it/s, RMSE=16.781TECU, a=0.50, rel_dP=6.37e-02]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:05<00:03,  2.03it/s, RMSE=16.781TECU, a=0.50, rel_dP=6.37e-02]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:03,  2.03it/s, RMSE=16.663TECU, a=0.50, rel_dP=2.30e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:06<00:03,  2.01it/s, RMSE=16.663TECU, a=0.50, rel_dP=2.30e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:06<00:03,  2.01it/s, RMSE=16.592TECU, a=0.50, rel_dP=1.09e-02]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:06<00:02,  2.00it/s, RMSE=16.592TECU, a=0.50, rel_dP=1.09e-02]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:02,  2.00it/s, RMSE=16.520TECU, a=0.50, rel_dP=9.60e-03]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:07<00:02,  1.95it/s, RMSE=16.520TECU, a=0.50, rel_dP=9.60e-03]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:07<00:02,  1.95it/s, RMSE=16.462TECU, a=0.50, rel_dP=4.81e-02]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:07<00:01,  2.00it/s, RMSE=16.462TECU, a=0.50, rel_dP=4.81e-02]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:01,  2.00it/s, RMSE=16.433TECU, a=0.50, rel_dP=1.39e-02]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:08<00:01,  2.02it/s, RMSE=16.433TECU, a=0.50, rel_dP=1.39e-02]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:08<00:01,  2.02it/s, RMSE=16.364TECU, a=0.50, rel_dP=1.82e-02]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:08<00:00,  2.06it/s, RMSE=16.364TECU, a=0.50, rel_dP=1.82e-02]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:00,  2.06it/s, RMSE=16.337TECU, a=0.50, rel_dP=1.02e-02]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:09<00:00,  2.06it/s, RMSE=16.337TECU, a=0.50, rel_dP=1.02e-02]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:09<00:00,  2.06it/s, RMSE=16.253TECU, a=0.50, rel_dP=6.61e-03]  [EKF] iterating [analytical]: 100%|##########| 20/20 [00:09<00:00,  2.06it/s, RMSE=16.253TECU, a=0.50, rel_dP=6.61e-03]                                                                                                                           [EKF] reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 6.61e-03, RMSE=16.25TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=0.10  std=16.20  max_abs=56.72 TECU
+  [EKF] Prior RMSE 25.212 TECU  →  Post RMSE 16.204 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_25/igs_only/2025-09-22_1115_igs_only_ekf_allfree_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=25  | igs_only  | ekf_allfree    : DONE       (447.6s) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=25  | igs_only  | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=25  | igs_only  | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 106 arc(s) …
+  [EKF] 106 arcs  |  106 profile rays  |  106 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=17.09  std=18.54  max_abs=73.62 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.45e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:08,  2.21it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.45e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:08,  2.21it/s, RMSE=20.288TECU, a=0.50, rel_dP=9.45e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:00<00:09,  1.99it/s, RMSE=20.288TECU, a=0.50, rel_dP=9.45e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:09,  1.99it/s, RMSE=18.849TECU, a=0.50, rel_dP=4.66e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:01<00:08,  1.93it/s, RMSE=18.849TECU, a=0.50, rel_dP=4.66e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:02<00:08,  1.93it/s, RMSE=18.277TECU, a=0.50, rel_dP=2.71e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.85it/s, RMSE=18.277TECU, a=0.50, rel_dP=2.71e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.85it/s, RMSE=17.967TECU, a=0.50, rel_dP=1.87e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:02<00:08,  1.87it/s, RMSE=17.967TECU, a=0.50, rel_dP=1.87e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:03<00:08,  1.87it/s, RMSE=17.754TECU, a=0.50, rel_dP=1.50e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.91it/s, RMSE=17.754TECU, a=0.50, rel_dP=1.50e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.91it/s, RMSE=17.587TECU, a=0.50, rel_dP=1.32e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:03<00:06,  1.93it/s, RMSE=17.587TECU, a=0.50, rel_dP=1.32e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:04<00:06,  1.93it/s, RMSE=17.447TECU, a=0.50, rel_dP=1.21e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:06,  1.90it/s, RMSE=17.447TECU, a=0.50, rel_dP=1.21e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:06,  1.90it/s, RMSE=17.324TECU, a=0.50, rel_dP=1.12e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:04<00:05,  1.91it/s, RMSE=17.324TECU, a=0.50, rel_dP=1.12e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:05<00:05,  1.91it/s, RMSE=17.215TECU, a=0.50, rel_dP=1.06e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:05,  1.92it/s, RMSE=17.215TECU, a=0.50, rel_dP=1.06e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:05,  1.92it/s, RMSE=17.116TECU, a=0.50, rel_dP=1.00e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:05<00:04,  1.81it/s, RMSE=17.116TECU, a=0.50, rel_dP=1.00e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:06<00:04,  1.81it/s, RMSE=17.026TECU, a=0.50, rel_dP=9.52e-06]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.81it/s, RMSE=17.026TECU, a=0.50, rel_dP=9.52e-06]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.81it/s, RMSE=16.943TECU, a=0.50, rel_dP=9.06e-06]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:06<00:03,  1.86it/s, RMSE=16.943TECU, a=0.50, rel_dP=9.06e-06]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:07<00:03,  1.86it/s, RMSE=16.867TECU, a=0.50, rel_dP=8.63e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:03,  1.87it/s, RMSE=16.867TECU, a=0.50, rel_dP=8.63e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:08<00:03,  1.87it/s, RMSE=16.796TECU, a=0.50, rel_dP=8.22e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:08<00:02,  1.82it/s, RMSE=16.796TECU, a=0.50, rel_dP=8.22e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:08<00:02,  1.82it/s, RMSE=16.731TECU, a=0.50, rel_dP=7.83e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:02,  1.85it/s, RMSE=16.731TECU, a=0.50, rel_dP=7.83e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:09<00:02,  1.85it/s, RMSE=16.670TECU, a=0.50, rel_dP=7.46e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:09<00:01,  1.86it/s, RMSE=16.670TECU, a=0.50, rel_dP=7.46e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:09<00:01,  1.86it/s, RMSE=16.614TECU, a=0.50, rel_dP=7.10e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:01,  1.87it/s, RMSE=16.614TECU, a=0.50, rel_dP=7.10e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:10<00:01,  1.87it/s, RMSE=16.562TECU, a=0.50, rel_dP=6.76e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:10<00:00,  1.86it/s, RMSE=16.562TECU, a=0.50, rel_dP=6.76e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:10<00:00,  1.86it/s, RMSE=16.513TECU, a=0.50, rel_dP=6.43e-06]  [EKF] iterating [analytical]: 100%|##########| 20/20 [00:10<00:00,  1.88it/s, RMSE=16.513TECU, a=0.50, rel_dP=6.43e-06]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 6.43e-06, RMSE=16.51TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=1.28  std=16.42  max_abs=56.81 TECU
+  [EKF] Prior RMSE 25.212 TECU  →  Post RMSE 16.469 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_25/igs_only/2025-09-22_1115_igs_only_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=25  | igs_only  | ekf_nmf2       : DONE       (447.6s) -> status=ok (no 'status' key)
+  [diag] 2025-09-22_1115 | bin=25 : summary of 6 obs_mode/filter_type combos
+           ro_only   | ekf_allfree    -> Success
+           ro_only   | ekf_nmf2       -> Success
+           ro_igs    | ekf_allfree    -> Success
+           ro_igs    | ekf_nmf2       -> Success
+           igs_only  | ekf_allfree    -> ok (no 'status' key)
+           igs_only  | ekf_nmf2       -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-09-22_1115 bin=25
+◀◀◀ compute_isr_metrics END   | group=2025-09-22_1115 bin=25 -> 366 metric row(s)
+
+▶▶▶ _plot_group_all_modes START | group=2025-09-22_1115
+  [skip] group summary metrics plot for 2025-09-22_1115: no data in any config
+◀◀◀ _plot_group_all_modes END   | group=2025-09-22_1115
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=15  | ro_only   | gridded_kf    
+    [diag] 2025-09-22_1115 | bin=15  | ro_only   | gridded_kf     : RUNNING    (force=False, cached=False) ...
+
+────────────────────────────────────────────────────────────
+  Group : 2025-09-22_1115
+  Window: 2025-09-22_1115  |  Region: POLAR_N  |  15 occultation(s)
+────────────────────────────────────────────────────────────
+  Parsed 15/15 files successfully.
+    [podTc2] GN05 10:58 — 432 valid rays → decimated to 144 (stride 3)
+    [podTc2] GN05 10:45 — 451 valid rays → decimated to 151 (stride 3)
+    [podTc2] YM08 11:13 — 435 valid rays → decimated to 145 (stride 3)
+    [podTc2] YM08 11:01 — 352 valid rays → decimated to 176 (stride 2)
+    [podTc2] YM08 11:01 — 352 valid rays → decimated to 176 (stride 2)
+    [podTc2] YM08 11:02 — 427 valid rays → decimated to 143 (stride 3)
+    [podTc2] YM08 11:02 — 453 valid rays → decimated to 151 (stride 3)
+    [podTc2] YM08 11:03 — 899 valid rays → decimated to 180 (stride 5)
+    [podTc2] GN04 11:48 — 460 valid rays → decimated to 154 (stride 3)
+    [podTc2] GN04 11:43 — 685 valid rays → decimated to 172 (stride 4)
+    [podTc2] GN04 11:51 — 370 valid rays → decimated to 185 (stride 2)
+    [podTc2] GN04 11:31 — 378 valid rays → decimated to 189 (stride 2)
+    [podTc2] GN04 11:31 — 378 valid rays → decimated to 189 (stride 2)
+    [podTc2] GN04 11:31 — 433 valid rays → decimated to 145 (stride 3)
+    [podTc2] GN04 11:39 — 456 valid rays → decimated to 152 (stride 3)
+  Bbox lat [32.9, 87.2]  lon [-36.7, 36.9]  |  union vertices: 38
+  Final group: 15 occultation(s), 38 union-mesh vertices
+  Saved trim diagnostic → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_15/ro_only/group_2025-09-22_1115_trim.png
+  -> Building H matrices (2452 rays across 15 arc(s), single parallel sweep) …
+  -> Building H matrices:    245/2452 rays ( 10.0%)
+  -> Building H matrices:    490/2452 rays ( 20.0%)
+  -> Building H matrices:    735/2452 rays ( 30.0%)
+  -> Building H matrices:    980/2452 rays ( 40.0%)
+  -> Building H matrices:   1225/2452 rays ( 50.0%)
+  -> Building H matrices:   1470/2452 rays ( 60.0%)
+  -> Building H matrices:   1715/2452 rays ( 69.9%)
+  -> Building H matrices:   1960/2452 rays ( 79.9%)
+  -> Building H matrices:   2205/2452 rays ( 89.9%)
+  -> Building H matrices:   2450/2452 rays ( 99.9%)
+  -> Building H matrices:   2452/2452 rays (100.0%)
+  Combined H shape : (2452, 2128)  (total rays = 2452)
+  Skipping sequential KF assimilation (run_sequential=False).
+  Running joint (batch) KF assimilation …
+  Skipping joint (batch) KF assimilation (skip_joint=True) — gridded KF not run; posterior aliased to prior.
+  Prior RMSE  : 46.632 TECU
+  Post  RMSE  : 46.632 TECU
+    [Abel] GN05 10:58: NmF2=7.90e+11 m⁻³  hmF2=296.4 km
+    [Abel] GN05 10:45: NmF2=3.46e+11 m⁻³  hmF2=321.9 km
+    [Abel] YM08 11:13: NmF2=4.07e+11 m⁻³  hmF2=313.4 km
+    [Abel] YM08 11:01: NmF2=6.02e+11 m⁻³  hmF2=288.8 km
+    [Abel] YM08 11:01: NmF2=6.02e+11 m⁻³  hmF2=288.8 km
+    [Abel] YM08 11:02: NmF2=5.26e+11 m⁻³  hmF2=278.0 km
+    [Abel] YM08 11:02: NmF2=6.01e+11 m⁻³  hmF2=281.8 km
+    [Abel] YM08 11:03: NmF2=1.37e+12 m⁻³  hmF2=257.4 km
+    [Abel] GN04 11:48: NmF2=1.11e+12 m⁻³  hmF2=302.0 km
+    [Abel] GN04 11:43: NmF2=1.08e+12 m⁻³  hmF2=294.2 km
+    [Abel] GN04 11:51: NmF2=1.34e+12 m⁻³  hmF2=297.0 km
+    [Abel] GN04 11:31: NmF2=9.39e+11 m⁻³  hmF2=317.1 km
+    [Abel] GN04 11:31: NmF2=9.39e+11 m⁻³  hmF2=317.1 km
+    [Abel] GN04 11:31: NmF2=4.20e+11 m⁻³  hmF2=309.4 km
+    [Abel] GN04 11:39: NmF2=1.01e+12 m⁻³  hmF2=304.3 km
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=15  | ro_only   | gridded_kf     : DONE       (50.5s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=15  | ro_igs    | gridded_kf    
+    [diag] 2025-09-22_1115 | bin=15  | ro_igs    | gridded_kf     : RUNNING    (force=False, cached=False) ...
+
+────────────────────────────────────────────────────────────
+  Group : 2025-09-22_1115
+  Window: 2025-09-22_1115  |  Region: POLAR_N  |  15 occultation(s)
+────────────────────────────────────────────────────────────
+  Parsed 15/15 files successfully.
+    [podTc2] GN05 10:58 — 432 valid rays → decimated to 144 (stride 3)
+    [podTc2] GN05 10:45 — 451 valid rays → decimated to 151 (stride 3)
+    [podTc2] YM08 11:13 — 435 valid rays → decimated to 145 (stride 3)
+    [podTc2] YM08 11:01 — 352 valid rays → decimated to 176 (stride 2)
+    [podTc2] YM08 11:01 — 352 valid rays → decimated to 176 (stride 2)
+    [podTc2] YM08 11:02 — 427 valid rays → decimated to 143 (stride 3)
+    [podTc2] YM08 11:02 — 453 valid rays → decimated to 151 (stride 3)
+    [podTc2] YM08 11:03 — 899 valid rays → decimated to 180 (stride 5)
+    [podTc2] GN04 11:48 — 460 valid rays → decimated to 154 (stride 3)
+    [podTc2] GN04 11:43 — 685 valid rays → decimated to 172 (stride 4)
+    [podTc2] GN04 11:51 — 370 valid rays → decimated to 185 (stride 2)
+    [podTc2] GN04 11:31 — 378 valid rays → decimated to 189 (stride 2)
+    [podTc2] GN04 11:31 — 378 valid rays → decimated to 189 (stride 2)
+    [podTc2] GN04 11:31 — 433 valid rays → decimated to 145 (stride 3)
+    [podTc2] GN04 11:39 — 456 valid rays → decimated to 152 (stride 3)
+  Bbox lat [32.9, 87.2]  lon [-36.7, 36.9]  |  union vertices: 38
+  Final group: 15 occultation(s), 38 union-mesh vertices
+  Saved trim diagnostic → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_15/ro_igs/group_2025-09-22_1115_trim.png
+  [extra] Injected 106 ground-station arc(s) → total 121 arc(s) in assimilation pool
+  -> Building H matrices (2558 rays across 121 arc(s), single parallel sweep) …
+  -> Building H matrices:    255/2558 rays ( 10.0%)
+  -> Building H matrices:    510/2558 rays ( 19.9%)
+  -> Building H matrices:    765/2558 rays ( 29.9%)
+  -> Building H matrices:   1020/2558 rays ( 39.9%)
+  -> Building H matrices:   1275/2558 rays ( 49.8%)
+  -> Building H matrices:   1530/2558 rays ( 59.8%)
+  -> Building H matrices:   1785/2558 rays ( 69.8%)
+  -> Building H matrices:   2040/2558 rays ( 79.7%)
+  -> Building H matrices:   2295/2558 rays ( 89.7%)
+  -> Building H matrices:   2550/2558 rays ( 99.7%)
+  -> Building H matrices:   2558/2558 rays (100.0%)
+  Combined H shape : (2558, 2128)  (total rays = 2558)
+  Skipping sequential KF assimilation (run_sequential=False).
+  Running joint (batch) KF assimilation …
+  Skipping joint (batch) KF assimilation (skip_joint=True) — gridded KF not run; posterior aliased to prior.
+  Prior RMSE  : 46.023 TECU
+  Post  RMSE  : 46.023 TECU
+    [Abel] GN05 10:58: NmF2=7.90e+11 m⁻³  hmF2=296.4 km
+    [Abel] GN05 10:45: NmF2=3.46e+11 m⁻³  hmF2=321.9 km
+    [Abel] YM08 11:13: NmF2=4.07e+11 m⁻³  hmF2=313.4 km
+    [Abel] YM08 11:01: NmF2=6.02e+11 m⁻³  hmF2=288.8 km
+    [Abel] YM08 11:01: NmF2=6.02e+11 m⁻³  hmF2=288.8 km
+    [Abel] YM08 11:02: NmF2=5.26e+11 m⁻³  hmF2=278.0 km
+    [Abel] YM08 11:02: NmF2=6.01e+11 m⁻³  hmF2=281.8 km
+    [Abel] YM08 11:03: NmF2=1.37e+12 m⁻³  hmF2=257.4 km
+    [Abel] GN04 11:48: NmF2=1.11e+12 m⁻³  hmF2=302.0 km
+    [Abel] GN04 11:43: NmF2=1.08e+12 m⁻³  hmF2=294.2 km
+    [Abel] GN04 11:51: NmF2=1.34e+12 m⁻³  hmF2=297.0 km
+    [Abel] GN04 11:31: NmF2=9.39e+11 m⁻³  hmF2=317.1 km
+    [Abel] GN04 11:31: NmF2=9.39e+11 m⁻³  hmF2=317.1 km
+    [Abel] GN04 11:31: NmF2=4.20e+11 m⁻³  hmF2=309.4 km
+    [Abel] GN04 11:39: NmF2=1.01e+12 m⁻³  hmF2=304.3 km
+    [Abel] Skipped 106 ground-station arc(s) (RO-only technique)
+/home/austinhunter/Downloads/PlanetiQ_Code/venv311/lib/python3.11/site-packages/shapely/creation.py:218: RuntimeWarning: invalid value encountered in linestrings
+  return lib.linestrings(coords, np.intc(handle_nan), out=out, **kwargs)
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=15  | ro_igs    | gridded_kf     : DONE       (51.2s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=15  | igs_only  | gridded_kf    
+    [diag] 2025-09-22_1115 | bin=15  | igs_only  | gridded_kf     : RUNNING    (force=False, cached=False) ...
+    [Info] Initialising information matrix (n_state=12155) …
+    [Info] arcs ingested = 106/106  |  obs rows = 106  |  Λ cond ≈ 3.67e+23
+    [Info] Solving …
+    [Prior] innovation  mean=24.44  std=18.32  n_obs=106
+    [Post ] innovation  mean=16.48  std=14.57
+    RMSE:  prior=30.542 TECU  →  post=21.998 TECU
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=15  | igs_only  | gridded_kf     : DONE       (120.6s) -> status=ok (no 'status' key)
+  [EKF] Fibonacci ROI grid @ 100 km: 600 points (memoized for window 2025-09-22_1115; reused across occultation-count bins)
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=15  | ro_only   | ekf_allfree   
+    [diag] 2025-09-22_1115 | bin=15  | ro_only   | ekf_allfree    : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 15 arc(s) …
+  [EKF] 15 arcs  |  2452 profile rays  |  1237 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-9.75  std=46.90  max_abs=199.48 TECU
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:05<?, ?it/s, RMSE=47.903TECU, a=0.50, rel_dP=1.50e-01]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:05<01:46,  5.58s/it, RMSE=47.903TECU, a=0.50, rel_dP=1.50e-01]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:11<01:46,  5.58s/it, RMSE=32.848TECU, a=0.50, rel_dP=6.69e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:11<01:43,  5.73s/it, RMSE=32.848TECU, a=0.50, rel_dP=6.69e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:17<01:43,  5.73s/it, RMSE=21.471TECU, a=0.50, rel_dP=3.68e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:17<01:38,  5.77s/it, RMSE=21.471TECU, a=0.50, rel_dP=3.68e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:23<01:38,  5.77s/it, RMSE=17.488TECU, a=0.50, rel_dP=1.95e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:23<01:32,  5.81s/it, RMSE=17.488TECU, a=0.50, rel_dP=1.95e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:28<01:32,  5.81s/it, RMSE=16.019TECU, a=0.50, rel_dP=1.22e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:28<01:26,  5.75s/it, RMSE=16.019TECU, a=0.50, rel_dP=1.22e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:34<01:26,  5.75s/it, RMSE=15.385TECU, a=0.50, rel_dP=8.62e-03]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:34<01:21,  5.81s/it, RMSE=15.385TECU, a=0.50, rel_dP=8.62e-03]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:40<01:21,  5.81s/it, RMSE=15.027TECU, a=0.50, rel_dP=6.84e-03]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:40<01:15,  5.79s/it, RMSE=15.027TECU, a=0.50, rel_dP=6.84e-03]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:46<01:15,  5.79s/it, RMSE=14.778TECU, a=0.50, rel_dP=5.95e-03]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:46<01:08,  5.74s/it, RMSE=14.778TECU, a=0.50, rel_dP=5.95e-03]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:51<01:08,  5.74s/it, RMSE=14.585TECU, a=0.50, rel_dP=5.41e-03]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:51<01:03,  5.74s/it, RMSE=14.585TECU, a=0.50, rel_dP=5.41e-03]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:57<01:03,  5.74s/it, RMSE=14.428TECU, a=0.50, rel_dP=4.95e-03]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:57<00:56,  5.70s/it, RMSE=14.428TECU, a=0.50, rel_dP=4.95e-03]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:02<00:56,  5.70s/it, RMSE=14.295TECU, a=0.50, rel_dP=4.58e-03]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:02<00:50,  5.66s/it, RMSE=14.295TECU, a=0.50, rel_dP=4.58e-03]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:08<00:50,  5.66s/it, RMSE=14.181TECU, a=0.50, rel_dP=4.30e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:08<00:45,  5.70s/it, RMSE=14.181TECU, a=0.50, rel_dP=4.30e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:14<00:45,  5.70s/it, RMSE=14.082TECU, a=0.50, rel_dP=4.06e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:14<00:39,  5.63s/it, RMSE=14.082TECU, a=0.50, rel_dP=4.06e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:19<00:39,  5.63s/it, RMSE=13.994TECU, a=0.50, rel_dP=3.86e-03]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:19<00:33,  5.56s/it, RMSE=13.994TECU, a=0.50, rel_dP=3.86e-03]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:25<00:33,  5.56s/it, RMSE=13.916TECU, a=0.50, rel_dP=3.67e-03]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:25<00:28,  5.61s/it, RMSE=13.916TECU, a=0.50, rel_dP=3.67e-03]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:30<00:28,  5.61s/it, RMSE=13.847TECU, a=0.50, rel_dP=3.50e-03]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:30<00:22,  5.56s/it, RMSE=13.847TECU, a=0.50, rel_dP=3.50e-03]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:36<00:22,  5.56s/it, RMSE=13.784TECU, a=0.50, rel_dP=3.33e-03]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:36<00:16,  5.55s/it, RMSE=13.784TECU, a=0.50, rel_dP=3.33e-03]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:41<00:16,  5.55s/it, RMSE=13.727TECU, a=0.50, rel_dP=3.19e-03]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:41<00:10,  5.47s/it, RMSE=13.727TECU, a=0.50, rel_dP=3.19e-03]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:47<00:10,  5.47s/it, RMSE=13.676TECU, a=0.50, rel_dP=3.10e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [01:47<00:05,  5.58s/it, RMSE=13.676TECU, a=0.50, rel_dP=3.10e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [01:53<00:05,  5.58s/it, RMSE=13.629TECU, a=0.50, rel_dP=2.99e-03]  [EKF] iterating [analytical]: 100%|##########| 20/20 [01:53<00:00,  5.68s/it, RMSE=13.629TECU, a=0.50, rel_dP=2.99e-03]                                                                                                                           [EKF] reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 2.99e-03, RMSE=13.63TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=0.02  std=13.59  max_abs=66.55 TECU
+  [EKF] Prior RMSE 48.052 TECU  →  Post RMSE 13.620 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_15/ro_only/2025-09-22_1115_ro_only_ekf_allfree_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=15  | ro_only   | ekf_allfree    : DONE       (520.6s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=15  | ro_only   | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=15  | ro_only   | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 15 arc(s) …
+  [EKF] 15 arcs  |  2452 profile rays  |  1237 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-9.75  std=46.90  max_abs=199.48 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:05<?, ?it/s, RMSE=47.903TECU, a=0.50, rel_dP=1.51e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:05<01:44,  5.52s/it, RMSE=47.903TECU, a=0.50, rel_dP=1.51e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:10<01:44,  5.52s/it, RMSE=37.772TECU, a=0.50, rel_dP=8.45e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:10<01:38,  5.48s/it, RMSE=37.772TECU, a=0.50, rel_dP=8.45e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:16<01:38,  5.48s/it, RMSE=34.341TECU, a=0.50, rel_dP=5.76e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:16<01:36,  5.69s/it, RMSE=34.341TECU, a=0.50, rel_dP=5.76e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:21<01:36,  5.69s/it, RMSE=32.984TECU, a=0.50, rel_dP=4.30e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:21<01:26,  5.39s/it, RMSE=32.984TECU, a=0.50, rel_dP=4.30e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:27<01:26,  5.39s/it, RMSE=32.341TECU, a=0.50, rel_dP=3.40e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:27<01:24,  5.62s/it, RMSE=32.341TECU, a=0.50, rel_dP=3.40e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:33<01:24,  5.62s/it, RMSE=31.970TECU, a=0.50, rel_dP=2.79e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:33<01:17,  5.53s/it, RMSE=31.970TECU, a=0.50, rel_dP=2.79e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:38<01:17,  5.53s/it, RMSE=31.719TECU, a=0.50, rel_dP=2.36e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:38<01:11,  5.52s/it, RMSE=31.719TECU, a=0.50, rel_dP=2.36e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:44<01:11,  5.52s/it, RMSE=31.530TECU, a=0.50, rel_dP=2.03e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:44<01:06,  5.52s/it, RMSE=31.530TECU, a=0.50, rel_dP=2.03e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:50<01:06,  5.52s/it, RMSE=31.379TECU, a=0.50, rel_dP=1.77e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:50<01:02,  5.67s/it, RMSE=31.379TECU, a=0.50, rel_dP=1.77e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:56<01:02,  5.67s/it, RMSE=31.254TECU, a=0.50, rel_dP=1.57e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:56<00:58,  5.81s/it, RMSE=31.254TECU, a=0.50, rel_dP=1.57e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:01<00:58,  5.81s/it, RMSE=31.148TECU, a=0.50, rel_dP=1.41e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:01<00:51,  5.71s/it, RMSE=31.148TECU, a=0.50, rel_dP=1.41e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:07<00:51,  5.71s/it, RMSE=31.056TECU, a=0.50, rel_dP=1.28e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:07<00:45,  5.71s/it, RMSE=31.056TECU, a=0.50, rel_dP=1.28e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:12<00:45,  5.71s/it, RMSE=30.976TECU, a=0.50, rel_dP=1.16e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:12<00:39,  5.60s/it, RMSE=30.976TECU, a=0.50, rel_dP=1.16e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:18<00:39,  5.60s/it, RMSE=30.905TECU, a=0.50, rel_dP=1.07e-05]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:18<00:33,  5.55s/it, RMSE=30.905TECU, a=0.50, rel_dP=1.07e-05]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:24<00:33,  5.55s/it, RMSE=30.842TECU, a=0.50, rel_dP=9.82e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:24<00:28,  5.61s/it, RMSE=30.842TECU, a=0.50, rel_dP=9.82e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:29<00:28,  5.61s/it, RMSE=30.786TECU, a=0.50, rel_dP=9.07e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:29<00:22,  5.58s/it, RMSE=30.786TECU, a=0.50, rel_dP=9.07e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:35<00:22,  5.58s/it, RMSE=30.735TECU, a=0.50, rel_dP=8.41e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:35<00:16,  5.61s/it, RMSE=30.735TECU, a=0.50, rel_dP=8.41e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:40<00:16,  5.61s/it, RMSE=30.689TECU, a=0.50, rel_dP=7.82e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:40<00:11,  5.58s/it, RMSE=30.689TECU, a=0.50, rel_dP=7.82e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:46<00:11,  5.58s/it, RMSE=30.648TECU, a=0.50, rel_dP=7.28e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [01:46<00:05,  5.56s/it, RMSE=30.648TECU, a=0.50, rel_dP=7.28e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [01:52<00:05,  5.56s/it, RMSE=30.610TECU, a=0.50, rel_dP=6.80e-06]  [EKF] iterating [analytical]: 100%|##########| 20/20 [01:52<00:00,  5.63s/it, RMSE=30.610TECU, a=0.50, rel_dP=6.80e-06]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 6.80e-06, RMSE=30.61TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-5.21  std=30.13  max_abs=102.88 TECU
+  [EKF] Prior RMSE 48.052 TECU  →  Post RMSE 30.628 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_15/ro_only/2025-09-22_1115_ro_only_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=15  | ro_only   | ekf_nmf2       : DONE       (510.9s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=15  | ro_igs    | ekf_allfree   
+    [diag] 2025-09-22_1115 | bin=15  | ro_igs    | ekf_allfree    : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 121 arc(s) …
+  [EKF] 121 arcs  |  2558 profile rays  |  1343 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-7.63  std=45.89  max_abs=199.48 TECU
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:06<?, ?it/s, RMSE=46.516TECU, a=0.50, rel_dP=2.74e-01]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:06<01:54,  6.03s/it, RMSE=46.516TECU, a=0.50, rel_dP=2.74e-01]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:12<01:54,  6.03s/it, RMSE=45.245TECU, a=0.50, rel_dP=6.95e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:12<01:47,  5.99s/it, RMSE=45.245TECU, a=0.50, rel_dP=6.95e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:17<01:47,  5.99s/it, RMSE=27.661TECU, a=0.50, rel_dP=1.89e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:17<01:41,  5.97s/it, RMSE=27.661TECU, a=0.50, rel_dP=1.89e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:23<01:41,  5.97s/it, RMSE=19.508TECU, a=0.50, rel_dP=1.39e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:23<01:33,  5.87s/it, RMSE=19.508TECU, a=0.50, rel_dP=1.39e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:29<01:33,  5.87s/it, RMSE=16.910TECU, a=0.50, rel_dP=1.09e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:29<01:29,  5.97s/it, RMSE=16.910TECU, a=0.50, rel_dP=1.09e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:35<01:29,  5.97s/it, RMSE=16.026TECU, a=0.50, rel_dP=8.10e-03]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:35<01:24,  6.04s/it, RMSE=16.026TECU, a=0.50, rel_dP=8.10e-03]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:41<01:24,  6.04s/it, RMSE=15.652TECU, a=0.50, rel_dP=6.07e-03]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:41<01:17,  6.00s/it, RMSE=15.652TECU, a=0.50, rel_dP=6.07e-03]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:48<01:17,  6.00s/it, RMSE=15.442TECU, a=0.50, rel_dP=4.70e-03]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:48<01:13,  6.11s/it, RMSE=15.442TECU, a=0.50, rel_dP=4.70e-03]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:54<01:13,  6.11s/it, RMSE=15.293TECU, a=0.50, rel_dP=3.79e-03]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:54<01:07,  6.12s/it, RMSE=15.293TECU, a=0.50, rel_dP=3.79e-03]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:00<01:07,  6.12s/it, RMSE=15.175TECU, a=0.50, rel_dP=3.21e-03]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:00<01:00,  6.00s/it, RMSE=15.175TECU, a=0.50, rel_dP=3.21e-03]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:05<01:00,  6.00s/it, RMSE=15.074TECU, a=0.50, rel_dP=2.89e-03]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:05<00:53,  5.95s/it, RMSE=15.074TECU, a=0.50, rel_dP=2.89e-03]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:12<00:53,  5.95s/it, RMSE=14.987TECU, a=0.50, rel_dP=2.74e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:12<00:48,  6.05s/it, RMSE=14.987TECU, a=0.50, rel_dP=2.74e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:18<00:48,  6.05s/it, RMSE=14.909TECU, a=0.50, rel_dP=2.76e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:18<00:41,  5.98s/it, RMSE=14.909TECU, a=0.50, rel_dP=2.76e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:23<00:41,  5.98s/it, RMSE=14.839TECU, a=0.50, rel_dP=2.71e-03]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:23<00:35,  5.87s/it, RMSE=14.839TECU, a=0.50, rel_dP=2.71e-03]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:29<00:35,  5.87s/it, RMSE=14.776TECU, a=0.50, rel_dP=2.47e-03]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:29<00:29,  6.00s/it, RMSE=14.776TECU, a=0.50, rel_dP=2.47e-03]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:36<00:29,  6.00s/it, RMSE=14.718TECU, a=0.50, rel_dP=2.29e-03]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:36<00:24,  6.07s/it, RMSE=14.718TECU, a=0.50, rel_dP=2.29e-03]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:42<00:24,  6.07s/it, RMSE=14.665TECU, a=0.50, rel_dP=2.22e-03]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:42<00:18,  6.07s/it, RMSE=14.665TECU, a=0.50, rel_dP=2.22e-03]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:48<00:18,  6.07s/it, RMSE=14.617TECU, a=0.50, rel_dP=2.13e-03]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:48<00:12,  6.06s/it, RMSE=14.617TECU, a=0.50, rel_dP=2.13e-03]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:54<00:12,  6.06s/it, RMSE=14.572TECU, a=0.50, rel_dP=1.93e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [01:54<00:06,  6.07s/it, RMSE=14.572TECU, a=0.50, rel_dP=1.93e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [02:00<00:06,  6.07s/it, RMSE=14.530TECU, a=0.50, rel_dP=1.87e-03]  [EKF] iterating [analytical]: 100%|##########| 20/20 [02:00<00:00,  6.05s/it, RMSE=14.530TECU, a=0.50, rel_dP=1.87e-03]                                                                                                                           [EKF] reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 1.87e-03, RMSE=14.53TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=0.53  std=14.48  max_abs=71.31 TECU
+  [EKF] Prior RMSE 47.325 TECU  →  Post RMSE 14.199 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_15/ro_igs/2025-09-22_1115_ro_igs_ekf_allfree_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=15  | ro_igs    | ekf_allfree    : DONE       (521.1s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=15  | ro_igs    | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=15  | ro_igs    | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 121 arc(s) …
+  [EKF] 121 arcs  |  2558 profile rays  |  1343 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-7.63  std=45.89  max_abs=199.48 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:05<?, ?it/s, RMSE=46.516TECU, a=0.50, rel_dP=1.47e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:05<01:52,  5.94s/it, RMSE=46.516TECU, a=0.50, rel_dP=1.47e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:11<01:52,  5.94s/it, RMSE=37.048TECU, a=0.50, rel_dP=7.92e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:11<01:47,  5.96s/it, RMSE=37.048TECU, a=0.50, rel_dP=7.92e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:17<01:47,  5.96s/it, RMSE=33.886TECU, a=0.50, rel_dP=5.18e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:17<01:41,  5.98s/it, RMSE=33.886TECU, a=0.50, rel_dP=5.18e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:23<01:41,  5.98s/it, RMSE=32.664TECU, a=0.50, rel_dP=3.71e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:23<01:35,  5.98s/it, RMSE=32.664TECU, a=0.50, rel_dP=3.71e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:30<01:35,  5.98s/it, RMSE=32.108TECU, a=0.50, rel_dP=2.83e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:30<01:32,  6.17s/it, RMSE=32.108TECU, a=0.50, rel_dP=2.83e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:36<01:32,  6.17s/it, RMSE=31.801TECU, a=0.50, rel_dP=2.24e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:36<01:27,  6.22s/it, RMSE=31.801TECU, a=0.50, rel_dP=2.24e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:43<01:27,  6.22s/it, RMSE=31.601TECU, a=0.50, rel_dP=1.83e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:43<01:21,  6.30s/it, RMSE=31.601TECU, a=0.50, rel_dP=1.83e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:49<01:21,  6.30s/it, RMSE=31.452TECU, a=0.50, rel_dP=1.54e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:49<01:14,  6.20s/it, RMSE=31.452TECU, a=0.50, rel_dP=1.54e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:55<01:14,  6.20s/it, RMSE=31.333TECU, a=0.50, rel_dP=1.32e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:55<01:07,  6.17s/it, RMSE=31.333TECU, a=0.50, rel_dP=1.32e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [01:01<01:07,  6.17s/it, RMSE=31.231TECU, a=0.50, rel_dP=1.17e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:01<01:01,  6.13s/it, RMSE=31.231TECU, a=0.50, rel_dP=1.17e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:07<01:01,  6.13s/it, RMSE=31.142TECU, a=0.50, rel_dP=1.06e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:07<00:54,  6.08s/it, RMSE=31.142TECU, a=0.50, rel_dP=1.06e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:13<00:54,  6.08s/it, RMSE=31.062TECU, a=0.50, rel_dP=9.68e-06]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:13<00:48,  6.07s/it, RMSE=31.062TECU, a=0.50, rel_dP=9.68e-06]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:19<00:48,  6.07s/it, RMSE=30.988TECU, a=0.50, rel_dP=8.99e-06]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:19<00:42,  6.14s/it, RMSE=30.988TECU, a=0.50, rel_dP=8.99e-06]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:25<00:42,  6.14s/it, RMSE=30.920TECU, a=0.50, rel_dP=8.41e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:25<00:36,  6.06s/it, RMSE=30.920TECU, a=0.50, rel_dP=8.41e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:31<00:36,  6.06s/it, RMSE=30.857TECU, a=0.50, rel_dP=7.92e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:31<00:29,  5.98s/it, RMSE=30.857TECU, a=0.50, rel_dP=7.92e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:37<00:29,  5.98s/it, RMSE=30.799TECU, a=0.50, rel_dP=7.49e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:37<00:24,  6.05s/it, RMSE=30.799TECU, a=0.50, rel_dP=7.49e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:43<00:24,  6.05s/it, RMSE=30.744TECU, a=0.50, rel_dP=7.09e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:43<00:18,  6.13s/it, RMSE=30.744TECU, a=0.50, rel_dP=7.09e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:49<00:18,  6.13s/it, RMSE=30.692TECU, a=0.50, rel_dP=6.72e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:49<00:12,  6.09s/it, RMSE=30.692TECU, a=0.50, rel_dP=6.72e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:55<00:12,  6.09s/it, RMSE=30.644TECU, a=0.50, rel_dP=6.38e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [01:55<00:06,  6.09s/it, RMSE=30.644TECU, a=0.50, rel_dP=6.38e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [02:01<00:06,  6.09s/it, RMSE=30.599TECU, a=0.50, rel_dP=6.06e-06]  [EKF] iterating [analytical]: 100%|##########| 20/20 [02:01<00:00,  5.98s/it, RMSE=30.599TECU, a=0.50, rel_dP=6.06e-06]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 6.06e-06, RMSE=30.60TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-4.25  std=30.26  max_abs=99.27 TECU
+  [EKF] Prior RMSE 47.325 TECU  →  Post RMSE 30.828 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_15/ro_igs/2025-09-22_1115_ro_igs_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=15  | ro_igs    | ekf_nmf2       : DONE       (521.6s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=15  | igs_only  | ekf_allfree   
+    [diag] 2025-09-22_1115 | bin=15  | igs_only  | ekf_allfree    : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 106 arc(s) …
+  [EKF] 106 arcs  |  106 profile rays  |  106 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=17.09  std=18.54  max_abs=73.62 TECU
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.08e-02]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:09,  1.91it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.08e-02]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:01<00:09,  1.91it/s, RMSE=20.750TECU, a=0.50, rel_dP=1.57e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:09,  1.83it/s, RMSE=20.750TECU, a=0.50, rel_dP=1.57e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:09,  1.83it/s, RMSE=18.698TECU, a=0.50, rel_dP=1.62e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:01<00:09,  1.74it/s, RMSE=18.698TECU, a=0.50, rel_dP=1.62e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:02<00:09,  1.74it/s, RMSE=17.908TECU, a=0.50, rel_dP=1.36e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.84it/s, RMSE=17.908TECU, a=0.50, rel_dP=1.36e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.84it/s, RMSE=17.520TECU, a=0.50, rel_dP=1.06e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:02<00:07,  1.88it/s, RMSE=17.520TECU, a=0.50, rel_dP=1.06e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:03<00:07,  1.88it/s, RMSE=17.271TECU, a=0.50, rel_dP=1.45e-02]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.85it/s, RMSE=17.271TECU, a=0.50, rel_dP=1.45e-02]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.85it/s, RMSE=17.071TECU, a=0.50, rel_dP=1.48e-02]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:03<00:06,  1.89it/s, RMSE=17.071TECU, a=0.50, rel_dP=1.48e-02]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:04<00:06,  1.89it/s, RMSE=16.899TECU, a=0.50, rel_dP=1.09e-02]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:06,  1.91it/s, RMSE=16.899TECU, a=0.50, rel_dP=1.09e-02]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:06,  1.91it/s, RMSE=16.747TECU, a=0.50, rel_dP=2.66e-02]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:04<00:05,  1.94it/s, RMSE=16.747TECU, a=0.50, rel_dP=2.66e-02]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:05<00:05,  1.94it/s, RMSE=16.588TECU, a=0.50, rel_dP=6.88e-03]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:05,  1.94it/s, RMSE=16.588TECU, a=0.50, rel_dP=6.88e-03]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:05,  1.94it/s, RMSE=16.455TECU, a=0.50, rel_dP=1.14e-02]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:05<00:04,  1.87it/s, RMSE=16.455TECU, a=0.50, rel_dP=1.14e-02]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:06<00:04,  1.87it/s, RMSE=16.327TECU, a=0.50, rel_dP=7.95e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.90it/s, RMSE=16.327TECU, a=0.50, rel_dP=7.95e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.90it/s, RMSE=16.236TECU, a=0.50, rel_dP=1.17e-02]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:06<00:03,  1.84it/s, RMSE=16.236TECU, a=0.50, rel_dP=1.17e-02]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:07<00:03,  1.84it/s, RMSE=16.165TECU, a=0.50, rel_dP=1.48e-02]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:03,  1.90it/s, RMSE=16.165TECU, a=0.50, rel_dP=1.48e-02]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:03,  1.90it/s, RMSE=16.089TECU, a=0.50, rel_dP=9.35e-03]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:07<00:02,  1.95it/s, RMSE=16.089TECU, a=0.50, rel_dP=9.35e-03]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:08<00:02,  1.95it/s, RMSE=16.039TECU, a=0.50, rel_dP=3.50e-02]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:01,  2.00it/s, RMSE=16.039TECU, a=0.50, rel_dP=3.50e-02]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:01,  2.00it/s, RMSE=16.029TECU, a=0.50, rel_dP=3.22e-02]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:08<00:01,  1.90it/s, RMSE=16.029TECU, a=0.50, rel_dP=3.22e-02]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:09<00:01,  1.90it/s, RMSE=15.950TECU, a=0.50, rel_dP=3.16e-02]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:01,  1.90it/s, RMSE=15.950TECU, a=0.50, rel_dP=3.16e-02]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:01,  1.90it/s, RMSE=15.957TECU, a=0.50, rel_dP=8.11e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:09<00:00,  1.94it/s, RMSE=15.957TECU, a=0.50, rel_dP=8.11e-03]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:10<00:00,  1.94it/s, RMSE=15.925TECU, a=0.50, rel_dP=1.01e-02]  [EKF] iterating [analytical]: 100%|##########| 20/20 [00:10<00:00,  1.84it/s, RMSE=15.925TECU, a=0.50, rel_dP=1.01e-02]                                                                                                                           [EKF] reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 1.01e-02, RMSE=15.92TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=0.75  std=15.87  max_abs=62.19 TECU
+  [EKF] Prior RMSE 25.212 TECU  →  Post RMSE 15.888 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_15/igs_only/2025-09-22_1115_igs_only_ekf_allfree_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=15  | igs_only  | ekf_allfree    : DONE       (492.0s) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=15  | igs_only  | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=15  | igs_only  | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 106 arc(s) …
+  [EKF] 106 arcs  |  106 profile rays  |  106 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=17.09  std=18.54  max_abs=73.62 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.46e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:10,  1.83it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.46e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:01<00:10,  1.83it/s, RMSE=20.329TECU, a=0.50, rel_dP=9.58e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:10,  1.68it/s, RMSE=20.329TECU, a=0.50, rel_dP=9.58e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:10,  1.68it/s, RMSE=18.896TECU, a=0.50, rel_dP=4.78e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:01<00:11,  1.52it/s, RMSE=18.896TECU, a=0.50, rel_dP=4.78e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:02<00:11,  1.52it/s, RMSE=18.314TECU, a=0.50, rel_dP=2.85e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:10,  1.54it/s, RMSE=18.314TECU, a=0.50, rel_dP=2.85e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:03<00:10,  1.54it/s, RMSE=17.989TECU, a=0.50, rel_dP=2.04e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:03<00:09,  1.57it/s, RMSE=17.989TECU, a=0.50, rel_dP=2.04e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:03<00:09,  1.57it/s, RMSE=17.759TECU, a=0.50, rel_dP=1.68e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:08,  1.58it/s, RMSE=17.759TECU, a=0.50, rel_dP=1.68e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:04<00:08,  1.58it/s, RMSE=17.576TECU, a=0.50, rel_dP=1.50e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:04<00:08,  1.56it/s, RMSE=17.576TECU, a=0.50, rel_dP=1.50e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:05<00:08,  1.56it/s, RMSE=17.421TECU, a=0.50, rel_dP=1.38e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:05<00:07,  1.55it/s, RMSE=17.421TECU, a=0.50, rel_dP=1.38e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:05<00:07,  1.55it/s, RMSE=17.286TECU, a=0.50, rel_dP=1.29e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:05<00:07,  1.53it/s, RMSE=17.286TECU, a=0.50, rel_dP=1.29e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:06<00:07,  1.53it/s, RMSE=17.167TECU, a=0.50, rel_dP=1.22e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:06<00:06,  1.53it/s, RMSE=17.167TECU, a=0.50, rel_dP=1.22e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:07<00:06,  1.53it/s, RMSE=17.059TECU, a=0.50, rel_dP=1.15e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:07<00:05,  1.53it/s, RMSE=17.059TECU, a=0.50, rel_dP=1.15e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:07<00:05,  1.53it/s, RMSE=16.962TECU, a=0.50, rel_dP=1.09e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:07<00:05,  1.55it/s, RMSE=16.962TECU, a=0.50, rel_dP=1.09e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:08<00:05,  1.55it/s, RMSE=16.874TECU, a=0.50, rel_dP=1.03e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:08<00:04,  1.52it/s, RMSE=16.874TECU, a=0.50, rel_dP=1.03e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:09<00:04,  1.52it/s, RMSE=16.793TECU, a=0.50, rel_dP=9.78e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:09<00:04,  1.48it/s, RMSE=16.793TECU, a=0.50, rel_dP=9.78e-06]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:09<00:04,  1.48it/s, RMSE=16.720TECU, a=0.50, rel_dP=9.27e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:09<00:03,  1.46it/s, RMSE=16.720TECU, a=0.50, rel_dP=9.27e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:10<00:03,  1.46it/s, RMSE=16.652TECU, a=0.50, rel_dP=8.78e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:10<00:02,  1.46it/s, RMSE=16.652TECU, a=0.50, rel_dP=8.78e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:11<00:02,  1.46it/s, RMSE=16.591TECU, a=0.50, rel_dP=8.32e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:11<00:02,  1.32it/s, RMSE=16.591TECU, a=0.50, rel_dP=8.32e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:12<00:02,  1.32it/s, RMSE=16.534TECU, a=0.50, rel_dP=7.89e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:12<00:01,  1.34it/s, RMSE=16.534TECU, a=0.50, rel_dP=7.89e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:12<00:01,  1.34it/s, RMSE=16.483TECU, a=0.50, rel_dP=7.47e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:12<00:00,  1.37it/s, RMSE=16.483TECU, a=0.50, rel_dP=7.47e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:13<00:00,  1.37it/s, RMSE=16.436TECU, a=0.50, rel_dP=7.07e-06]  [EKF] iterating [analytical]: 100%|##########| 20/20 [00:13<00:00,  1.40it/s, RMSE=16.436TECU, a=0.50, rel_dP=7.07e-06]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 7.07e-06, RMSE=16.44TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=1.27  std=16.34  max_abs=57.61 TECU
+  [EKF] Prior RMSE 25.212 TECU  →  Post RMSE 16.393 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_15/igs_only/2025-09-22_1115_igs_only_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=15  | igs_only  | ekf_nmf2       : DONE       (653.9s) -> status=ok (no 'status' key)
+  [diag] 2025-09-22_1115 | bin=15 : summary of 6 obs_mode/filter_type combos
+           ro_only   | ekf_allfree    -> Success
+           ro_only   | ekf_nmf2       -> Success
+           ro_igs    | ekf_allfree    -> Success
+           ro_igs    | ekf_nmf2       -> Success
+           igs_only  | ekf_allfree    -> ok (no 'status' key)
+           igs_only  | ekf_nmf2       -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-09-22_1115 bin=15
+◀◀◀ compute_isr_metrics END   | group=2025-09-22_1115 bin=15 -> 366 metric row(s)
+
+▶▶▶ _plot_group_all_modes START | group=2025-09-22_1115
+  [skip] group summary metrics plot for 2025-09-22_1115: no data in any config
+◀◀◀ _plot_group_all_modes END   | group=2025-09-22_1115
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=5   | ro_only   | gridded_kf    
+    [diag] 2025-09-22_1115 | bin=5   | ro_only   | gridded_kf     : RUNNING    (force=False, cached=False) ...
+
+────────────────────────────────────────────────────────────
+  Group : 2025-09-22_1115
+  Window: 2025-09-22_1115  |  Region: POLAR_N  |  5 occultation(s)
+────────────────────────────────────────────────────────────
+  Parsed 5/5 files successfully.
+    [podTc2] YM08 11:01 — 352 valid rays → decimated to 176 (stride 2)
+    [podTc2] YM08 11:02 — 453 valid rays → decimated to 151 (stride 3)
+    [podTc2] YM08 11:04 — 543 valid rays → decimated to 181 (stride 3)
+    [podTc2] YM08 11:04 — 570 valid rays → decimated to 190 (stride 3)
+    [podTc2] GN04 11:41 — 443 valid rays → decimated to 148 (stride 3)
+  Bbox lat [47.7, 87.2]  lon [-36.7, 36.9]  |  union vertices: 15
+  Final group: 5 occultation(s), 15 union-mesh vertices
+  Saved trim diagnostic → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_5/ro_only/group_2025-09-22_1115_trim.png
+  -> Building H matrices (846 rays across 5 arc(s), single parallel sweep) …
+  -> Building H matrices:     84/846 rays (  9.9%)
+  -> Building H matrices:    168/846 rays ( 19.9%)
+  -> Building H matrices:    252/846 rays ( 29.8%)
+  -> Building H matrices:    336/846 rays ( 39.7%)
+  -> Building H matrices:    420/846 rays ( 49.6%)
+  -> Building H matrices:    504/846 rays ( 59.6%)
+  -> Building H matrices:    588/846 rays ( 69.5%)
+  -> Building H matrices:    672/846 rays ( 79.4%)
+  -> Building H matrices:    756/846 rays ( 89.4%)
+  -> Building H matrices:    840/846 rays ( 99.3%)
+  -> Building H matrices:    846/846 rays (100.0%)
+  Combined H shape : (846, 840)  (total rays = 846)
+  Skipping sequential KF assimilation (run_sequential=False).
+  Running joint (batch) KF assimilation …
+  Skipping joint (batch) KF assimilation (skip_joint=True) — gridded KF not run; posterior aliased to prior.
+  Prior RMSE  : 46.160 TECU
+  Post  RMSE  : 46.160 TECU
+    [Abel] YM08 11:01: NmF2=6.02e+11 m⁻³  hmF2=288.8 km
+    [Abel] YM08 11:02: NmF2=6.01e+11 m⁻³  hmF2=281.8 km
+    [Abel] YM08 11:04: NmF2=4.45e+11 m⁻³  hmF2=338.9 km
+    [Abel] YM08 11:04: NmF2=4.74e+11 m⁻³  hmF2=318.3 km
+    [Abel] GN04 11:41: NmF2=2.31e+11 m⁻³  hmF2=433.3 km
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=5   | ro_only   | gridded_kf     : DONE       (23.7s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=5   | ro_igs    | gridded_kf    
+    [diag] 2025-09-22_1115 | bin=5   | ro_igs    | gridded_kf     : RUNNING    (force=False, cached=False) ...
+
+────────────────────────────────────────────────────────────
+  Group : 2025-09-22_1115
+  Window: 2025-09-22_1115  |  Region: POLAR_N  |  5 occultation(s)
+────────────────────────────────────────────────────────────
+  Parsed 5/5 files successfully.
+    [podTc2] YM08 11:01 — 352 valid rays → decimated to 176 (stride 2)
+    [podTc2] YM08 11:02 — 453 valid rays → decimated to 151 (stride 3)
+    [podTc2] YM08 11:04 — 543 valid rays → decimated to 181 (stride 3)
+    [podTc2] YM08 11:04 — 570 valid rays → decimated to 190 (stride 3)
+    [podTc2] GN04 11:41 — 443 valid rays → decimated to 148 (stride 3)
+  Bbox lat [47.7, 87.2]  lon [-36.7, 36.9]  |  union vertices: 15
+  Final group: 5 occultation(s), 15 union-mesh vertices
+  Saved trim diagnostic → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_5/ro_igs/group_2025-09-22_1115_trim.png
+  [extra] Injected 106 ground-station arc(s) → total 111 arc(s) in assimilation pool
+  -> Building H matrices (952 rays across 111 arc(s), single parallel sweep) …
+  -> Building H matrices:     95/952 rays ( 10.0%)
+  -> Building H matrices:    190/952 rays ( 20.0%)
+  -> Building H matrices:    285/952 rays ( 29.9%)
+  -> Building H matrices:    380/952 rays ( 39.9%)
+  -> Building H matrices:    475/952 rays ( 49.9%)
+  -> Building H matrices:    570/952 rays ( 59.9%)
+  -> Building H matrices:    665/952 rays ( 69.9%)
+  -> Building H matrices:    760/952 rays ( 79.8%)
+  -> Building H matrices:    855/952 rays ( 89.8%)
+  -> Building H matrices:    950/952 rays ( 99.8%)
+  -> Building H matrices:    952/952 rays (100.0%)
+  Combined H shape : (952, 840)  (total rays = 952)
+  Skipping sequential KF assimilation (run_sequential=False).
+  Running joint (batch) KF assimilation …
+  Skipping joint (batch) KF assimilation (skip_joint=True) — gridded KF not run; posterior aliased to prior.
+  Prior RMSE  : 44.535 TECU
+  Post  RMSE  : 44.535 TECU
+    [Abel] YM08 11:01: NmF2=6.02e+11 m⁻³  hmF2=288.8 km
+    [Abel] YM08 11:02: NmF2=6.01e+11 m⁻³  hmF2=281.8 km
+    [Abel] YM08 11:04: NmF2=4.45e+11 m⁻³  hmF2=338.9 km
+    [Abel] YM08 11:04: NmF2=4.74e+11 m⁻³  hmF2=318.3 km
+    [Abel] GN04 11:41: NmF2=2.31e+11 m⁻³  hmF2=433.3 km
+    [Abel] Skipped 106 ground-station arc(s) (RO-only technique)
+/home/austinhunter/Downloads/PlanetiQ_Code/venv311/lib/python3.11/site-packages/shapely/creation.py:218: RuntimeWarning: invalid value encountered in linestrings
+  return lib.linestrings(coords, np.intc(handle_nan), out=out, **kwargs)
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=5   | ro_igs    | gridded_kf     : DONE       (19.3s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=5   | igs_only  | gridded_kf    
+    [diag] 2025-09-22_1115 | bin=5   | igs_only  | gridded_kf     : RUNNING    (force=False, cached=False) ...
+    [Info] Initialising information matrix (n_state=9350) …
+    [Info] arcs ingested = 106/106  |  obs rows = 106  |  Λ cond ≈ 3.67e+23
+    [Info] Solving …
+    [Prior] innovation  mean=24.44  std=18.32  n_obs=106
+    [Post ] innovation  mean=16.96  std=14.81
+    RMSE:  prior=30.542 TECU  →  post=22.515 TECU
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=5   | igs_only  | gridded_kf     : DONE       (78.8s) -> status=ok (no 'status' key)
+  [EKF] Fibonacci ROI grid @ 100 km: 600 points (memoized for window 2025-09-22_1115; reused across occultation-count bins)
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=5   | ro_only   | ekf_allfree   
+    [diag] 2025-09-22_1115 | bin=5   | ro_only   | ekf_allfree    : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 5 arc(s) …
+  [EKF] 5 arcs  |  846 profile rays  |  427 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-36.74  std=29.94  max_abs=99.86 TECU
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:02<?, ?it/s, RMSE=47.393TECU, a=0.50, rel_dP=9.62e-02]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:02<00:45,  2.37s/it, RMSE=47.393TECU, a=0.50, rel_dP=9.62e-02]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:04<00:45,  2.37s/it, RMSE=23.831TECU, a=0.50, rel_dP=2.99e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:04<00:44,  2.45s/it, RMSE=23.831TECU, a=0.50, rel_dP=2.99e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:10<00:44,  2.45s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:10<01:03,  3.76s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:15<01:03,  3.76s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:15<01:09,  4.34s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:20<01:09,  4.34s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:20<01:10,  4.72s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:26<01:10,  4.72s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:26<01:09,  4.95s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:31<01:09,  4.95s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:31<01:05,  5.01s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:36<01:05,  5.01s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:36<01:00,  5.03s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:41<01:00,  5.03s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:41<00:54,  4.96s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:46<00:54,  4.96s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:46<00:49,  4.97s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:51<00:49,  4.97s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:51<00:45,  5.07s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:56<00:45,  5.07s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:56<00:39,  4.94s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:01<00:39,  4.94s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:01<00:35,  5.01s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:08<00:35,  5.01s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:08<00:33,  5.59s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:13<00:33,  5.59s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:13<00:27,  5.52s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:19<00:27,  5.52s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:19<00:22,  5.60s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:24<00:22,  5.60s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:24<00:16,  5.53s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:29<00:16,  5.53s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:29<00:10,  5.32s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:34<00:10,  5.32s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [01:34<00:05,  5.13s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [01:39<00:05,  5.13s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]  [EKF] iterating [analytical]: 100%|##########| 20/20 [01:39<00:00,  5.09s/it, RMSE=15.248TECU, a=0.50, rel_dP=4.07e-33]                                                                                                                           [EKF] reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 4.07e-33, RMSE=15.25TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-7.81  std=13.10  max_abs=62.09 TECU
+  [EKF] Prior RMSE 47.477 TECU  →  Post RMSE 15.148 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_5/ro_only/2025-09-22_1115_ro_only_ekf_allfree_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=5   | ro_only   | ekf_allfree    : DONE       (1020.7s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=5   | ro_only   | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=5   | ro_only   | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 5 arc(s) …
+  [EKF] 5 arcs  |  846 profile rays  |  427 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-36.74  std=29.94  max_abs=99.86 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:02<?, ?it/s, RMSE=47.393TECU, a=0.50, rel_dP=1.38e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:02<00:43,  2.26s/it, RMSE=47.393TECU, a=0.50, rel_dP=1.38e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:04<00:43,  2.26s/it, RMSE=33.715TECU, a=0.50, rel_dP=8.39e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:04<00:43,  2.42s/it, RMSE=33.715TECU, a=0.50, rel_dP=8.39e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:07<00:43,  2.42s/it, RMSE=27.980TECU, a=0.50, rel_dP=5.49e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:07<00:41,  2.42s/it, RMSE=27.980TECU, a=0.50, rel_dP=5.49e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:09<00:41,  2.42s/it, RMSE=25.863TECU, a=0.50, rel_dP=4.59e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:09<00:38,  2.42s/it, RMSE=25.863TECU, a=0.50, rel_dP=4.59e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:11<00:38,  2.42s/it, RMSE=25.082TECU, a=0.50, rel_dP=4.40e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:11<00:35,  2.40s/it, RMSE=25.082TECU, a=0.50, rel_dP=4.40e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:14<00:35,  2.40s/it, RMSE=24.750TECU, a=0.50, rel_dP=4.23e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:14<00:33,  2.42s/it, RMSE=24.750TECU, a=0.50, rel_dP=4.23e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:16<00:33,  2.42s/it, RMSE=24.571TECU, a=0.50, rel_dP=3.95e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:16<00:31,  2.44s/it, RMSE=24.571TECU, a=0.50, rel_dP=3.95e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:19<00:31,  2.44s/it, RMSE=24.452TECU, a=0.50, rel_dP=3.63e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:19<00:29,  2.43s/it, RMSE=24.452TECU, a=0.50, rel_dP=3.63e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:21<00:29,  2.43s/it, RMSE=24.362TECU, a=0.50, rel_dP=3.29e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:21<00:27,  2.47s/it, RMSE=24.362TECU, a=0.50, rel_dP=3.29e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:24<00:27,  2.47s/it, RMSE=24.289TECU, a=0.50, rel_dP=2.96e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:24<00:24,  2.46s/it, RMSE=24.289TECU, a=0.50, rel_dP=2.96e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:26<00:24,  2.46s/it, RMSE=24.227TECU, a=0.50, rel_dP=2.66e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:26<00:22,  2.47s/it, RMSE=24.227TECU, a=0.50, rel_dP=2.66e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:29<00:22,  2.47s/it, RMSE=24.174TECU, a=0.50, rel_dP=2.39e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:29<00:19,  2.46s/it, RMSE=24.174TECU, a=0.50, rel_dP=2.39e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:31<00:19,  2.46s/it, RMSE=24.128TECU, a=0.50, rel_dP=2.15e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:31<00:17,  2.44s/it, RMSE=24.128TECU, a=0.50, rel_dP=2.15e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:34<00:17,  2.44s/it, RMSE=24.088TECU, a=0.50, rel_dP=1.95e-05]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:34<00:14,  2.48s/it, RMSE=24.088TECU, a=0.50, rel_dP=1.95e-05]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:36<00:14,  2.48s/it, RMSE=24.052TECU, a=0.50, rel_dP=1.76e-05]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:36<00:12,  2.46s/it, RMSE=24.052TECU, a=0.50, rel_dP=1.76e-05]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:39<00:12,  2.46s/it, RMSE=24.019TECU, a=0.50, rel_dP=1.61e-05]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:39<00:10,  2.52s/it, RMSE=24.019TECU, a=0.50, rel_dP=1.61e-05]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:41<00:10,  2.52s/it, RMSE=23.990TECU, a=0.50, rel_dP=1.47e-05]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:41<00:07,  2.53s/it, RMSE=23.990TECU, a=0.50, rel_dP=1.47e-05]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:44<00:07,  2.53s/it, RMSE=23.963TECU, a=0.50, rel_dP=1.35e-05]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:44<00:05,  2.66s/it, RMSE=23.963TECU, a=0.50, rel_dP=1.35e-05]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:47<00:05,  2.66s/it, RMSE=23.938TECU, a=0.50, rel_dP=1.25e-05]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:47<00:02,  2.67s/it, RMSE=23.938TECU, a=0.50, rel_dP=1.25e-05]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:50<00:02,  2.67s/it, RMSE=23.915TECU, a=0.50, rel_dP=1.16e-05]  [EKF] iterating [analytical]: 100%|##########| 20/20 [00:50<00:00,  2.62s/it, RMSE=23.915TECU, a=0.50, rel_dP=1.16e-05]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 1.16e-05, RMSE=23.91TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-1.98  std=23.81  max_abs=86.87 TECU
+  [EKF] Prior RMSE 47.477 TECU  →  Post RMSE 23.658 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_5/ro_only/2025-09-22_1115_ro_only_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=5   | ro_only   | ekf_nmf2       : DONE       (946.5s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=5   | ro_igs    | ekf_allfree   
+    [diag] 2025-09-22_1115 | bin=5   | ro_igs    | ekf_allfree    : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 111 arc(s) …
+  [EKF] 111 arcs  |  952 profile rays  |  533 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-26.03  std=35.33  max_abs=99.86 TECU
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:02<?, ?it/s, RMSE=43.884TECU, a=0.50, rel_dP=1.49e-01]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:02<00:55,  2.95s/it, RMSE=43.884TECU, a=0.50, rel_dP=1.49e-01]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:08<00:55,  2.95s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:08<01:23,  4.64s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:15<01:23,  4.64s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:15<01:35,  5.63s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:23<01:35,  5.63s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:23<01:45,  6.59s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:29<01:45,  6.59s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:29<01:32,  6.19s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:34<01:32,  6.19s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:34<01:25,  6.08s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:40<01:25,  6.08s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:40<01:15,  5.83s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:46<01:15,  5.83s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:46<01:09,  5.79s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:51<01:09,  5.79s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:51<01:03,  5.73s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:57<01:03,  5.73s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:57<00:59,  5.93s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [01:03<00:59,  5.93s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:03<00:52,  5.86s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [01:09<00:52,  5.86s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:09<00:45,  5.74s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  60%|######    | 12/20 [01:15<00:45,  5.74s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:15<00:42,  6.06s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [01:21<00:42,  6.06s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:21<00:35,  5.84s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [01:27<00:35,  5.84s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:27<00:29,  5.82s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [01:32<00:29,  5.82s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:32<00:22,  5.59s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  80%|########  | 16/20 [01:38<00:22,  5.59s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:38<00:17,  5.73s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [01:43<00:17,  5.73s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:43<00:11,  5.59s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  90%|######### | 18/20 [01:49<00:11,  5.59s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [01:49<00:05,  5.62s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [01:55<00:05,  5.62s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]  [EKF] iterating [analytical]: 100%|##########| 20/20 [01:55<00:00,  5.95s/it, RMSE=25.743TECU, a=0.50, rel_dP=4.37e-27]                                                                                                                           [EKF] reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 4.37e-27, RMSE=25.74TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-12.20  std=22.67  max_abs=75.56 TECU
+  [EKF] Prior RMSE 45.540 TECU  →  Post RMSE 25.748 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_5/ro_igs/2025-09-22_1115_ro_igs_ekf_allfree_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=5   | ro_igs    | ekf_allfree    : DONE       (1083.9s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=5   | ro_igs    | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=5   | ro_igs    | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 111 arc(s) …
+  [EKF] 111 arcs  |  952 profile rays  |  533 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=-26.03  std=35.33  max_abs=99.86 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:02<?, ?it/s, RMSE=43.884TECU, a=0.50, rel_dP=1.34e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:02<00:50,  2.68s/it, RMSE=43.884TECU, a=0.50, rel_dP=1.34e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:05<00:50,  2.68s/it, RMSE=32.537TECU, a=0.50, rel_dP=1.01e-04]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:05<00:48,  2.70s/it, RMSE=32.537TECU, a=0.50, rel_dP=1.01e-04]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:07<00:48,  2.70s/it, RMSE=27.654TECU, a=0.50, rel_dP=7.95e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:07<00:44,  2.62s/it, RMSE=27.654TECU, a=0.50, rel_dP=7.95e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:10<00:44,  2.62s/it, RMSE=25.650TECU, a=0.50, rel_dP=6.59e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:10<00:41,  2.62s/it, RMSE=25.650TECU, a=0.50, rel_dP=6.59e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:13<00:41,  2.62s/it, RMSE=24.748TECU, a=0.50, rel_dP=5.63e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:13<00:38,  2.60s/it, RMSE=24.748TECU, a=0.50, rel_dP=5.63e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:15<00:38,  2.60s/it, RMSE=24.261TECU, a=0.50, rel_dP=4.84e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:15<00:37,  2.66s/it, RMSE=24.261TECU, a=0.50, rel_dP=4.84e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:18<00:37,  2.66s/it, RMSE=23.953TECU, a=0.50, rel_dP=4.14e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:18<00:34,  2.67s/it, RMSE=23.953TECU, a=0.50, rel_dP=4.14e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:20<00:34,  2.67s/it, RMSE=23.741TECU, a=0.50, rel_dP=3.54e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:20<00:31,  2.59s/it, RMSE=23.741TECU, a=0.50, rel_dP=3.54e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:23<00:31,  2.59s/it, RMSE=23.587TECU, a=0.50, rel_dP=3.02e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:23<00:28,  2.57s/it, RMSE=23.587TECU, a=0.50, rel_dP=3.02e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:26<00:28,  2.57s/it, RMSE=23.473TECU, a=0.50, rel_dP=2.59e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:26<00:27,  2.75s/it, RMSE=23.473TECU, a=0.50, rel_dP=2.59e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:29<00:27,  2.75s/it, RMSE=23.386TECU, a=0.50, rel_dP=2.24e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:29<00:24,  2.68s/it, RMSE=23.386TECU, a=0.50, rel_dP=2.24e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:31<00:24,  2.68s/it, RMSE=23.318TECU, a=0.50, rel_dP=1.96e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:31<00:21,  2.65s/it, RMSE=23.318TECU, a=0.50, rel_dP=1.96e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:34<00:21,  2.65s/it, RMSE=23.264TECU, a=0.50, rel_dP=1.74e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:34<00:18,  2.62s/it, RMSE=23.264TECU, a=0.50, rel_dP=1.74e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:36<00:18,  2.62s/it, RMSE=23.219TECU, a=0.50, rel_dP=1.57e-05]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:36<00:15,  2.58s/it, RMSE=23.219TECU, a=0.50, rel_dP=1.57e-05]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:39<00:15,  2.58s/it, RMSE=23.180TECU, a=0.50, rel_dP=1.43e-05]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:39<00:12,  2.55s/it, RMSE=23.180TECU, a=0.50, rel_dP=1.43e-05]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:41<00:12,  2.55s/it, RMSE=23.146TECU, a=0.50, rel_dP=1.31e-05]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:41<00:10,  2.52s/it, RMSE=23.146TECU, a=0.50, rel_dP=1.31e-05]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:44<00:10,  2.52s/it, RMSE=23.116TECU, a=0.50, rel_dP=1.22e-05]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:44<00:07,  2.57s/it, RMSE=23.116TECU, a=0.50, rel_dP=1.22e-05]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:46<00:07,  2.57s/it, RMSE=23.089TECU, a=0.50, rel_dP=1.15e-05]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:46<00:04,  2.49s/it, RMSE=23.089TECU, a=0.50, rel_dP=1.15e-05]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:49<00:04,  2.49s/it, RMSE=23.064TECU, a=0.50, rel_dP=1.08e-05]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:49<00:02,  2.51s/it, RMSE=23.064TECU, a=0.50, rel_dP=1.08e-05]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:51<00:02,  2.51s/it, RMSE=23.041TECU, a=0.50, rel_dP=1.03e-05]  [EKF] iterating [analytical]: 100%|##########| 20/20 [00:51<00:00,  2.50s/it, RMSE=23.041TECU, a=0.50, rel_dP=1.03e-05]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 1.03e-05, RMSE=23.04TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-0.62  std=23.01  max_abs=85.25 TECU
+  [EKF] Prior RMSE 45.540 TECU  →  Post RMSE 23.205 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_5/ro_igs/2025-09-22_1115_ro_igs_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=5   | ro_igs    | ekf_nmf2       : DONE       (635.4s) -> status=Success
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=5   | igs_only  | ekf_allfree   
+    [diag] 2025-09-22_1115 | bin=5   | igs_only  | ekf_allfree    : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 106 arc(s) …
+  [EKF] 106 arcs  |  106 profile rays  |  106 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=17.09  std=18.54  max_abs=73.62 TECU
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s, RMSE=25.212TECU, a=0.50, rel_dP=3.02e-02]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:08,  2.11it/s, RMSE=25.212TECU, a=0.50, rel_dP=3.02e-02]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:01<00:08,  2.11it/s, RMSE=20.736TECU, a=0.50, rel_dP=2.19e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:09,  1.91it/s, RMSE=20.736TECU, a=0.50, rel_dP=2.19e-02]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:09,  1.91it/s, RMSE=18.738TECU, a=0.50, rel_dP=2.23e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:01<00:09,  1.84it/s, RMSE=18.738TECU, a=0.50, rel_dP=2.23e-02]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:02<00:09,  1.84it/s, RMSE=17.932TECU, a=0.50, rel_dP=1.19e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.85it/s, RMSE=17.932TECU, a=0.50, rel_dP=1.19e-02]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.85it/s, RMSE=17.529TECU, a=0.50, rel_dP=1.80e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:02<00:08,  1.84it/s, RMSE=17.529TECU, a=0.50, rel_dP=1.80e-02]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:03<00:08,  1.84it/s, RMSE=17.289TECU, a=0.50, rel_dP=1.05e-02]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.79it/s, RMSE=17.289TECU, a=0.50, rel_dP=1.05e-02]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.79it/s, RMSE=17.126TECU, a=0.50, rel_dP=1.08e-02]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:03<00:07,  1.82it/s, RMSE=17.126TECU, a=0.50, rel_dP=1.08e-02]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:04<00:07,  1.82it/s, RMSE=16.987TECU, a=0.50, rel_dP=2.01e-02]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:06,  1.84it/s, RMSE=16.987TECU, a=0.50, rel_dP=2.01e-02]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:06,  1.84it/s, RMSE=16.863TECU, a=0.50, rel_dP=1.40e-02]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:04<00:05,  1.85it/s, RMSE=16.863TECU, a=0.50, rel_dP=1.40e-02]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:05<00:05,  1.85it/s, RMSE=16.787TECU, a=0.50, rel_dP=1.29e-02]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:05,  1.75it/s, RMSE=16.787TECU, a=0.50, rel_dP=1.29e-02]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:06<00:05,  1.75it/s, RMSE=16.719TECU, a=0.50, rel_dP=2.12e-02]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:06<00:05,  1.80it/s, RMSE=16.719TECU, a=0.50, rel_dP=2.12e-02]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:06<00:05,  1.80it/s, RMSE=16.646TECU, a=0.50, rel_dP=9.38e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.83it/s, RMSE=16.646TECU, a=0.50, rel_dP=9.38e-03]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:07<00:04,  1.83it/s, RMSE=16.558TECU, a=0.50, rel_dP=9.43e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:07<00:03,  1.85it/s, RMSE=16.558TECU, a=0.50, rel_dP=9.43e-03]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:07<00:03,  1.85it/s, RMSE=16.481TECU, a=0.50, rel_dP=1.05e-02]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:03,  1.84it/s, RMSE=16.481TECU, a=0.50, rel_dP=1.05e-02]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:08<00:03,  1.84it/s, RMSE=16.427TECU, a=0.50, rel_dP=2.10e-02]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:08<00:02,  1.89it/s, RMSE=16.427TECU, a=0.50, rel_dP=2.10e-02]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:08<00:02,  1.89it/s, RMSE=16.384TECU, a=0.50, rel_dP=8.33e-03]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:02,  1.92it/s, RMSE=16.384TECU, a=0.50, rel_dP=8.33e-03]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:09<00:02,  1.92it/s, RMSE=16.311TECU, a=0.50, rel_dP=7.71e-03]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:09<00:01,  1.94it/s, RMSE=16.311TECU, a=0.50, rel_dP=7.71e-03]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:09<00:01,  1.94it/s, RMSE=16.252TECU, a=0.50, rel_dP=2.76e-02]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:01,  1.95it/s, RMSE=16.252TECU, a=0.50, rel_dP=2.76e-02]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:10<00:01,  1.95it/s, RMSE=16.220TECU, a=0.50, rel_dP=1.18e-02]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:10<00:00,  1.94it/s, RMSE=16.220TECU, a=0.50, rel_dP=1.18e-02]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:10<00:00,  1.94it/s, RMSE=16.199TECU, a=0.50, rel_dP=2.63e-02]  [EKF] iterating [analytical]: 100%|##########| 20/20 [00:10<00:00,  1.90it/s, RMSE=16.199TECU, a=0.50, rel_dP=2.63e-02]                                                                                                                           [EKF] reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 2.63e-02, RMSE=16.20TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=-0.05  std=16.14  max_abs=58.52 TECU
+  [EKF] Prior RMSE 25.212 TECU  →  Post RMSE 16.137 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_5/igs_only/2025-09-22_1115_igs_only_ekf_allfree_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=5   | igs_only  | ekf_allfree    : DONE       (542.6s) -> status=ok (no 'status' key)
+▶▶▶ _run_or_load START | 2025-09-22_1115 | bin=5   | igs_only  | ekf_nmf2      
+    [diag] 2025-09-22_1115 | bin=5   | igs_only  | ekf_nmf2       : RUNNING    (force=False, cached=False) ...
+  [EKF] Building IRI state at 600 grid points (batch call) …
+  [EnKF] Estimating background covariance from 100 EDP samples x 600 grid points ...
+  [EnKF] Parameter sigma: log10(NmF2)=0.15  hmF2=20  H0=26.6  gamma=0.226  B0=20  B1=0.3  log10(NmE)=0.2  hmE=8
+  [EnKF] Spatial corr (Ne-space KF method): mean=0.969  max=1.000  min=0.826
+  [EKF] Running EKF_Param on 106 arc(s) …
+  [EKF] 106 arcs  |  106 profile rays  |  106 update rays  |  n_state = 4800
+  [EKF] Prior innovations  mean=17.09  std=18.54  max_abs=73.62 TECU
+  [EKF] stage 1/1: free=[log10(NmF2)] (1/8 params)
+  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s]  [EKF] iterating [analytical]:   0%|          | 0/20 [00:00<?, ?it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.44e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:00<00:09,  2.05it/s, RMSE=25.212TECU, a=0.50, rel_dP=2.44e-04]  [EKF] iterating [analytical]:   5%|5         | 1/20 [00:01<00:09,  2.05it/s, RMSE=20.349TECU, a=0.50, rel_dP=9.60e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:09,  1.96it/s, RMSE=20.349TECU, a=0.50, rel_dP=9.60e-05]  [EKF] iterating [analytical]:  10%|#         | 2/20 [00:01<00:09,  1.96it/s, RMSE=18.906TECU, a=0.50, rel_dP=4.84e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:01<00:09,  1.87it/s, RMSE=18.906TECU, a=0.50, rel_dP=4.84e-05]  [EKF] iterating [analytical]:  15%|#5        | 3/20 [00:02<00:09,  1.87it/s, RMSE=18.324TECU, a=0.50, rel_dP=2.89e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.87it/s, RMSE=18.324TECU, a=0.50, rel_dP=2.89e-05]  [EKF] iterating [analytical]:  20%|##        | 4/20 [00:02<00:08,  1.87it/s, RMSE=18.005TECU, a=0.50, rel_dP=2.05e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:02<00:08,  1.84it/s, RMSE=18.005TECU, a=0.50, rel_dP=2.05e-05]  [EKF] iterating [analytical]:  25%|##5       | 5/20 [00:03<00:08,  1.84it/s, RMSE=17.785TECU, a=0.50, rel_dP=1.68e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.78it/s, RMSE=17.785TECU, a=0.50, rel_dP=1.68e-05]  [EKF] iterating [analytical]:  30%|###       | 6/20 [00:03<00:07,  1.78it/s, RMSE=17.612TECU, a=0.50, rel_dP=1.49e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:03<00:06,  1.87it/s, RMSE=17.612TECU, a=0.50, rel_dP=1.49e-05]  [EKF] iterating [analytical]:  35%|###5      | 7/20 [00:04<00:06,  1.87it/s, RMSE=17.467TECU, a=0.50, rel_dP=1.37e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:06,  1.94it/s, RMSE=17.467TECU, a=0.50, rel_dP=1.37e-05]  [EKF] iterating [analytical]:  40%|####      | 8/20 [00:04<00:06,  1.94it/s, RMSE=17.341TECU, a=0.50, rel_dP=1.29e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:04<00:05,  1.95it/s, RMSE=17.341TECU, a=0.50, rel_dP=1.29e-05]  [EKF] iterating [analytical]:  45%|####5     | 9/20 [00:05<00:05,  1.95it/s, RMSE=17.229TECU, a=0.50, rel_dP=1.23e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:05,  1.91it/s, RMSE=17.229TECU, a=0.50, rel_dP=1.23e-05]  [EKF] iterating [analytical]:  50%|#####     | 10/20 [00:05<00:05,  1.91it/s, RMSE=17.127TECU, a=0.50, rel_dP=1.17e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:05<00:04,  1.89it/s, RMSE=17.127TECU, a=0.50, rel_dP=1.17e-05]  [EKF] iterating [analytical]:  55%|#####5    | 11/20 [00:06<00:04,  1.89it/s, RMSE=17.035TECU, a=0.50, rel_dP=1.12e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.90it/s, RMSE=17.035TECU, a=0.50, rel_dP=1.12e-05]  [EKF] iterating [analytical]:  60%|######    | 12/20 [00:06<00:04,  1.90it/s, RMSE=16.950TECU, a=0.50, rel_dP=1.07e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:06<00:03,  1.92it/s, RMSE=16.950TECU, a=0.50, rel_dP=1.07e-05]  [EKF] iterating [analytical]:  65%|######5   | 13/20 [00:07<00:03,  1.92it/s, RMSE=16.872TECU, a=0.50, rel_dP=1.03e-05]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:03,  1.92it/s, RMSE=16.872TECU, a=0.50, rel_dP=1.03e-05]  [EKF] iterating [analytical]:  70%|#######   | 14/20 [00:07<00:03,  1.92it/s, RMSE=16.800TECU, a=0.50, rel_dP=9.83e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:07<00:02,  2.01it/s, RMSE=16.800TECU, a=0.50, rel_dP=9.83e-06]  [EKF] iterating [analytical]:  75%|#######5  | 15/20 [00:08<00:02,  2.01it/s, RMSE=16.734TECU, a=0.50, rel_dP=9.41e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:01,  2.04it/s, RMSE=16.734TECU, a=0.50, rel_dP=9.41e-06]  [EKF] iterating [analytical]:  80%|########  | 16/20 [00:08<00:01,  2.04it/s, RMSE=16.672TECU, a=0.50, rel_dP=9.00e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:08<00:01,  2.06it/s, RMSE=16.672TECU, a=0.50, rel_dP=9.00e-06]  [EKF] iterating [analytical]:  85%|########5 | 17/20 [00:09<00:01,  2.06it/s, RMSE=16.615TECU, a=0.50, rel_dP=8.61e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:01,  1.94it/s, RMSE=16.615TECU, a=0.50, rel_dP=8.61e-06]  [EKF] iterating [analytical]:  90%|######### | 18/20 [00:09<00:01,  1.94it/s, RMSE=16.562TECU, a=0.50, rel_dP=8.23e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:09<00:00,  1.92it/s, RMSE=16.562TECU, a=0.50, rel_dP=8.23e-06]  [EKF] iterating [analytical]:  95%|#########5| 19/20 [00:10<00:00,  1.92it/s, RMSE=16.513TECU, a=0.50, rel_dP=7.86e-06]  [EKF] iterating [analytical]: 100%|##########| 20/20 [00:10<00:00,  1.98it/s, RMSE=16.513TECU, a=0.50, rel_dP=7.86e-06]                                                                                                                           [EKF] stage 1 reached max_iter=20 without convergence  (final ||ΔP||/||P|| = 7.86e-06, RMSE=16.51TECU vs tol 5.0)
+  [EKF] Posterior innovations  mean=1.27  std=16.42  max_abs=56.86 TECU
+  [EKF] Prior RMSE 25.212 TECU  →  Post RMSE 16.468 TECU
+  Saved EKF convergence plot → /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/2025-09-22_1115/bin_5/igs_only/2025-09-22_1115_igs_only_ekf_nmf2_ekf_convergence.png
+◀◀◀ _run_or_load END   | 2025-09-22_1115 | bin=5   | igs_only  | ekf_nmf2       : DONE       (17284.2s) -> status=ok (no 'status' key)
+  [diag] 2025-09-22_1115 | bin=5 : summary of 6 obs_mode/filter_type combos
+           ro_only   | ekf_allfree    -> Success
+           ro_only   | ekf_nmf2       -> Success
+           ro_igs    | ekf_allfree    -> Success
+           ro_igs    | ekf_nmf2       -> Success
+           igs_only  | ekf_allfree    -> ok (no 'status' key)
+           igs_only  | ekf_nmf2       -> ok (no 'status' key)
+
+▶▶▶ compute_isr_metrics START | group=2025-09-22_1115 bin=5
+◀◀◀ compute_isr_metrics END   | group=2025-09-22_1115 bin=5 -> 366 metric row(s)
+
+▶▶▶ _plot_group_all_modes START | group=2025-09-22_1115
+  [skip] group summary metrics plot for 2025-09-22_1115: no data in any config
+◀◀◀ _plot_group_all_modes END   | group=2025-09-22_1115
+
+[done] 1464 new ISR comparison row(s) this run across 1 day(s)
+obs_mode   filter_type       n   delta_rmse m⁻³ (mean±std)  frac_improved   mean NmF2 err %   mean hmF2 err km
+--------------------------------------------------------------------------------------------------------------
+igs_only   ekf_allfree      21   3.398e+10 ± 5.175e+10         23.8%            -26.05              26.20
+igs_only   ekf_nmf2         21  -8.884e+09 ± 1.188e+10         85.7%            -29.41             -11.28
+ro_igs     ekf_allfree      21   6.137e+10 ± 1.409e+11         38.1%            -31.71             -24.13
+ro_igs     ekf_nmf2         21   2.920e+10 ± 4.209e+10         38.1%            -42.93             -11.28
+ro_only    ekf_allfree      21   1.268e+11 ± 2.329e+11         33.3%             22.43             -11.34
+ro_only    ekf_nmf2         21   3.100e+10 ± 3.999e+10         33.3%            -33.77             -11.28
+
+  foF2 (critical freq) — fraction of cases within threshold:
+  obs_mode   filter_type       n    prior|post @0.5MHz    prior|post @0.2MHz    prior|post @0.1MHz
+  igs_only   ekf_allfree      21     33.3%|23.8%         0.0%|14.3%         0.0%|4.8%    
+  igs_only   ekf_nmf2         21     33.3%|33.3%         0.0%|23.8%         0.0%|14.3%   
+  ro_igs     ekf_allfree      21     33.3%|19.0%         0.0%|9.5%          0.0%|0.0%    
+  ro_igs     ekf_nmf2         21     33.3%|9.5%          0.0%|0.0%          0.0%|0.0%    
+  ro_only    ekf_allfree      21     33.3%|14.3%         0.0%|4.8%          0.0%|0.0%    
+  ro_only    ekf_nmf2         21     33.3%|0.0%          0.0%|0.0%          0.0%|0.0%    
+
+  foE  (blanketing freq) — fraction of cases within threshold:
+  obs_mode   filter_type       n    prior|post @0.5MHz    prior|post @0.2MHz    prior|post @0.1MHz
+  igs_only   ekf_allfree      21     66.7%|38.1%        33.3%|14.3%         0.0%|9.5%    
+  igs_only   ekf_nmf2         21     66.7%|66.7%        33.3%|33.3%         0.0%|0.0%    
+  ro_igs     ekf_allfree      21     66.7%|4.8%         33.3%|0.0%          0.0%|0.0%    
+  ro_igs     ekf_nmf2         21     66.7%|66.7%        33.3%|33.3%         0.0%|0.0%    
+  ro_only    ekf_allfree      21     66.7%|0.0%         33.3%|0.0%          0.0%|0.0%    
+  ro_only    ekf_nmf2         21     66.7%|66.7%        33.3%|28.6%         0.0%|4.8%    
+
+  Profile fp RMSE — fraction of cases within threshold:
+  obs_mode   filter_type       n    prior|post @0.5MHz    prior|post @0.2MHz    prior|post @0.1MHz
+  igs_only   ekf_allfree      21      0.0%|9.5%          0.0%|0.0%          0.0%|0.0%    
+  igs_only   ekf_nmf2         21      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_igs     ekf_allfree      21      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_igs     ekf_nmf2         21      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_only    ekf_allfree      21      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+  ro_only    ekf_nmf2         21      0.0%|0.0%          0.0%|0.0%          0.0%|0.0%    
+[ISR-DA] Frequency-domain figures saved to /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL
+  Saved: /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/isr_convergence_vs_occ_count_below_peak_ne_mae.png
+  Saved: /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/isr_convergence_vs_occ_count_foF2_error_mhz.png
+  Saved: /home/austinhunter/IonosphereTomography/Figures/ISR_DA_Comparison/OUTPUT_FINAL/isr_convergence_vs_occ_count_hf_reflection_height_error_km.png
+[ISR-DA] Log written to: /home/austinhunter/IonosphereTomography/Logs/ISR_DA_Comparison/isr_da_comparison_20260722_133655.log

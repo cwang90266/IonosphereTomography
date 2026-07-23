@@ -655,11 +655,11 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         # ── Single Parallel call — workers spawned/joined once ───────────────
         # return_as="generator" keeps the one-pool-spawn performance benefit
         # (see docstring) while streaming results back in submission order as
-        # each ray finishes, so we can render a live progress bar. This bar is
+        # each ray finishes, so we can log periodic progress. Reporting is
         # unconditional — it reflects H-matrix construction only, independent
         # of whether the caller later runs a localized (Λ) or plain batch
-        # update.
-        _BAR = 28
+        # update. Plain newline-terminated prints (no \r / unicode bar) so the
+        # output stays readable in a log file, not just an interactive tty.
         rows = []
         ray_gen = Parallel(n_jobs=-1, return_as="generator")(
             delayed(_process_single_ray)(
@@ -669,14 +669,13 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             )
             for i in range(total_rays)
         )
+        _report_every = max(1, total_rays // 10)
         for done, row in enumerate(ray_gen, 1):
             rows.append(row)
-            filled = int(_BAR * done / max(total_rays, 1))
-            bar    = '█' * filled + '░' * (_BAR - filled)
-            print(f"\r  -> Building H matrices [{bar}] {done:6d}/{total_rays} rays",
-                  end='', flush=True)
-        print(f"\r  -> Building H matrices [{'█' * _BAR}] "
-              f"{total_rays:6d}/{total_rays} rays  ✓", flush=True)
+            if done % _report_every == 0 or done == total_rays:
+                pct = 100.0 * done / max(total_rays, 1)
+                print(f"  -> Building H matrices: {done:6d}/{total_rays} rays "
+                      f"({pct:5.1f}%)", flush=True)
 
         # Scale grid columns (path length m → m/TECU)
         H_all = np.array(rows, dtype=np.float32)

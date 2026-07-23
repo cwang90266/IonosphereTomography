@@ -1484,6 +1484,16 @@ def run_info_window(
         "post_edp":         post_edp,
         "prior_sigma":      prior_sigma,
         "post_sigma":       post_sigma,
+        # Grid actually used to compute prior_edp/post_edp above -- callers
+        # that rebuild an eds_occ/geolocation mesh from this result (e.g.
+        # demo_isr_da_comparison.py's igs_only adapters) must key off THIS
+        # grid rather than whatever grid_lats/grid_lons happen to be in
+        # scope at call time, since a cached result dict can be older than
+        # the ROI/grid-construction code that produced the caller's current
+        # grid_lats/grid_lons (different vertex count -> geolocation and
+        # prior_edp/post_edp go out of sync).
+        "grid_lats":        np.asarray(grid_lats, dtype=float),
+        "grid_lons":        np.asarray(grid_lons, dtype=float),
         "arc_sizes":        arc_sizes,
         # Info-form-specific diagnostics
         "info_n_arcs":      info.n_arcs,

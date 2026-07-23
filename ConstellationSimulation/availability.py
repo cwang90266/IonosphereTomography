@@ -417,6 +417,82 @@ def plot_simulated_availability(
     return fig
 
 
+def compute_global_density_peaks(
+        df: pd.DataFrame,
+        day: pd.Timestamp,
+        radii_km: Sequence[float] = (500.0, 1500.0, 2500.0),
+        grid_deg: float = 2.0,
+        window_hours: float = 1.0,
+        bin_minutes: float = 5.0,
+):
+    """Compute the same per-cell "peak occultations / window_hours window
+    within R km" grids plot_global_occultation_density() draws, without
+    plotting anything.
+
+    Split out of plot_global_occultation_density() so callers that need to
+    compare two or more runs (e.g. different RX constellations) on a shared
+    colour scale can first compute every run's peak grids, take the max
+    across runs per radius, and pass that in as plot_global_occultation_density's
+    vmax_by_radius.
+
+    Returns
+    -------
+    (glat, glon, peaks) -- glat/glon are the (M, N) meshgrid arrays
+    (np.meshgrid(grid_lon, grid_lat)'s output, indexing="xy"), peaks is a
+    dict mapping each entry of radii_km to its (M, N) peak-count array.
+    """
+    doa = _import_demo_occultation_availability()
+
+    if df.empty:
+        raise ValueError("compute_global_density_peaks: df is empty -- nothing to compute")
+
+    lat_deg = df["lat"].to_numpy(dtype=float)
+    lon_deg = df["lon"].to_numpy(dtype=float)
+    n_events = len(df)
+
+    grid_lat = np.arange(-90.0, 90.0 + 1e-9, grid_deg)
+    grid_lon = np.arange(-180.0, 180.0 + 1e-9, grid_deg)
+    glon, glat = np.meshgrid(grid_lon, grid_lat)  # each (M, N)
+    n_cells = glat.size
+
+    # Great-circle distance from every grid cell (M, N) to every event (K),
+    # broadcast into one (M, N, K) matrix and reused for every threshold
+    # below rather than recomputed per radius.
+    dist_flat = doa._haversine_km(
+        glat[:, :, None], glon[:, :, None],
+        lat_deg[None, None, :], lon_deg[None, None, :],
+    ).reshape(n_cells, n_events)
+
+    # Digitize events into fixed time bins spanning *day*, and build a
+    # one-hot event->bin membership matrix (independent of grid_deg, so
+    # this stays small regardless of grid resolution).
+    day0 = pd.Timestamp(day).normalize()
+    n_bins = max(int(round(24 * 60 / bin_minutes)), 1)
+    # Series-level subtraction (rather than raw .to_numpy() on a tz-aware
+    # column, which yields an object array of Timestamps that numpy can't
+    # subtract a datetime64 from) correctly handles the tz-aware
+    # tecmax_time column produced by build_occultation_dataframe.
+    t_event_min = (
+        (pd.to_datetime(df["tecmax_time"]) - day0).dt.total_seconds() / 60.0
+    ).to_numpy()
+    bin_idx = np.clip((t_event_min // bin_minutes).astype(int), 0, n_bins - 1)
+    B = np.zeros((n_events, n_bins), dtype=np.float32)
+    B[np.arange(n_events), bin_idx] = 1.0
+
+    w = max(int(round(window_hours * 60.0 / bin_minutes)), 1)
+
+    peaks = {}
+    for r in radii_km:
+        spatial_mask = (dist_flat <= r).astype(np.float32)      # (n_cells, n_events)
+        counts_per_bin = spatial_mask @ B                        # (n_cells, n_bins)
+        csum = np.cumsum(
+            np.pad(counts_per_bin, ((0, 0), (1, 0))), axis=1)    # (n_cells, n_bins+1)
+        rolling = csum[:, w:] - csum[:, :-w]                     # (n_cells, n_bins-w+1)
+        peaks[r] = rolling.max(axis=1).reshape(glat.shape)       # (M, N)
+
+    return glat, glon, peaks
+
+
 def plot_global_occultation_density(
         df: pd.DataFrame,
         day: pd.Timestamp,
@@ -429,6 +505,7 @@ def plot_global_occultation_density(
         ground_tracks: Optional[pd.DataFrame] = None,
         track_clon: float = 0.0,
         track_clat: float = 30.0,
+        vmax_by_radius: Optional["dict[float, float]"] = None,
 ):
     """Three global Mollweide-projection maps (one per entry of *radii_km*)
     of simulated occultation availability: at every cell of a *grid_deg*-
@@ -495,6 +572,14 @@ def plot_global_occultation_density(
     track_clon, track_clat : float
         Center longitude/latitude (deg) of the ground-track panel's
         Orthographic projection.
+    vmax_by_radius : dict, optional
+        Maps a radii_km entry to a fixed colorbar vmax (vmin is always 0),
+        overriding that panel's own peak for the colour scale. Panels whose
+        radius is not a key here still auto-scale to their own peak, as
+        before. Use compute_global_density_peaks() on every run being
+        compared, take the max per radius across runs, and pass the result
+        here so multiple figures (e.g. different RX constellations) share
+        one colour scale per radius and are visually comparable.
 
     Returns
     -------
@@ -504,45 +589,14 @@ def plot_global_occultation_density(
     import cartopy.feature as cfeature
     import matplotlib.pyplot as plt
 
-    doa = _import_demo_occultation_availability()
-
     if df.empty:
         raise ValueError("plot_global_occultation_density: df is empty -- nothing to plot")
 
-    lat_deg = df["lat"].to_numpy(dtype=float)
-    lon_deg = df["lon"].to_numpy(dtype=float)
     n_events = len(df)
-
-    grid_lat = np.arange(-90.0, 90.0 + 1e-9, grid_deg)
-    grid_lon = np.arange(-180.0, 180.0 + 1e-9, grid_deg)
-    glon, glat = np.meshgrid(grid_lon, grid_lat)  # each (M, N)
-    n_cells = glat.size
-
-    # Great-circle distance from every grid cell (M, N) to every event (K),
-    # broadcast into one (M, N, K) matrix and reused for every threshold
-    # below rather than recomputed per radius.
-    dist_flat = doa._haversine_km(
-        glat[:, :, None], glon[:, :, None],
-        lat_deg[None, None, :], lon_deg[None, None, :],
-    ).reshape(n_cells, n_events)
-
-    # Digitize events into fixed time bins spanning *day*, and build a
-    # one-hot event->bin membership matrix (independent of grid_deg, so
-    # this stays small regardless of grid resolution).
-    day0 = pd.Timestamp(day).normalize()
-    n_bins = max(int(round(24 * 60 / bin_minutes)), 1)
-    # Series-level subtraction (rather than raw .to_numpy() on a tz-aware
-    # column, which yields an object array of Timestamps that numpy can't
-    # subtract a datetime64 from) correctly handles the tz-aware
-    # tecmax_time column produced by build_occultation_dataframe.
-    t_event_min = (
-        (pd.to_datetime(df["tecmax_time"]) - day0).dt.total_seconds() / 60.0
-    ).to_numpy()
-    bin_idx = np.clip((t_event_min // bin_minutes).astype(int), 0, n_bins - 1)
-    B = np.zeros((n_events, n_bins), dtype=np.float32)
-    B[np.arange(n_events), bin_idx] = 1.0
-
-    w = max(int(round(window_hours * 60.0 / bin_minutes)), 1)
+    glat, glon, peaks = compute_global_density_peaks(
+        df, day, radii_km=radii_km, grid_deg=grid_deg,
+        window_hours=window_hours, bin_minutes=bin_minutes,
+    )
 
     has_tracks = ground_tracks is not None and not ground_tracks.empty
     n_panels = len(radii_km) + (1 if has_tracks else 0)
@@ -554,16 +608,12 @@ def plot_global_occultation_density(
     ]
 
     for ax, r in zip(axes, radii_km):
-        spatial_mask = (dist_flat <= r).astype(np.float32)      # (n_cells, n_events)
-        counts_per_bin = spatial_mask @ B                        # (n_cells, n_bins)
-        csum = np.cumsum(
-            np.pad(counts_per_bin, ((0, 0), (1, 0))), axis=1)    # (n_cells, n_bins+1)
-        rolling = csum[:, w:] - csum[:, :-w]                     # (n_cells, n_bins-w+1)
-        peak = rolling.max(axis=1).reshape(glat.shape)           # (M, N)
+        peak = peaks[r]
+        vmax = vmax_by_radius.get(r) if vmax_by_radius else None
 
         mesh = ax.pcolormesh(
             glon, glat, peak, transform=ccrs.PlateCarree(),
-            cmap=cmap, shading="auto",
+            cmap=cmap, shading="auto", vmin=0, vmax=vmax,
         )
         ax.add_feature(cfeature.COASTLINE, linewidth=0.5, edgecolor="black")
         ax.add_feature(cfeature.BORDERS, linewidth=0.3, edgecolor="dimgray", alpha=0.5)
