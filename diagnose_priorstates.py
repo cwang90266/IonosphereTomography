@@ -1,4 +1,4 @@
-#!/home/austinhunter/Downloads/PlanetiQ_Code/venv311/bin/python3.11
+#python3.11; diaganose prior state of KF EKF
 """
 demo_isr_da_comparison.py
 
@@ -1236,6 +1236,106 @@ def _run_parametric_ekf(
         prior_mean=mean_state, return_diagnostics=return_diagnostics,
         free_params=free_params, param_stages=param_stages,
     )
+
+    # ============================================================
+    # Prior-state diagnostics
+    # ============================================================
+    diag_dir = Path(save_dir) / "prior_diagnostics"
+    diag_dir.mkdir(parents=True, exist_ok=True)
+
+    kf_prior  = np.asarray(prior_edp, dtype=float)
+    ekf_prior = np.asarray(ekf_result["prior_edp"], dtype=float)
+
+    def _rmse(a, b):
+        mask = np.isfinite(a) & np.isfinite(b)
+        return np.sqrt(np.mean((a[mask] - b[mask])**2)) if mask.any() else np.nan
+
+    print("\n========== PRIOR DIAGNOSTICS ==========")
+    print("KF prior shape :", kf_prior.shape)
+    print("EKF prior shape:", ekf_prior.shape)
+
+    # test 1: KF prior the same as newly generated IRI
+    if iri_edp is not None and iri_edp.shape == kf_prior.shape:
+        print(
+            "KF prior vs raw IRI RMSE:",
+            f"{_rmse(kf_prior, iri_edp):.3e} m^-3"
+        )
+    else:
+        print("Cannot directly compare KF prior and raw IRI: shape mismatch")
+
+    # test 2: 8 parameters reconstruct IRI
+    if iri_edp is not None and iri_edp.shape == ekf_prior.shape:
+        print(
+            "8-param prior vs raw IRI RMSE:",
+            f"{_rmse(ekf_prior, iri_edp):.3e} m^-3"
+        )
+
+    print(
+        "EKF prior vs KF prior RMSE:",
+        f"{_rmse(ekf_prior, kf_prior):.3e} m^-3"
+    )
+
+    # Per-voxel reconstruction error
+    if iri_edp is not None and iri_edp.shape == ekf_prior.shape:
+        voxel_rmse = np.sqrt(
+            np.nanmean((ekf_prior - iri_edp)**2, axis=0)
+        )
+
+        print("Median voxel reconstruction RMSE:",
+            f"{np.nanmedian(voxel_rmse):.3e} m^-3")
+        print("Maximum voxel reconstruction RMSE:",
+            f"{np.nanmax(voxel_rmse):.3e} m^-3")
+
+        np.savez(
+            diag_dir / f"{group_key}_prior_edp_diagnostic.npz",
+            altitude_km=alt_grid,
+            grid_lats=grid_lats,
+            grid_lons=grid_lons,
+            kf_prior=kf_prior,
+            raw_iri=iri_edp,
+            ekf_8param_prior=ekf_prior,
+            prior_parameters=mean_state,
+            voxel_rmse=voxel_rmse,
+        )
+
+    def _flatten_kf_tec(res):
+        measured, prior = [], []
+
+        for sl in res.get("tec_slices", []):
+            measured.extend(np.asarray(sl["measured"]).ravel())
+            prior.extend(np.asarray(sl["prior_tec"]).ravel())
+
+        return np.asarray(measured), np.asarray(prior)
+
+
+    def _flatten_ekf_tec(result):
+        measured, prior = [], []
+
+        for sl in result.get("tec_slices", []):
+            measured.extend(np.asarray(sl["tec_truth"]).ravel())
+            prior.extend(np.asarray(sl["prior_tec"]).ravel())
+
+        return np.asarray(measured), np.asarray(prior)
+
+
+    kf_obs, kf_prior_tec = _flatten_kf_tec(res_kf)
+    ekf_obs, ekf_prior_tec = _flatten_ekf_tec(ekf_result)
+
+    print("\nTEC diagnostic:")
+    print("KF ray count :", len(kf_obs))
+    print("EKF ray count:", len(ekf_obs))
+
+    print("Stored KF prior TEC RMSE :", res_kf.get("prior_tec_rmse"))
+    print("Stored EKF prior TEC RMSE:", ekf_result.get("prior_rmse"))
+
+    print("Recomputed KF TEC RMSE :",
+        f"{_rmse(kf_obs, kf_prior_tec):.3f} TECU")
+
+    print("Recomputed EKF TEC RMSE:",
+        f"{_rmse(ekf_obs, ekf_prior_tec):.3f} TECU")
+    
+
+
     _plot_ekf_convergence(
         residual_history=ekf_result["residual_history"],
         update_norm_history=ekf_result["update_norm_history"],
