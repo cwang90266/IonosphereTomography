@@ -70,8 +70,8 @@ from .ionospheric_state import (
 
 # Topside shape parameter (IRI default)
 _R_TOPSIDE: float = 100.0
-# E-layer half-thickness (km)
-_H_E_KM: float = 20.0
+# E-layer scale height (km)
+_H_E_KM: float = 15.0
 # 1 TECU = 1e16 m^-2
 _TECU: float = 1.0e16
 
@@ -176,14 +176,50 @@ def _ne_profile_ensemble(
     exp_z = np.exp(np.clip(z_top, -80, 80))
     Ne_top = 4.0 * NmF2 * exp_z / (1.0 + exp_z) ** 2
 
-    # ── Transition altitude h_ST (one value per member) ───────────────────────
-    # Bisection is over members only; broadcast to (1, n_members) for altitude masks.
-    h_ST = _find_hst_bisection(NmF2, hmF2, B0, B1, NmE)  # (n_members,)
-    # Safety: h_ST must lie in [hmE, hmF2]
-    h_ST = np.clip(h_ST, hmE, hmF2)    # (n_members,)
+    # # ── Transition altitude h_ST (one value per member) ───────────────────────
+    # # Bisection is over members only; broadcast to (1, n_members) for altitude masks.
+    # h_ST = _find_hst_bisection(NmF2, hmF2, B0, B1, NmE)  # (n_members,)
+    # # Safety: h_ST must lie in [hmE, hmF2]
+    # h_ST = np.clip(h_ST, hmE, hmF2)    # (n_members,)
+    # ── Physically constrain B0 so natural h_ST >= hmE + 10 km ────────────────
+    HST_MIN_GAP_KM = 10.0
+    HST_MAX_GAP_KM = 50.0
+
+    # x_ST determined only by NmF2, NmE and B1
+    B0_unit = np.ones_like(B0)
+
+    h_ST_unit = _find_hst_bisection(
+        NmF2, hmF2, B0_unit, B1, NmE
+    )
+
+    x_ST = np.maximum(hmF2 - h_ST_unit, 1e-6)
+
+    # upper bound on B0
+    B0_max_physical = (
+        hmF2 - hmE - HST_MIN_GAP_KM
+    ) / x_ST
+
+    # lower bound on B0
+    B0_min_physical = (
+        hmF2 - hmE - HST_MAX_GAP_KM
+    ) / x_ST
+
+    B0_min_physical = np.maximum(B0_min_physical, 1e-3)
+    B0_max_physical = np.maximum(B0_max_physical, B0_min_physical)
+
+    B0_eff = np.clip(
+        B0,
+        B0_min_physical,
+        B0_max_physical,
+    )
+
+    h_ST = _find_hst_bisection(
+        NmF2, hmF2, B0_eff, B1, NmE
+    )
 
     # ── Region 2: Pure F2 bottomside  (h_ST <= h < hmF2) ─────────────────────
-    Ne_pure_bot = _pure_bottomside(hmF2, B0, B1, NmF2, h)   # (n_alt, n_members)
+    # Ne_pure_bot = _pure_bottomside(hmF2, B0, B1, NmF2, h)   # (n_alt, n_members)
+    Ne_pure_bot = _pure_bottomside(hmF2, B0_eff, B1, NmF2, h)
 
     # ── Region 3: Intermediate connection (hmE <= h < h_ST) — smoothstep blend
     # Ne_A = direct branch (= Ne_pure_bot, reused); Ne_B = mirror-image branch
@@ -193,7 +229,8 @@ def _ne_profile_ensemble(
     # while removing the derivative cusp at the valley midpoint.
     h_eff_inter = hmE + h_ST - h                                  # (n_alt, n_members)
     Ne_A_int    = Ne_pure_bot
-    Ne_B_int    = _pure_bottomside(hmF2, B0, B1, NmF2, h_eff_inter)
+    # Ne_B_int    = _pure_bottomside(hmF2, B0, B1, NmF2, h_eff_inter)
+    Ne_B_int = _pure_bottomside(hmF2, B0_eff, B1, NmF2, h_eff_inter)
 
     t_blend = np.clip((h - hmE) / (h_ST - hmE + 1e-9), 0.0, 1.0)  # (n_alt, n_members)
     w_blend = 3.0 * t_blend ** 2 - 2.0 * t_blend ** 3
