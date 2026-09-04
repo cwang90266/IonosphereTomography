@@ -213,7 +213,7 @@ def get_IRI2020_EDP(DateTime: str,
 
     import tempfile
 
-    IRIPath     = "/home/austinhunter/IonosphereTomography/iri2020_new/src/iri2020/"
+    IRIPath     = "~/Desktop/tomography_project/iri2020_new/src/iri2020/"
     IRIDataPath = IRIPath + "data/"
     exe         = IRIPath + "iri2020_namelist_driver"
     apf107_src  = IRIDataPath + "apf107.dat"
