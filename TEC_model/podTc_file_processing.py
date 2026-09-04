@@ -162,6 +162,8 @@ def parse_podTc2_nc_file(file_path):
             leo_masked = podTc2_data['LEO'][:, valid_alt_mask]
             gnss_masked = podTc2_data['GNSS'][:, valid_alt_mask]
             time_masked = podTc2_data['time'][valid_alt_mask]
+            snr_l1_masked = podTc2_data['caL1_SNR'][valid_alt_mask]
+            snr_l2_masked = podTc2_data['pL2_SNR'][valid_alt_mask]
             tangent_alt_masked = tangent_alt_km[valid_alt_mask]
 
             # 5. Determine occultation type (Rising vs Setting) and conditionally flip
@@ -175,6 +177,8 @@ def parse_podTc2_nc_file(file_path):
                 podTc2_data['GNSS'] = np.flip(gnss_masked, axis=1)
                 podTc2_data['time'] = np.flip(time_masked)
                 podTc2_data['tangent_alt_km'] = np.flip(tangent_alt_masked)
+                podTc2_data['caL1_SNR'] = np.flip(snr_l1_masked)
+                podTc2_data['pL2_SNR']  = np.flip(snr_l2_masked)
                 podTc2_data['occ_type'] = 'setting'
             else:
                 # Reassign back into dictionary, straight pass
@@ -182,6 +186,8 @@ def parse_podTc2_nc_file(file_path):
                 podTc2_data['LEO'] = leo_masked
                 podTc2_data['GNSS'] = gnss_masked
                 podTc2_data['time'] = time_masked
+                podTc2_data['caL1_SNR'] = snr_l1_masked
+                podTc2_data['pL2_SNR']  = snr_l2_masked
                 podTc2_data['tangent_alt_km'] = tangent_alt_masked
                 podTc2_data['occ_type'] = 'rising'
 
