@@ -57,6 +57,7 @@ import pandas as pd
 import pyproj
 import scipy.linalg as la
 from scipy.spatial import cKDTree
+from scipy.sparse import csr_matrix, vstack
 
 # ── Project infrastructure ────────────────────────────────────────────────────
 from TEC_model.igs_tec_pipeline import (
@@ -1349,6 +1350,7 @@ def run_info_window(
     all_tp_lons: list[float]      = []
     all_tec_obs: list[float]      = []
     arc_sizes:   list[int]        = []
+    H_diag_blocks: list[csr_matrix] = []
 
     for ce in clean_window:
         gnss     = ce["GNSS"]
@@ -1395,11 +1397,22 @@ def run_info_window(
 
         H_arc = _build_H_matrix(arc_rays, alt_grid, grid_lats, grid_lons)
         # Feed finite rows into the accumulator; H_arc is discarded after this call
+        H_finite = H_arc[fin]
+
+        H_diag_blocks.append(
+            csr_matrix(H_finite)
+        )
+
         info.update(H_arc[fin], y_arc[fin])
 
     n_total = len(all_rays)
     if n_total == 0 or info.n_obs == 0:
         return None
+
+    H_voxel_sparse = vstack(
+        H_diag_blocks,
+        format="csr",
+    )
 
     all_tp_lats_arr = np.array(all_tp_lats)
     all_tp_lons_arr = np.array(all_tp_lons)
@@ -1495,6 +1508,7 @@ def run_info_window(
         "grid_lats":        np.asarray(grid_lats, dtype=float),
         "grid_lons":        np.asarray(grid_lons, dtype=float),
         "arc_sizes":        arc_sizes,
+        "H_voxel_sparse":   H_voxel_sparse,
         # Info-form-specific diagnostics
         "info_n_arcs":      info.n_arcs,
         "info_n_obs":       info.n_obs,

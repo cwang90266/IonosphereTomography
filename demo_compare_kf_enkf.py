@@ -159,7 +159,7 @@ def _build_gnss_to_leo_ray(
     ----------
     gnss_pt_km : (3,)  GNSS satellite ECEF position in km.
     leo_pt_km  : (3,)  LEO satellite ECEF position in km.
-    n_pts      : Number of sample points along the path (before altitude filter).
+    n_pts      : Number of sample points along the path.
     alt_min_km : Minimum altitude to retain (km).
     alt_max_km : Maximum altitude to retain (km).
 
@@ -1018,7 +1018,7 @@ def _state_from_iri_direct(
 
     hm_f2 = np.clip(hm_f2, 100.0, 600.0)
     b0    = np.clip(b0,    20.0,  300.0)
-    b1    = np.clip(b1,    0.5,   4.0)
+    b1    = np.clip(b1,    1.0,   4.0)
     nm_e  = max(nm_e, 1.0) if nm_e > 0 else max(nm_f2 * 0.05, 1e9)
     hm_e  = np.clip(hm_e, 80.0, 180.0) if hm_e > 0 else 110.0
 
@@ -1072,7 +1072,7 @@ def _state_from_iri_direct(
     params_log[2] = np.clip(params_log[2], 10.0,  200.0)
     params_log[3] = np.clip(params_log[3], 0.01,  2.0)
     params_log[4] = np.clip(params_log[4], 20.0,  300.0)
-    params_log[5] = np.clip(params_log[5], 0.5,   4.0)
+    params_log[5] = np.clip(params_log[5], 1.0,   4.0)
     params_log[6] = np.clip(params_log[6], 7.0,   12.0)
     params_log[7] = np.clip(params_log[7], 80.0,  180.0)
 
@@ -1375,7 +1375,7 @@ def _covariance_from_edp_samples(
     P_b : ndarray, shape (N_STATE, N_STATE)
     C_spatial : ndarray, shape (n_geo, n_geo) — symmetric, PD, diagonal = 1.
     """
-    physical_floor = 1e8   # m^-3, same floor the KF applies before np.cov
+    physical_floor = 1e7   # m^-3, same floor the KF applies before np.cov
 
     ne_all   = np.asarray(eds_occ.edps,         dtype=float)  # (n_height, n_geo, n_s)
     feat_all = np.asarray(eds_occ.feature_edps, dtype=float)  # (n_feat,   n_geo, n_s)

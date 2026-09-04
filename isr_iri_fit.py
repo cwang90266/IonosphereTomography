@@ -269,7 +269,7 @@ def fit_iri_to_isr_profile(
     fit_e      = optimize_e_layer and has_e_data and init_params["NME"] is not None
 
     # ── Physical bounds ────────────────────────────────────────────────────────
-    NE_ABS_LO = 1e8    # sub-D-region noise floor (m⁻³)
+    NE_ABS_LO = 1e7    # sub-D-region noise floor (m⁻³)
     NE_ABS_HI = 1e13   # implausible upper ceiling (m⁻³)
     GAP       = 10.0   # minimum km separation enforced between every layer pair
 

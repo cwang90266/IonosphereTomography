@@ -49,21 +49,21 @@ from demo import build_daily_global_edps, extract_robust_f2_peak
 
 FILES = [
     (
-        "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/"
+        "/home/pin/Desktop/tomography_project/piq_data/podTc2/"
         "2025.153/podTc2_GN05.2025.153.01.31.0025.C35.00_0000.0001_nc",
         "C35 — high-alt only, proper TEC",
     ),
     (
-        "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/"
+        "/home/pin/Desktop/tomography_project/piq_data/podTc2/"
         "2025.153/podTc2_GN05.2025.153.01.07.0027.E12.01_0000.0001_nc",
         "E12 — full occ, bad topside TEC",
     ),
     (
-        "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.153/podTc2_GN04.2025.153.00.42.0025.G18.01_0000.0001_nc",
+        "/home/pin/Desktop/tomography_project/piq_data/podTc2/2025.153/podTc2_GN04.2025.153.00.42.0025.G18.01_0000.0001_nc",
         "G18 — full occ, bad topside TEC",
     ),
     (
-         "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2/2025.153/podTc2_GN04.2025.153.18.48.0025.R03.00_0000.0001_nc",
+         "/home/pin/Desktop/tomography_project/piq_data/podTc2/2025.153/podTc2_GN04.2025.153.18.48.0025.R03.00_0000.0001_nc",
          "R03 — full occ, good topside TEC",
     ),
     # (
