@@ -993,7 +993,7 @@ class EDPSamples(xr.Dataset):
         return p1, p2, p3
 
     @staticmethod
-    def genGlobalArea(dSpace: float) -> tuple[np.ndarray, np.ndarray]:
+    def genGlobalArea(dSpace: float=5.0) -> tuple[np.ndarray, np.ndarray]:
         """
         Approximately equal-area triangular mesh covering the entire globe.
     
