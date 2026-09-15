@@ -2065,19 +2065,19 @@ class EDPSamples(xr.Dataset):
         return ds
 
     @property
-    def edps(self) -> xr.DataArray:
+    def edps(self) -> np.ndarray:
         """Main field (height, geo, sample)."""
         ds = self[self.VAR_EDPS]
         return ds.to_numpy()
 
     @property
-    def feature_edps(self) -> xr.DataArray:
+    def feature_edps(self) -> np.ndarray:
         """Main field (height, geo, sample)."""
         ds = self[self.VAR_FEDPS]
         return ds.to_numpy()
 
     @property
-    def mesh(self) -> xr.DataArray | None:
+    def mesh(self) -> np.ndarray | None:
         """(triangle, 3) vertex indices into ``geo``, or ``None`` if absent."""
         if self.VAR_MESH in self.data_vars:
             ds=self[self.VAR_MESH]

@@ -8,10 +8,15 @@ Created on Wed Sep  9 08:18:22 2026
 
 @author: cwang
 """
+from __future__ import annotations
+
 import numpy as np
-from typing import Literal
+import xarray as xr
 import warnings
 from scipy.optimize import minimize
+from edp_samples import EDPSamples
+from pathlib import Path
+from typing import Literal, Any
 
 def density_10ex(log10_density:np.array,minlog10Density:float=4)->np.array:
     idx = np.where(log10_density<minlog10Density)
@@ -36,7 +41,7 @@ def log10_param(density:np.array,minlog10Density:float=4)->np.array:
 def _ne_profile_derivatives(
     alts_km: np.ndarray,
     params_lin: np.ndarray,
-    partial: bool =True 
+    partial: bool =True,
 ) -> tuple:
     """
     Compute Ne and analytical ∂Ne(h)/∂P_k for each altitude and each state parameter.
@@ -370,7 +375,7 @@ def _ne_profile_derivatives(
     if partial:
         return Ne_ensemble
 
-    dNe_dP_ensemble = dNe_dP_ensemble.reshape([n_alt, N_STATE, params_shape[1:-1]])    
+    dNe_dP_ensemble = dNe_dP_ensemble.reshape([n_alt, N_STATE]+list(params_shape)[1:])    
     return Ne_ensemble, dNe_dP_ensemble
 
 def extract_robust_f2_peak(profile: np.ndarray, alt_grid: np.ndarray,
@@ -603,6 +608,7 @@ def _fit_bottomside_B0_B1(
 def _fit_iri_params(
     ne_profile: np.ndarray,
     alt_grid: np.ndarray,
+    param_bound: dict
 ) -> np.ndarray:
     """
     Fit the 8 IRI parametric state vector components to a Ne(h) profile using
@@ -694,9 +700,22 @@ def _fit_iri_params(
     # Nelder-Mead over the whole profile can mop up residual valley/E coupling.
     # Accepted ONLY if it strictly lowers the whole-profile log-RMSE, so it can
     # never regress the region fits.
-    _lo = np.array([8.0, 100.0, 5.0, 0.05, 20.0, 0.5, 7.0, 80.0])
-    _hi = np.array([13.0, 600.0, 300.0, 2.0, 300.0, 4.0, 12.0, 180.0])
-
+    _lo = np.array([param_bound['log10_NmF2'][0],
+                    param_bound['hmF2'][0],
+                    param_bound['H0'][0],   
+                    param_bound['gamma'][0],
+                    param_bound['B0'][0],
+                    param_bound['B1'][0],
+                    param_bound['log10_NmE'][0],
+                    param_bound['hmE'][0]])
+    _hi = np.array([param_bound['log10_NmF2'][1],
+                    param_bound['hmF2'][1],
+                    param_bound['H0'][1],   
+                    param_bound['gamma'][1],
+                    param_bound['B0'][1],
+                    param_bound['B1'][1],
+                    param_bound['log10_NmE'][1],
+                    param_bound['hmE'][1]])
     def _residual(x):
         p = np.minimum(np.maximum(x, _lo), _hi)
         params_lin = np.array([
@@ -720,30 +739,234 @@ def _fit_iri_params(
         pass
 
     # Clamp to physically plausible bounds
-    x0[0] = np.clip(x0[0], 9.0, 13.0)    # log10(NmF2)
-    x0[1] = np.clip(x0[1], 100.0, 600.0) # hmF2
-    x0[2] = np.clip(x0[2], 10.0, 300.0)  # H0
-    x0[3] = np.clip(x0[3], 0.05, 2.0)    # gamma
-    x0[4] = np.clip(x0[4], 20.0, 300.0)  # B0
-    x0[5] = np.clip(x0[5], 0.5, 4.0)     # B1
-    x0[6] = np.clip(x0[6], 7.0, 12.0)    # log10(NmE)
-    x0[7] = np.clip(x0[7], 80.0, 180.0)  # hmE
+    x0[0] = np.clip(x0[0], param_bound['log10_NmF2'][0], param_bound['log10_NmF2'][1])    # log10(NmF2)
+    x0[1] = np.clip(x0[1], param_bound['hmF2'][0], param_bound['hmF2'][1]) # hmF2
+    x0[2] = np.clip(x0[2], param_bound['H0'][0], param_bound['H0'][1])  # H0
+    x0[3] = np.clip(x0[3], param_bound['gamma'][0], param_bound['gamma'][1])    # gamma
+    x0[4] = np.clip(x0[4], param_bound['B0'][0], param_bound['B0'][1])  # B0
+    x0[5] = np.clip(x0[5], param_bound['B1'][0], param_bound['B1'][1])     # B1
+    x0[6] = np.clip(x0[6], param_bound['log10_NmE'][0], param_bound['log10_NmE'][1])    # log10(NmE)
+    x0[7] = np.clip(x0[7], param_bound['hmE'][0], param_bound['hmE'][1])  # hmE
 
     return x0   # (N_STATE,) in log-space convention
 
-Parameterization_Style = Literal['density_10ex','ANCHOR']    
+def PCA2EDP_1D(PCA_state:np.ndarray,PCA:np.ndarray,
+               linear:bool=True, minlog10Density:float=4)->np.ndarray:
+    #
+    # From coefficient space to EDP space.
+    # 1 PCA matrix has the dimension nAlt, nPCA
+    # PCA_State has the dimension nPCA, nPts, nSample
+    # EDP has the dimension nAlt, nPts, nSample
+    #
+    PCA_state_shape = PCA_state.shape
+    PCA_shape =PCA.shape
+    assert PCA_state_shape[0] == PCA_shape[1], "The dimesnions of PCA_State and PCA are inconsistent"
+    PCA_state = PCA_state.reshape(PCA_state_shape[0],-1)
+    density = PCA @ PCA_state
+    density_shape = [PCA_shape[0]]+list(PCA_state_shape)[1:]
+    density = density.reshape(density_shape)
+    if not linear:
+        density = 10 ** density
+    return density
+
+def EDP2PCA_1D(density:np.ndarray,PCA:np.ndarray,
+               linear:bool=True, minlog10Density:float=4)->np.ndarray:
+    #
+    # Project density to PCA coefficients
+    # 1 PCA matrix has the dimension nAlt, nPCA
+    # EDP has the dimension nAlt, nPts, nSample
+    # PCA_State has the dimension nPCA, nPts, nSample
+    #
+    density_shape = density.shape
+    PCA_shape =PCA.shape
+    assert density_shape[0] == PCA_shape[0], "The dimesnions of density and PCA are inconsistent"
+    density = density.reshape(density_shape[0],-1)
+    if not linear:
+        density[np.where(density<10**minlog10Density)]=10*minlog10Density
+        density = np.log10(density)
+        
+    PCA_state = PCA.T @ density
+    PCA_state_shape = [PCA_shape[1]]+list(density_shape)[1:]
+    PCA_state = PCA_state.reshape(PCA_state_shape)
+    return PCA_state
+
+def PCA2EDP_1D_map(PCA_state:np.ndarray,PCA:np.ndarray,
+                   linear:bool=True, minlog10Density:float=4)->np.ndarray:    
+    #
+    # From coefficient space to EDP space.
+    # 1 PCA matrix has the dimension nAlt, nPCA
+    # PCA_State has the dimension nPCA, nPts, nSample
+    # PCA2EDP_map has the dimension nAlt, nPCA, nPts, nSample
+    #
+    PCA_state_shape = PCA_state.shape
+    PCA_shape =PCA.shape
+    assert PCA_state_shape[0] == PCA_shape[1], "The dimesnions of PCA_State and PCA are inconsistent"
+    A = np.ones(PCA_state_shape[1:])
+    PCA2EDP_map = np.kron(A,PCA)
+    if not linear:
+        PCA2EDP_map = np.log(10)*PCA2EDP_map
+        PCA_state = PCA_state.reshape(PCA_state_shape[0],-1)
+        density = PCA @ PCA_state
+        density_shape = [PCA_shape[0],1]+list(PCA_state_shape)[1:]
+        density = density.reshape(density_shape)
+        density = 10 ** density
+        for idx in range(PCA_shape[1]):
+            PCA2EDP_map[:,idx,:,:] = PCA2EDP_map[:,idx,:,:] * density
+    return PCA2EDP_map
+
+def PCA2EDP_3D(PCA_state:np.ndarray,PCA:np.ndarray,
+               linear:bool=True, minlog10Density:float=4)->np.ndarray:
+    #
+    # From coefficient space to EDP space.
+    # 3D PCA matrix has the dimension nAlt, nPts, nPCA
+    # PCA_State has the dimension nPCA, nSample
+    # EDP has the dimension nAlt, nPts, nSample
+    #
+    PCA_state_shape = PCA_state.shape
+    PCA_shape =PCA.shape
+    assert PCA_state_shape[0] == PCA_shape[2], "The dimesnions of PCA_State and PCA are inconsistent"
+    PCA = PCA.reshape([PCA_shape[0]*PCA_shape[1],PCA_shape[2]])
+    PCA_state = PCA_state.reshape(PCA_state_shape[0],-1)
+    density = PCA @ PCA_state
+    density_shape = [PCA_shape[0],PCA_shape[1],PCA_state_shape[1]]
+    density = density.reshape(density_shape)
+    if not linear:
+        density = 10** density
+    return density
+
+def EDP2PCA_3D(density:np.ndarray,PCA:np.ndarray,
+               linear:bool=True, minlog10Density:float=4)->np.ndarray:
+    #
+    # Project density to PCA coefficients
+    # 3D PCA matrix has the dimension nAlt, nPts, nPCA
+    # EDP has the dimension nAlt, nPts, nSample
+    # PCA_State has the dimension nPCA, nSample
+    #
+    density_shape = density.shape
+    PCA_shape =PCA.shape
+    assert density_shape[0] == PCA_shape[0], "The dimesnions of density and PCA are inconsistent"
+    assert density_shape[1] == PCA_shape[1], "The dimesnions of density and PCA are inconsistent"
+    density = density.reshape([density_shape[0]*density_shape[1],density_shape[2]])
+    if not linear:
+        density[np.where(density<10**minlog10Density)]=10*minlog10Density
+        density = np.log10(density)
+        
+    PCA = PCA.reshape([PCA_shape[0]*PCA_shape[1],PCA_shape[2]])
+    PCA_state = PCA.T @ density
+    PCA_state_shape = [PCA_shape[2],density_shape[2]]
+    PCA_state = PCA_state.reshape(PCA_state_shape)
+    return PCA_state
+
+def PCA2EDP_3D_map(PCA_state:np.ndarray,PCA:np.ndarray,
+                   linear:bool=True, minlog10Density:float=4)->np.ndarray:    
+    #
+    # From coefficient space to EDP space.
+    # 3D PCA matrix has the dimension nAlt, nPts, nPCA
+    # PCA_state has the dimension nPCA, nSample
+    # PCA2EDP_map has the dimension nAlt, nPts, nPCA, nSample
+    #
+    PCA_state_shape = PCA_state.shape
+    PCA_shape = PCA.shape
+    assert PCA_state_shape[0] == PCA_shape[2], "The dimesnions of PCA_State and PCA are inconsistent"
+    A = np.ones(PCA_state_shape[1:])
+    PCA2EDP_map = np.kron(A,PCA)
+    if not linear:
+        PCA = PCA.shape([PCA_shape[0]*PCA_shape[1],PCA_shape[2]])
+        density = PCA @ PCA_state
+        density_shape = [PCA_shape[0],PCA_shape[1],1,PCA_state_shape[1]]
+        density = density.reshape(density_shape)
+        density = 10 ** density
+        PCA2EDP_map = np.log(10)* PCA2EDP_map
+        for idx in range(PCA_shape[2]):
+            PCA2EDP_map[:,:,idx,:] = PCA2EDP_map[:,:,idx,:]*density
+            
+    return PCA2EDP_map
+
+def get_PCA(edps:np.ndarray, retaining_threshold:float)-> np.ndarray:
+    nSize, n_sample = edps.shape()
+    # Mean-centre; treat NaNs as zero perturbation so they don't inflate variance
+    edps_mean = np.nanmean(edps, axis=1, keepdims=True)
+    edps_c    = np.where(np.isnan(edps), 0.0, edps - edps_mean).astype(np.float32)
+    if nSize <= n_sample:
+        edps_sq = edps_c @ edps_c.T
+        eigenval, eigenvect = np.linalg.eigh(edps_sq)
+        singularval = np.sqrt(eigenval)
+        idx = np.where(singularval/singularval[-1]<=retaining_threshold)
+        PCA = eigenvect[:,idx]
+    else:
+        edps_sq =  edps_c.T @ edps_c
+        eigenval, eigenvect = np.linalg.eigh(edps_sq)
+        singularval = np.sqrt(eigenval)
+        idx = np.where(singularval/singularval[-1]<=retaining_threshold)
+        sv = edps_c @ eigenvect
+        PCA = sv[:,idx]
+        
+    return PCA
+        
+        
+    
+Parameterization_Style = Literal['density_10ex','ANCHOR','PCA_1D','PCA_3D','PCA_1D_10ex','PCA_3D_10ex']    
 
 class EDP_Parameterization:
-    def __init__(cls,bounds:np.array=None,style: Parameterization_Style = 'density_10ex'):
-        cls.bounds = bounds
+    def __init__(cls,style: Parameterization_Style = 'density_10ex',
+                 hyper_params:dict=None):
         cls.style = style
+        match style:
+            case 'ANCHOR':
+                if hyper_params is None:
+                    cls.hyper_params ={'log10_NmF2':[9.0, 13.0],
+                                'hmF2':[100.0, 600.0],
+                                'H0':[10.0, 300.0],
+                                'gamma':[0.05, 2.0],
+                                'B0':[20.0, 300.0],
+                                'B1':[0.5, 4.0],
+                                'log10_NmE':[7.0, 12.0],
+                                'hmE':[80.0, 180.0],
+                                'N_STATE':8}
+                else:
+                    cls.bhyper_params = hyper_params
+                    
+            case 'density_10ex':
+                if hyper_params is None:
+                    cls.hyper_params ={'minlog10Density':4}
+                else:
+                    cls.hyper_params = hyper_params
+            case 'PCA_1D' | 'PCA_1D_10ex':
+                if hyper_params is None:
+                    raise ValueError(f"Parameterization {cls.style} requires PCA in hyper_params.")
+                if not 'PCA' in hyper_params.keys:    
+                    raise ValueError(f"Parameterization {cls.style} requires PCA in hyper_params.")
+                if not hyper_params['PCA'].ndim == 2:
+                    raise ValueError(f"Parameterization {cls.style} requires PCA to be 2-dimensional (nAlt,nPCA).")
+                cls.hyper_params = hyper_params
+            case 'PCA_3D'|'PCA_3D_10ex':
+                if hyper_params is None:
+                    raise ValueError(f"Parameterization {cls.style} requires PCA in hyper_params.")
+                if not 'PCA' in hyper_params.keys:    
+                    raise ValueError(f"Parameterization {cls.style} requires PCA in hyper_params.")
+                if not hyper_params['PCA'].ndim == 3:
+                    raise ValueError(f"Parameterization {cls.style} requires PCA to be 3-dimensional (nAlt,nGrid,nPCA).")
+    
     
     def get_density(self, param_vec: np.array, alt:np.array=None)-> np.array:
         match self.style:
             case 'density_10ex':
-                density = density_10ex(param_vec)
+                density = density_10ex(param_vec,
+                                       minlog10Density=self.hyper_params['minlog10Density'])
             case 'ANCHOR':
                 density = _ne_profile_derivatives(alt,param_vec,partial=False)   
+            case 'PCA_1D':
+                density = PCA2EDP_1D(param_vec,self.hyper_params['PCA'],
+                                     linear=True, minlog10Density=4)
+            case 'PCA_1D_10ex':
+                density = PCA2EDP_1D(param_vec,self.hyper_params['PCA'],
+                                     linear=False, minlog10Density=4)
+            case 'PCA_3D':
+                density = PCA2EDP_3D(param_vec,self.hyper_params['PCA'],
+                                     linear=True, minlog10Density=4)
+            case 'PCA_3D_10ex':
+                density = PCA2EDP_3D(param_vec,self.hyper_params['PCA'],
+                                     linear=False, minlog10Density=4)                
             case _:
                 raise ValueError(f"Parameterization, {self.style} not defined.")
         return density
@@ -751,9 +974,22 @@ class EDP_Parameterization:
     def get_parameter(self, density:np.array, alt:np.array=None)-> np.array:
         match self.style:
             case 'density_10ex':
-                param_vec = log10_param(density)
+                param_vec = log10_param(density,
+                                       minlog10Density=self.hyper_params['minlog10Density'])
             case 'ANCHOR':
-                param_vec = _fit_iri_params(density,alt)
+                param_vec = _fit_iri_params(density,alt,param_bounds=self.hyper_params)
+            case 'PCA_1D':
+                param_vec = EDP2PCA_1D(density,self.hyper_params['PCA'],
+                                     linear=True, minlog10Density=4)
+            case 'PCA_1D_10ex':
+                param_vec = EDP2PCA_1D(density,self.hyper_params['PCA'],
+                                     linear=False, minlog10Density=4)
+            case 'PCA_3D':
+                param_vec = EDP2PCA_3D(density,self.hyper_params['PCA'],
+                                     linear=True, minlog10Density=4)
+            case 'PCA_3D_10ex':
+                param_vec = EDP2PCA_3D(density,self.hyper_params['PCA'],
+                                     linear=False, minlog10Density=4)                
             case _:
                 raise ValueError(f"Parameterization, {self.style} not defined.")
         return param_vec
@@ -761,11 +997,217 @@ class EDP_Parameterization:
         match self.style:
             case 'density_10ex':
                 Jacb_matrix_style = 'diagonal'
-                Jacobian = Jacobian_density_10ex(param_vec)
+                Jacobian = Jacobian_density_10ex(param_vec,
+                                       minlog10Density=self.hyper_params['minlog10Density'])
             case 'ANCHOR':
                 Jacb_matrix_style = 'block_diagonal'
                 density, Jacobian = _ne_profile_derivatives(alt,param_vec)
+            case 'PCA_1D':
+                Jacb_matrix_style = 'block_diagonal'
+                Jacobian = PCA2EDP_1D_map(param_vec,self.hyper_params['PCA'],
+                                     linear=True, minlog10Density=4)
+            case 'PCA_1D_10ex':
+                Jacb_matrix_style = 'block_diagonal'
+                Jacobian = PCA2EDP_1D_map(param_vec,self.hyper_params['PCA'],
+                                     linear=False, minlog10Density=4)
+            case 'PCA_3D':
+                Jacb_matrix_style = 'full'
+                Jacobian = PCA2EDP_3D_map(param_vec,self.hyper_params['PCA'],
+                                     linear=True, minlog10Density=4)
+            case 'PCA_3D_10ex':
+                Jacb_matrix_style = 'full'
+                Jacobian = PCA2EDP_3D_map(param_vec,self.hyper_params['PCA'],
+                                     linear=False, minlog10Density=4)                
             case _:
                 raise ValueError(f"Parameterization, {self.style} not defined.")
         return Jacb_matrix_style, Jacobian
+
+class Parameterized_EDPSamples:
+    __slots__ = ('EDPSamples', 'style', 'Parameterization')
+    
+    def __init__(cls, EDP:EDPSamples,style: Parameterization_Style = 'density_10ex',
+                 hyper_params:dict=None):
+        cls.EDPSamples = EDP
+        cls.style = style
         
+        if style in ['PCA_1D','PCA_1D_10ex','PCA_3D','PCA_3D_10ex']:
+            assert "retaining_threshold" in hyper_params.keys(), "For using PCA parameterization, retaining threshold must be provided."
+
+        match cls.style:
+            case 'density_10ex':
+                cls.Parameterization = EDP_Parameterization(style=style,hyper_params=hyper_params)
+                param_vec = cls.Parameterization.get_parameter(cls.EDPSamples.edps,hyper_params=hyper_params)
+                cls.EDPSamples.data_vars["param_vec"]=(
+                                (EDPSamples.DIM_HEIGHT, EDPSamples.DIM_GEO, EDPSamples.DIM_SAMPLE),
+                                param_vec,
+                                {"long_name": "Paramteter Values",
+                                 "description": "electron density profiles samples"}
+                                )
+
+            case 'ANCHOR':
+                cls.Parameterization = EDP_Parameterization(style=style,hyper_params=hyper_params)
+                param_vec = cls.Parameterization.get_parameter(cls.EDPSamples.edps,hyper_params=hyper_params)
+                cls.EDPSamples.data_vars["param_vec"]=(
+                                (EDPSamples.DIM_HEIGHT, EDPSamples.DIM_GEO, EDPSamples.DIM_SAMPLE),
+                                param_vec,
+                                {"long_name": "Paramteter Values",
+                                 "description": "electron density profiles samples"}
+                                )
+            case 'PCA_1D':
+                edps = cls.EDPSamples.edps
+                edps_shape = edps.shape
+                edps = edps.reshape(edps_shape[0],-1)
+                PCA = get_PCA(edps, hyper_params["retaining_threshold"])
+                cls.EDPSamples.data_vars["PCA"]=(
+                                (EDPSamples.DIM_HEIGHT, "nPCA"),
+                                PCA,
+                                {"long_name": "PCA",
+                                 "description": "Principle components"}
+                                )
+                hyper_params['PCA'] = PCA
+                cls.Parameterization = EDP_Parameterization(style=style,hyper_params=hyper_params)
+                param_vec = cls.Parameterization.get_parameter(cls.EDPSamples.edps,hyper_params=hyper_params)
+                cls.EDPSamples.data_vars["param_vec"]=(
+                                (EDPSamples.DIM_HEIGHT, EDPSamples.DIM_GEO, EDPSamples.DIM_SAMPLE),
+                                param_vec,
+                                {"long_name": "Paramteter Values",
+                                 "description": "electron density profiles samples"}
+                                )
+                
+            case 'PCA_1D_10ex':
+                if 'minlog10Density' in hyper_params.keys():
+                    minlog10Density = hyper_params['minlog10Density']
+                else:
+                    minlog10Density = 4
+                    cls.hyper_params['minlog10Density']=4
+                    
+                edps = cls.EDPSamples.edps
+                edps[edps.where(edps<10**minlog10Density)] = 10**minlog10Density
+                edps = np.log10(edps)
+                edps_shape = edps.shape
+                edps = edps.reshape(edps_shape[0],-1)
+                PCA = get_PCA(edps, hyper_params["retaining_threshold"])
+                cls.EDPSamples.data_vars["PCA"]=(
+                                (EDPSamples.DIM_HEIGHT, EDPSamples.DIM_GEO, "nPCA"),
+                                PCA,
+                                {"long_name": "PCA",
+                                 "description": "Principle components"}
+                                )
+                hyper_params['PCA'] = PCA
+                cls.Parameterization = EDP_Parameterization(style=style,hyper_params=hyper_params)
+                param_vec = cls.Parameterization.get_parameter(cls.EDPSamples.edps,hyper_params=hyper_params)
+                cls.EDPSamples.data_vars["param_vec"]=(
+                                (EDPSamples.DIM_HEIGHT, EDPSamples.DIM_GEO, EDPSamples.DIM_SAMPLE),
+                                param_vec,
+                                {"long_name": "Paramteter Values",
+                                 "description": "electron density profiles samples"}
+                                )
+                
+            case 'PCA_3D':
+                edps = cls.EDPSamples.edps
+                edps_shape = edps.shape
+                edps = edps.reshape(edps_shape[0]*edps_shape[1],-1)
+                PCA = get_PCA(edps, hyper_params["retaining_threshold"])
+                nD, nPCA = PCA.shape()
+                PCA = PCA.reshape([edps_shape[0],edps_shape[1],nPCA])
+                cls.EDPSamples.data_vars["PCA"]=(
+                                (EDPSamples.DIM_HEIGHT, EDPSamples.DIM_GEO, "nPCA"),
+                                PCA,
+                                {"long_name": "PCA",
+                                 "description": "Principle components"}
+                                )
+                hyper_params['PCA'] = PCA
+                cls.Parameterization = EDP_Parameterization(style=style,hyper_params=hyper_params)
+                param_vec = cls.Parameterization.get_parameter(cls.EDPSamples.edps,hyper_params=hyper_params)
+                cls.EDPSamples.data_vars["param_vec"]=(
+                                (EDPSamples.DIM_HEIGHT, EDPSamples.DIM_GEO, EDPSamples.DIM_SAMPLE),
+                                param_vec,
+                                {"long_name": "Paramteter Values",
+                                 "description": "electron density profiles samples"}
+                                )
+            case 'PCA_3D_10ex':
+                if 'minlog10Density' in hyper_params.keys():
+                    minlog10Density = hyper_params['minlog10Density']
+                else:
+                    minlog10Density = 4
+                    cls.hyper_params['minlog10Density']=4
+                edps = cls.EDPSamples.edps
+                edps[edps.where(edps<10**minlog10Density)] = 10**minlog10Density
+                edps = np.log10(edps)
+                edps_shape = edps.shape
+                edps = edps.reshape(edps_shape[0]*edps_shape[1],-1)
+                PCA = get_PCA(edps, hyper_params["retaining_threshold"])
+                nD, nPCA = PCA.shape()
+                PCA = PCA.reshape([edps_shape[0],edps_shape[1],nPCA])
+                cls.EDPSamples.data_vars["PCA"]=(
+                                (EDPSamples.DIM_HEIGHT, EDPSamples.DIM_GEO, "nPCA"),
+                                PCA,
+                                {"long_name": "PCA",
+                                 "description": "Principle components"}
+                                )
+                hyper_params['PCA'] = PCA
+                cls.Parameterization = EDP_Parameterization(style=style,hyper_params=hyper_params)
+                param_vec = cls.Parameterization.get_parameter(cls.EDPSamples.edps,hyper_params=hyper_params)
+                cls.EDPSamples.data_vars["param_vec"]=(
+                                (EDPSamples.DIM_HEIGHT, EDPSamples.DIM_GEO, EDPSamples.DIM_SAMPLE),
+                                param_vec,
+                                {"long_name": "Paramteter Values",
+                                 "description": "electron density profiles samples"}
+                                )
+                    
+    
+        cls.EDPSamples.attrs['Parameterization_style']=style
+        for key in hyper_params.keys():
+            if not key == "PCA":
+                cls.EDPSamples.attrs['Parameterization_'+key] =hyper_params[key]
+
+    @classmethod    
+    def fromNetCDF(cls, path: str | Path, **kwargs: Any) -> Parameterized_EDPSamples:
+        """
+        Load an ``Parameterized_EDPSample`` from NetCDF (e.g. written by :meth:`saveNetCDF`).
+
+        The file is read fully into memory, then closed.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            Path to the ``.nc`` file.
+        **kwargs
+            Forwarded to :func:`xarray.open_dataset` (e.g. ``engine``, ``group``,
+            ``decode_times``, ``mask_and_scale``).
+
+        Returns
+        -------
+        Parameterized_EDPSample
+        """
+        with xr.open_dataset(path, **kwargs) as ds:
+            ds.load()
+            EDPSam = Parameterized_EDPSamples.from_xarray(ds)
+            
+            return EDPSam
+
+    @classmethod
+    def from_xarray(cls, ds) -> Parameterized_EDPSamples:
+        EDPSam = EDPSamples.from_xarray(ds)
+        EDPSam.EDPSamples.data_vars = ds.data_vars
+        if 'Parameterization_style' in ds.attrs.keys():
+            style = ds.attrs['Parameterization_style']
+        else: 
+            raise ValueError("The nc4 file does not contain a saved Parameterized_EDPSamples.")
+
+        hyper_params={'style':ds.attrs['Parameterization_style']}
+        for key,value in ds.attrs.keys():
+            if 'Parameterization_' in key:
+                nkey = key.replace("Parameterization_","")
+                hyper_params[nkey] = value
+                
+        if "PCA" in ds.data_vars.keys():
+            hyper_params["PCA"] = ds.data_vars["PCA"].to_numpy()
+
+        Params_EDPS = Parameterized_EDPSamples(EDPSam,style = style,
+                     hyper_params=hyper_params)
+        return Params_EDPS    
+
+    @classmethod
+    def saveNetCDF(self, path: str | Path, **kwargs: Any) -> None:
+        self.EDPSamples.saveNetCDF(path, **kwargs)
