@@ -643,7 +643,7 @@ SWEEP_RESULTS_CSV = "./Data/occ_sweep_results.csv"
 SWEEP_SAVE_DIR    = "./Figures/occ_sweep/"
 
 # Root directory holding per-day podTc2 subfolders ("{YYYY}.{DOY}/").
-SWEEP_PODTC2_ROOT = "/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2"
+SWEEP_PODTC2_ROOT = "/home/pin/Desktop/tomography_project/piq_data/podTc2"
 
 ALT_MIN_TEC   = 100.0   # km — integration band for measured TEC (lower bound)
 ALT_MAX_TEC   = 400.0   # km — integration band for measured TEC (upper bound)
@@ -3388,6 +3388,7 @@ def _process_time_window(
             data["conid"]  = rec["conid"]
             data["prn_id"] = rec["prn_id"]
             data["leo_id"] = rec["leo_id"]
+            data["source_path"] = rec["path"]
             parsed_list.append(data)
         except Exception as exc:
             warnings.warn(f"Could not parse {rec['path']}: {exc}")
@@ -4522,6 +4523,7 @@ def generate_truth_tec(
     List of dicts — one per arc — with keys:
         rays, tec_truth, tp_lats, tp_lons, tang_km, conid, prn_id, leo_id
     """
+    from netCDF4 import Dataset
     obs_truth = ObservationOperator(truth_state, alt_grid)
     arc_list: list[dict] = []
 
@@ -4551,6 +4553,30 @@ def generate_truth_tec(
               f"{n_ep} epochs  "
               f"TEC {tec_truth.min():.1f}–{tec_truth.max():.1f} TECU")
 
+        snr_l1 = None
+        snr_l2 = None
+
+        source_path = arc.get("source_path", None)
+
+        if source_path is not None:
+            try:
+                with Dataset(source_path, "r") as ds:
+
+                    if "caL1_SNR" in ds.variables:
+                        snr_l1 = np.asarray(
+                            ds.variables["caL1_SNR"][:],
+                            dtype=float,
+                        ).squeeze()
+
+                    if "pL2_SNR" in ds.variables:
+                        snr_l2 = np.asarray(
+                            ds.variables["pL2_SNR"][:],
+                            dtype=float,
+                        ).squeeze()
+
+            except Exception as exc:
+                print(f"  [SNR] Could not read SNR from {source_path}: {exc}")
+
         arc_list.append(dict(
             rays      = rays,
             tec_truth = tec_truth,
@@ -4560,6 +4586,8 @@ def generate_truth_tec(
             conid     = conid,
             prn_id    = prn_id,
             leo_id    = leo_id,
+            snr_l1    = snr_l1,
+            snr_l2    = snr_l2,
         ))
 
     return arc_list
@@ -4980,6 +5008,45 @@ def _ekf_param_analytical_jacobian(
 
     return J, y0
 
+def _ekf_common_h_forward_jacobian(
+    mean_state_2d,
+    H_rows,
+    alt_grid,
+):
+    """
+    h(P) = H_voxel @ Ne(P)
+    J(P) = H_voxel @ dNe(P)/dP
+    """
+    from Ionosphere_Tomography_Inverter.ionospheric_state import LOG_INDICES
+
+    n_param, n_geo = mean_state_2d.shape
+    n_alt = len(alt_grid)
+    n_state = n_param * n_geo
+
+    params_lin = mean_state_2d.copy()
+    params_lin[LOG_INDICES] = 10.0 ** params_lin[LOG_INDICES]
+
+    ne = np.zeros((n_alt, n_geo))
+    dNe_dP = np.zeros((n_alt * n_geo, n_state))
+
+    for g in range(n_geo):
+        ne[:, g], deriv = _ne_profile_derivatives(
+            alt_grid,
+            params_lin[:, g],
+        )
+
+        ne_rows = np.arange(n_alt) * n_geo + g
+
+        for k in range(N_STATE):
+            param_col = k * n_geo + g
+            dNe_dP[ne_rows, param_col] = deriv[k, :]
+
+    ne_vector = ne.reshape(-1)
+
+    y_hat = np.asarray(H_rows @ ne_vector).ravel()
+    J = np.asarray(H_rows @ dNe_dP)
+
+    return J, y_hat
 
 def EKF_Param(
     arc_truth_list: list,
@@ -5004,6 +5071,8 @@ def EKF_Param(
     return_diagnostics: bool = False,
     free_params: "list | None" = None,
     param_stages: "list | None" = None,
+    update_ensemble=None,
+    H_voxel=None,
 ) -> dict:
     """
     Iterative Extended Kalman Filter on the parametric IRI state vector.
@@ -5130,10 +5199,16 @@ def EKF_Param(
     """
     from Ionosphere_Tomography_Inverter.enkf_update import flatten_ensemble
 
+    if H_voxel is None:
+        raise ValueError("EKF_Param requires H_voxel.")
+
+    if H_voxel.shape[0] != sum(len(a["rays"]) for a in arc_truth_list):
+        raise ValueError("H_voxel row count does not match EKF ray count.")
+
     n_geo     = model_state.n_grid_points
     n_members = model_state.n_members
     n_occ     = len(arc_truth_list)
-    _idw_k    = min(4, n_geo)
+    _idw_k    = min(4, n_geo) # using 4 points that is cloest to the ray
 
     # ── 1. Decimate update rays (same stride as EnKF / KF) ───────────────────
     rep_rays:          list = []
@@ -5145,6 +5220,9 @@ def EKF_Param(
     arc_all_tec:       list = []
     per_arc_tp_lats:   list = []
     per_arc_tp_lons:   list = []
+
+    rep_row_indices = []
+    global_ray_offset = 0
 
     for arc in arc_truth_list:
         rays    = arc["rays"]
@@ -5167,12 +5245,19 @@ def EKF_Param(
             chosen = list(range(n_s))
 
         for idx in chosen:
+            rep_row_indices.append(global_ray_offset + idx)
             rep_rays.append(rays[idx])
             rep_tp_lats_list.append(float(tp_lats[idx]))
             rep_tp_lons_list.append(float(tp_lons[idx]))
             rep_tec_obs_list.append(float(tec[idx]))
-        arc_update_counts.append(len(chosen))
 
+        arc_update_counts.append(len(chosen))
+        global_ray_offset += n_s
+
+    rep_row_indices = np.asarray(rep_row_indices, dtype=int)
+
+    H_all = H_voxel
+    H_rep = H_voxel[rep_row_indices, :]
     y_obs_arc = np.array(rep_tec_obs_list)   # (n_obs,)
     y_obs_all = np.concatenate(arc_all_tec)
     n_obs     = len(rep_rays)
@@ -5203,32 +5288,94 @@ def EKF_Param(
     # including member 0 — is a random draw of (mean + perturbation), so the
     # member-0 fallback is NOT the background and makes the prior stochastic /
     # non-reproducible.  Passing prior_mean pins P_0 to the true IRI mean.
-    X_f = flatten_ensemble(model_state.ensemble)         # (n_state, M)
-    mu  = X_f.mean(axis=1)                               # (n_state,) ensemble mean
-    X_c = X_f - mu[:, np.newaxis]                        # (n_state, M) anomalies
+
+    # X_f = flatten_ensemble(model_state.ensemble)         # (n_state, M)
+    # mu  = X_f.mean(axis=1)                               # (n_state,) ensemble mean
+    # X_c = X_f - mu[:, np.newaxis]                        # (n_state, M) anomalies
+    # nm1 = max(n_members - 1, 1)
+    #     if prior_mean is not None:
+    #     P_0 = np.asarray(prior_mean, dtype=float).reshape(-1)   # (n_state,)
+    #     if P_0.shape[0] != X_f.shape[0]:
+    #         raise ValueError(
+    #             f"prior_mean has {P_0.shape[0]} elements but the state "
+    #             f"dimension is {X_f.shape[0]} (= N_STATE * n_grid).")
+    # else:
+    #     P_0 = X_f[:, 0].copy()                           # legacy: ensemble member 0
+    # P_i = P_0.copy()                                     # (n_state,) starting iterate
+
+
+    # ============================================================
+    # TRUE ORIGINAL IRI prior covariance
+    # ============================================================
+
+    X_f_prior = flatten_ensemble(model_state.ensemble)
+
+    mu_prior = X_f_prior.mean(axis=1)
+
+    X_c_prior = (
+        X_f_prior
+        - mu_prior[:, np.newaxis]
+    )
+
     nm1 = max(n_members - 1, 1)
 
+    # ============================================================
+    # Prior STATE — IRI mean
+    # ============================================================
+
     if prior_mean is not None:
-        P_0 = np.asarray(prior_mean, dtype=float).reshape(-1)   # (n_state,)
-        if P_0.shape[0] != X_f.shape[0]:
-            raise ValueError(
-                f"prior_mean has {P_0.shape[0]} elements but the state "
-                f"dimension is {X_f.shape[0]} (= N_STATE * n_grid).")
+        P_0 = np.asarray(
+            prior_mean,
+            dtype=float,
+        ).reshape(-1)
     else:
-        P_0 = X_f[:, 0].copy()                           # legacy: ensemble member 0
-    P_i = P_0.copy()                                     # (n_state,) starting iterate
+        P_0 = mu_prior.copy()
+
+    P_i = P_0.copy()
+
+
+    # ============================================================
+    # Covariance used by EKF UPDATE
+    # ============================================================
+
+    if update_ensemble is not None:
+
+        X_f_update = flatten_ensemble(update_ensemble)
+
+        mu_update = X_f_update.mean(axis=1)
+
+        X_c = (
+            X_f_update
+            - mu_update[:, np.newaxis]
+        )
+
+    else:
+
+        X_c = X_c_prior.copy()
 
     # ── 4. Prior diagnostics (all sample rays) ────────────────────────────────
-    prior_state_snap = IonosphericState(n_geo, n_members=1)
-    prior_state_snap.ensemble = P_i.reshape(N_STATE, n_geo)[:, :, np.newaxis].copy()
-    prior_op  = ObservationOperator(prior_state_snap, alt_grid)
+    # prior_state_snap = IonosphericState(n_geo, n_members=1)
+    # prior_state_snap.ensemble = P_i.reshape(N_STATE, n_geo)[:, :, np.newaxis].copy()
+    # prior_op  = ObservationOperator(prior_state_snap, alt_grid)
 
-    y_prior_all  = prior_op.compute_stec_ensemble(
-        all_sample_rays, grid_point_weights=all_sample_W, n_workers=n_workers,
-    )[:, 0]
-    y_prior_arc  = prior_op.compute_stec_ensemble(
-        rep_rays, grid_point_weights=rep_W, n_workers=n_workers,
-    )[:, 0]
+    # y_prior_all  = prior_op.compute_stec_ensemble(
+    #     all_sample_rays, grid_point_weights=all_sample_W, n_workers=n_workers,
+    # )[:, 0]
+    # y_prior_arc  = prior_op.compute_stec_ensemble(
+    #     rep_rays, grid_point_weights=rep_W, n_workers=n_workers,
+    # )[:, 0]
+    _, y_prior_all = _ekf_common_h_forward_jacobian(
+        P_i.reshape(N_STATE, n_geo),
+        H_all,
+        alt_grid,
+    )
+
+    _, y_prior_arc = _ekf_common_h_forward_jacobian(
+        P_i.reshape(N_STATE, n_geo),
+        H_rep,
+        alt_grid,
+    )
+
 
     prior_inno = y_obs_arc - y_prior_arc
     print(f"  [EKF] Prior innovations  "
@@ -5272,6 +5419,11 @@ def EKF_Param(
 
     X_c_full = X_c                            # pristine prior anomalies
 
+
+    P_cov = (X_c @ X_c.T) / nm1
+    P_cov = 0.5 * (P_cov + P_cov.T)
+
+    initial_error_P = P_cov.copy()
     # ── 6. EKF iteration (block-coordinate over stages) ───────────────────────
     residual_history:    list = []
     update_norm_history: list = []
@@ -5289,6 +5441,12 @@ def EKF_Param(
 
     for stage_idx, stage_free in enumerate(stages):
         free_mask = _free_row_mask(stage_free)
+        P_gain = P_cov.copy()
+
+        frozen = ~free_mask
+
+        P_gain[frozen, :] = 0.0
+        P_gain[:, frozen] = 0.0
         # Freeze by zeroing the anomaly rows of the frozen parameters.
         X_c = X_c_full * free_mask[:, np.newaxis]
         if staged:
@@ -5314,16 +5472,21 @@ def EKF_Param(
             P_2d = P_i.reshape(N_STATE, n_geo)
 
             # Jacobian Ŵ_i = ∂H(P_i)/∂P  and baseline predictions y_hat
-            if jacobian_analytical:
-                J_i, y_hat = _ekf_param_analytical_jacobian(
-                    P_2d, rep_rays, rep_W, alt_grid, n_geo,
-                    n_workers=n_workers,
-                )
-            else:
-                J_i, y_hat = _ekf_param_jacobian(
-                    P_2d, rep_rays, rep_W, alt_grid, n_geo,
-                    eps_rel=eps_jac, n_workers=n_workers,
-                )
+            J_i, y_hat = _ekf_common_h_forward_jacobian(
+                P_2d,
+                H_rep,
+                alt_grid,
+            )
+            # if jacobian_analytical:
+            #     J_i, y_hat = _ekf_param_analytical_jacobian(
+            #         P_2d, rep_rays, rep_W, alt_grid, n_geo,
+            #         n_workers=n_workers,
+            #     )
+            # else:
+            #     J_i, y_hat = _ekf_param_jacobian(
+            #         P_2d, rep_rays, rep_W, alt_grid, n_geo,
+            #         eps_rel=eps_jac, n_workers=n_workers,
+            #     )
 
             # Stash the prior-iterate (very first iteration) Jacobian for the
             # observability read-out: ∂y/∂P at the true IRI background P_0.
@@ -5364,19 +5527,51 @@ def EKF_Param(
             #   P_xy ≈ X_c A_i^T   / nm1       (n_state, n_obs)
             # With frozen rows of X_c zeroed, P_xy rows (and hence dP) are zero
             # for frozen params, and their covariance never enters P_yy.
-            A_i  = J_i @ X_c                             # (n_obs, M)
-            P_yy = (A_i @ A_i.T) / nm1                   # (n_obs, n_obs)
-            P_xy = (X_c @ A_i.T) / nm1                   # (n_state, n_obs)
+  
+            # A_i  = J_i @ X_c                             # (n_obs, M)
+            # P_yy = (A_i @ A_i.T) / nm1                   # (n_obs, n_obs)
+            # P_xy = (X_c @ A_i.T) / nm1                   # (n_state, n_obs)
 
-            S = P_yy + R_mat                             # (n_obs, n_obs)
+            # S = P_yy + R_mat                             # (n_obs, n_obs)
+            # try:
+            #     import scipy.linalg as _la
+            #     K_T = _la.solve(S, P_xy.T, assume_a="pos")   # (n_obs, n_state)
+            # except Exception:
+            #     K_T = np.linalg.lstsq(S, P_xy.T, rcond=None)[0]
+            # G = alpha_eff * K_T.T                        # (n_state, n_obs)
+
+            # dP = G @ innov                               # (n_state,)
+            # P_cov = current ERROR covariance
+
+            JP = J_i @ P_gain
+
+            S = (
+                JP @ J_i.T
+                + R_mat
+            )
+
             try:
                 import scipy.linalg as _la
-                K_T = _la.solve(S, P_xy.T, assume_a="pos")   # (n_obs, n_state)
-            except Exception:
-                K_T = np.linalg.lstsq(S, P_xy.T, rcond=None)[0]
-            G = alpha_eff * K_T.T                        # (n_state, n_obs)
 
-            dP = G @ innov                               # (n_state,)
+                K = _la.solve(
+                    S,
+                    JP,
+                    assume_a="pos",
+                ).T
+
+            except Exception:
+
+                K = np.linalg.lstsq(
+                    S,
+                    JP,
+                    rcond=None,
+                )[0].T
+
+
+            G = alpha_eff * K
+
+            dP = G @ innov
+
 
             # Phase-2a per-element trust region: bound each ΔP element to
             # ±step_clip · prior-std.  Frozen rows have std 0 → ΔP stays 0.
@@ -5391,6 +5586,19 @@ def EKF_Param(
                                   a=f"{alpha_eff:.2f}")
 
             P_i = P_i + dP
+
+            I_state = np.eye(P_cov.shape[0])
+
+            IKH = I_state - G @ J_i
+
+            P_cov = (
+                IKH @ P_cov @ IKH.T
+                + G @ R_mat @ G.T
+            )
+
+            P_cov = 0.5 * (
+                P_cov + P_cov.T
+            )
 
             # Clamp to physical bounds after each step
             if apply_bounds:
@@ -5438,36 +5646,113 @@ def EKF_Param(
     # same convention as P_i.reshape(N_STATE, n_geo) — this is NOT the gridded
     # KF's (n_alt, n_geo) Ne-space ordering, since EKF_Param's state is the 8
     # Chapman/IRI parameters per grid point, not Ne(alt) itself.
-    n_state = N_STATE * n_geo
-    prior_P = (X_c @ X_c.T) / nm1                        # (n_state, n_state)
-    try:
-        import scipy.linalg as _la
-        K_gain = _la.solve(S, P_xy.T, assume_a="pos").T  # (n_state, n_obs), unscaled (no alpha damping)
-    except Exception:
-        K_gain = np.linalg.lstsq(S, P_xy.T, rcond=None)[0].T
-    post_P = prior_P - K_gain @ P_xy.T                   # (I - KH) P_prior
-    post_P = 0.5 * (post_P + post_P.T)                   # enforce symmetry
+
+    # n_state = N_STATE * n_geo
+    # prior_P = (X_c @ X_c.T) / nm1                        # (n_state, n_state)
+    # try:
+    #     import scipy.linalg as _la
+    #     K_gain = _la.solve(S, P_xy.T, assume_a="pos").T  # (n_state, n_obs), unscaled (no alpha damping)
+    # except Exception:
+    #     K_gain = np.linalg.lstsq(S, P_xy.T, rcond=None)[0].T
+    # post_P = prior_P - K_gain @ P_xy.T                   # (I - KH) P_prior
+    # post_P = 0.5 * (post_P + post_P.T)                   # enforce symmetry
+
+    # Original untouched IRI covariance
+    prior_P = (
+        X_c_prior @ X_c_prior.T
+    ) / nm1
+
+    # Actual final error covariance used by EKF
+    post_P = P_cov.copy()
 
     # ── 7. Posterior predictions (all sample rays) ────────────────────────────
-    P_post_2d   = P_i.reshape(N_STATE, n_geo)
-    post_state  = IonosphericState(n_geo, n_members=1)
-    post_state.ensemble = P_post_2d[:, :, np.newaxis].copy()
-    post_op = ObservationOperator(post_state, alt_grid)
+    # P_post_2d   = P_i.reshape(N_STATE, n_geo)
+    # post_state  = IonosphericState(n_geo, n_members=1)
+    # post_state.ensemble = P_post_2d[:, :, np.newaxis].copy()
+    # post_op = ObservationOperator(post_state, alt_grid)
 
-    y_post_all = post_op.compute_stec_ensemble(
-        all_sample_rays, grid_point_weights=all_sample_W, n_workers=n_workers,
-    )[:, 0]
-    y_post_arc = post_op.compute_stec_ensemble(
-        rep_rays, grid_point_weights=rep_W, n_workers=n_workers,
-    )[:, 0]
+    # y_post_all = post_op.compute_stec_ensemble(
+    #     all_sample_rays, grid_point_weights=all_sample_W, n_workers=n_workers,
+    # )[:, 0]
+    # y_post_arc = post_op.compute_stec_ensemble(
+    #     rep_rays, grid_point_weights=rep_W, n_workers=n_workers,
+    # )[:, 0]
+    P_post_2d = P_i.reshape(N_STATE, n_geo)
+
+    _, y_post_all = _ekf_common_h_forward_jacobian(
+        P_post_2d,
+        H_all,
+        alt_grid,
+    )
+
+    _, y_post_arc = _ekf_common_h_forward_jacobian(
+        P_post_2d,
+        H_rep,
+        alt_grid,
+    )
+
+    post_state = IonosphericState(n_geo, n_members=1)
+    post_state.ensemble = P_post_2d[:, :, np.newaxis].copy()
 
     post_inno = y_obs_arc - y_post_arc
     print(f"  [EKF] Posterior innovations  "
           f"mean={post_inno.mean():.2f}  std={post_inno.std():.2f}  "
           f"max_abs={np.abs(post_inno).max():.2f} TECU")
 
-    prior_rmse = float(np.sqrt(np.nanmean((y_obs_all - y_prior_all) ** 2)))
-    post_rmse  = float(np.sqrt(np.nanmean((y_obs_all - y_post_all) ** 2)))
+    # prior_rmse = float(np.sqrt(np.nanmean((y_obs_all - y_prior_all) ** 2)))
+    # post_rmse  = float(np.sqrt(np.nanmean((y_obs_all - y_post_all) ** 2)))
+    # ── TEC RMSE: use absolute-TEC RO rays only, matching gridded KF ──────────────
+    #
+    # Relative conPhs TEC contains an unknown carrier-phase offset.
+    # It can still be assimilated by the EKF, but must NOT be included
+    # in the reported prior/post TEC RMSE, matching the KF definition.
+
+    abs_mask = np.concatenate([
+        np.ones(ray_counts[i], dtype=bool)
+        if arc_truth_list[i].get("tec_type", "absolute") != "relative"
+        else np.zeros(ray_counts[i], dtype=bool)
+        for i in range(len(arc_truth_list))
+    ])
+
+    # Also reject any non-finite values
+    prior_valid = (
+        abs_mask
+        & np.isfinite(y_obs_all)
+        & np.isfinite(y_prior_all)
+    )
+
+    post_valid = (
+        abs_mask
+        & np.isfinite(y_obs_all)
+        & np.isfinite(y_post_all)
+    )
+
+    prior_rmse = (
+        float(np.sqrt(np.mean(
+            (y_obs_all[prior_valid] - y_prior_all[prior_valid]) ** 2
+        )))
+        if prior_valid.any()
+        else np.nan
+    )
+
+    post_rmse = (
+        float(np.sqrt(np.mean(
+            (y_obs_all[post_valid] - y_post_all[post_valid]) ** 2
+        )))
+        if post_valid.any()
+        else np.nan
+    )
+
+    print(
+        f"  [EKF] TEC RMSE using absolute TEC only: "
+        f"{prior_valid.sum()}/{len(y_obs_all)} rays"
+    )
+
+    print(
+        f"  [EKF] Prior RMSE {prior_rmse:.3f} TECU  →  "
+        f"Post RMSE {post_rmse:.3f} TECU"
+    )
+
     print(f"  [EKF] Prior RMSE {prior_rmse:.3f} TECU  →  "
           f"Post RMSE {post_rmse:.3f} TECU")
 
@@ -5518,6 +5803,9 @@ def EKF_Param(
         prior_P              = prior_P,                  # (n_state, n_state), param-major/geo-minor
         post_P               = post_P,
         tec_slices           = tec_slices,
+        y_obs_all            = y_obs_all,
+        y_prior_all          = y_prior_all,
+        y_post_all           = y_post_all,
         prior_rmse           = prior_rmse,
         post_rmse            = post_rmse,
         all_prior_resid      = all_prior_resid,
@@ -5542,8 +5830,100 @@ def EKF_Param(
         prior_y_hat          = y_hat_prior,   # (n_obs,) prior sTEC predictions
         prior_obs_sigma      = float(sigma_obs),
         n_grid_points        = n_geo,
+        initial_error_P      = initial_error_P,
     )
 
+def _parameter_covariance_8x8(P_full, n_geo):
+
+    P8 = np.zeros((N_STATE, N_STATE))
+
+    for i in range(N_STATE):
+        sli = slice(
+            i * n_geo,
+            (i + 1) * n_geo,
+        )
+
+        for j in range(N_STATE):
+            slj = slice(
+                j * n_geo,
+                (j + 1) * n_geo,
+            )
+
+            block = P_full[sli, slj]
+
+            # same-location covariance across the horizontal grid
+            P8[i, j] = np.mean(np.diag(block))
+
+    return P8
+
+def plot_initial_ekf_error_covariance(
+    ekf_result,
+    save_path,
+    title="",
+):
+
+    P = np.asarray(
+        ekf_result["initial_error_P"],
+        dtype=float,
+    )
+
+    n_geo = len(ekf_result["grid_lats"])
+
+    P8 = _parameter_covariance_8x8(
+        P,
+        n_geo,
+    )
+
+    std = np.sqrt(
+        np.maximum(
+            np.diag(P8),
+            1e-30,
+        )
+    )
+
+    C8 = P8 / np.outer(std, std)
+    C8 = np.clip(C8, -1, 1)
+
+    fig, ax = plt.subplots(
+        figsize=(15, 12)
+    )
+
+    im = ax.imshow(
+        C8,
+        cmap="coolwarm",
+        vmin=-1,
+        vmax=1,
+        origin="lower",
+    )
+
+    ax.set_xticks(range(N_STATE))
+    ax.set_yticks(range(N_STATE))
+
+    ax.set_xticklabels(
+        PARAM_NAMES,
+        rotation=45,
+        ha="right",
+    )
+
+    ax.set_yticklabels(PARAM_NAMES)
+
+    ax.set_title(title)
+
+    cb = fig.colorbar(im, ax=ax)
+
+    cb.set_label(
+        "Initial error correlation"
+    )
+
+    fig.tight_layout()
+
+    fig.savefig(
+        save_path,
+        dpi=200,
+        bbox_inches="tight",
+    )
+
+    plt.close(fig)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # §10  EnKF TEC + globe + EDP spaghetti plot

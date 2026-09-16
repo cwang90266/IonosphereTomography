@@ -278,7 +278,7 @@ class IonosphericState:
         [10.,  200.],   # H0           km  (topside scale height parameter)
         [0.01, 1.5],    # gamma        (dimensionless topside shape)
         [20.,  500.],   # B0           km  (bottomside thickness)
-        [0.3,  3.0],    # B1           (dimensionless bottomside shape, must be > 0)
+        [1.0,  3.0],    # B1           (dimensionless bottomside shape, must be > 0)
         [8.0,  12.0],   # log10(NmE)   m^-3
         [90.,  130.],   # hmE          km
     ])

@@ -27,6 +27,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+plt.rcParams.update({
+    "font.size": 20,
+    "axes.titlesize": 20,
+    "axes.labelsize": 20,
+    "xtick.labelsize": 20,
+    "ytick.labelsize": 20,
+    "legend.fontsize": 20,
+})
 import matplotlib.dates as mdates
 import matplotlib.gridspec as gridspec
 from matplotlib.gridspec import GridSpec
@@ -117,6 +125,20 @@ _CONFIG_STYLES = {
 }
 
 
+def _obs_mode_display_label(obs_mode: str) -> str:
+    """Return a compact label for an observation mode for plots and legends."""
+    return {
+        "ro_only": "RO",
+        "ro_igs": "IGS & RO",
+        "igs_only": "IGS",
+    }.get(obs_mode, obs_mode.replace("_", " ").title())
+
+
+def _mode_filter_display_label(obs_mode: str, filter_type: str) -> str:
+    """Return a compact label like 'RO · KF' for plot legends and titles."""
+    return f"{_obs_mode_display_label(obs_mode)} · {_FILTER_LABELS.get(filter_type, filter_type)}"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Moved from demo_group.py
 # ─────────────────────────────────────────────────────────────────────────────
@@ -151,6 +173,68 @@ def _draw_roi_boundary(ax, region_key: str) -> None:
         ax.plot([lon0] * n_pts, lats_lr,      **kw)            # west edge
         ax.plot([lon1] * n_pts, lats_lr,      **kw,            # east edge + label
                 label=f"ROI: {lat0:.0f}–{lat1:.0f}°N  {lon0:.0f}–{lon1:.0f}°E")
+
+
+def _plot_window_roi_context(
+    ax,
+    filter_results: dict,
+    isr_lat: float,
+    isr_lon: float,
+) -> None:
+    """Plot the ISR site, ROI boundary, and nearby occultation tangency points."""
+    from demo_compare_kf_enkf import _arc_representative_tangent
+
+    region = None
+    for obs_mode in ("ro_only", "ro_igs", "igs_only"):
+        for filter_type in ("gridded_kf", "parametric_ekf"):
+            result = filter_results.get(obs_mode, {}).get(filter_type)
+            if result is None:
+                continue
+            region = result.get("region") or region
+
+    if region is None:
+        region = "GLOBAL"
+
+    ax.set_global()
+    ax.add_feature(cfeature.LAND, facecolor="whitesmoke", zorder=0)
+    ax.add_feature(cfeature.OCEAN, facecolor="aliceblue", zorder=0)
+    ax.add_feature(cfeature.COASTLINE.with_scale("110m"), lw=0.4, edgecolor="gray")
+    ax.gridlines(lw=0.2, alpha=0.3)
+
+    try:
+        _draw_roi_boundary(ax, region)
+    except Exception:
+        pass
+
+    ax.scatter(isr_lon, isr_lat, color="black", marker="*", s=260, zorder=5, label="ISR")
+    ax.text(isr_lon, isr_lat + 4.0, "ISR", color="black", fontsize=16, ha="center", va="bottom")
+
+    overlay_count = 0
+    for obs_mode in ("ro_only", "ro_igs", "igs_only"):
+        for filter_type in ("gridded_kf", "parametric_ekf"):
+            result = filter_results.get(obs_mode, {}).get(filter_type)
+            if result is None:
+                continue
+            colour, _ = _CONFIG_STYLES.get((obs_mode, filter_type), ("gray", "-"))
+            for occ in result.get("clean_list", []) or []:
+                try:
+                    lat, lon = _arc_representative_tangent(
+                        np.asarray(occ.get("LEO", [])), np.asarray(occ.get("GNSS", []))
+                    )
+                except Exception:
+                    continue
+                if not (np.isfinite(lat) and np.isfinite(lon)):
+                    continue
+                ax.scatter(lon, lat, color=colour, s=18, alpha=0.65, zorder=4)
+                overlay_count += 1
+                if overlay_count >= 200:
+                    break
+            if overlay_count >= 200:
+                break
+        if overlay_count >= 200:
+            break
+
+    ax.set_title("ROI + occultations near ISR site", fontsize=20)
 
 
 def _roi_centre_idx(verts_geo: np.ndarray, region_key: str) -> int:
@@ -221,7 +305,7 @@ def _plot_altitude_slices(
     )
     fig.suptitle(
         f"ΔNe (posterior − prior) at altitude slices — {result['time_window']}  |  {region}",
-        fontsize=13,
+        fontsize=20,
     )
 
     # Pre-compute mean time for terminator — parse the time_window string directly
@@ -261,7 +345,7 @@ def _plot_altitude_slices(
             )
             cbar = fig.colorbar(tc, ax=ax, orientation="horizontal",
                                 shrink=0.7, pad=0.03, fraction=0.04)
-            cbar.set_label("ΔNe [m⁻³]", fontsize=7)
+            cbar.set_label("ΔNe [m⁻³]", fontsize=20)
             cbar.formatter.set_powerlimits((-2, 2))
             cbar.update_ticks()
         except Exception:
@@ -273,7 +357,7 @@ def _plot_altitude_slices(
             except Exception:
                 pass
         _draw_roi_boundary(ax, region)
-        ax.set_title(f"{true_alt:.0f} km", fontsize=10)
+        ax.set_title(f"{true_alt:.0f} km", fontsize=20)
 
     os.makedirs(save_dir, exist_ok=True)
     safe_key  = group_key.replace("/", "_").replace(" ", "_")
@@ -387,7 +471,7 @@ def _plot_covariance_panels_tagged(
     fig.suptitle(
         f"EDP Covariance Structure — {result['time_window']}  |  {region}\n"
         f"Horizontal slice at {true_alt_ref:.0f} km  ·  ★ = centre vertex",
-        fontsize=12,
+        fontsize=20,
     )
     gs = GridSpec(2, 2, figure=fig,
                   left=0.06, right=0.97, top=0.90, bottom=0.07,
@@ -407,9 +491,9 @@ def _plot_covariance_panels_tagged(
         )
         ax_aa.axhline(true_alt_ref, color="gold", lw=1.0, ls="--", alpha=0.8)
         ax_aa.axvline(true_alt_ref, color="gold", lw=1.0, ls="--", alpha=0.8)
-        ax_aa.set_xlabel("Altitude (km)", fontsize=9)
-        ax_aa.set_ylabel("Altitude (km)", fontsize=9)
-        ax_aa.set_title(f"{row_lbl} — Alt-Alt Correlation", fontsize=10)
+        ax_aa.set_xlabel("Altitude (km)", fontsize=20)
+        ax_aa.set_ylabel("Altitude (km)", fontsize=20)
+        ax_aa.set_title(f"{row_lbl} — Alt-Alt Correlation", fontsize=20)
         fig.colorbar(pcm, ax=ax_aa, label="Pearson r", fraction=0.046, pad=0.04)
 
         # ── Right: horizontal correlation globe ───────────────────────────────
@@ -431,7 +515,7 @@ def _plot_covariance_panels_tagged(
             )
             cb = fig.colorbar(tc, ax=ax_gl, orientation="horizontal",
                               shrink=0.75, pad=0.04, fraction=0.04)
-            cb.set_label("Pearson r", fontsize=8)
+            cb.set_label("Pearson r", fontsize=20)
         except Exception:
             pass
 
@@ -443,7 +527,7 @@ def _plot_covariance_panels_tagged(
         _draw_roi_boundary(ax_gl, region)
         ax_gl.set_title(
             f"{row_lbl} — Horizontal Correlation at {true_alt_ref:.0f} km",
-            fontsize=10,
+            fontsize=20,
         )
 
     os.makedirs(save_dir, exist_ok=True)
@@ -605,7 +689,7 @@ def _plot_group(
         f"{n_occ} occultation(s)  —  "
         f"Prior RMSE {result['prior_tec_rmse']:.2f} → "
         f"Post RMSE {result['post_tec_rmse']:.2f} TECU",
-        fontsize=12,
+        fontsize=20,
     )
     gs = GridSpec(_n_rows, 4, figure=fig,
                   width_ratios=[1, 1, 1.5, 1.2],
@@ -619,7 +703,7 @@ def _plot_group(
         cfg = CONSTELLATION_CONFIG.get(const, {"name": const, "title_color": "black"})
         ax  = fig.add_subplot(gs[row, col],
                               sharey=first_tec if first_tec is not None else None)
-        ax.set_title(cfg["name"], fontsize=9, color=cfg["title_color"], fontweight="bold")
+        ax.set_title(cfg["name"], fontsize=20, color=cfg["title_color"], fontweight="bold")
         ax.grid(True, alpha=0.3, ls=":")
         ax_tec[const] = ax
         if first_tec is None:
@@ -663,7 +747,7 @@ def _plot_group(
     fig_tec.suptitle(
         f"All TEC Profiles — {result['time_window']}  |  Region: {region}  |  "
         f"GN: {leo_str}\n{n_occ} occultation(s)",
-        fontsize=11,
+        fontsize=20,
     )
     gs_tec = GridSpec(4 if _has_igs_tec else 2, 2, figure=fig_tec,
                        wspace=0.35, hspace=0.5)
@@ -675,7 +759,7 @@ def _plot_group(
             gs_tec[row, col],
             sharey=_first_tec_all if _first_tec_all is not None else None,
         )
-        ax.set_title(cfg["name"], fontsize=9, color=cfg["title_color"], fontweight="bold")
+        ax.set_title(cfg["name"], fontsize=20, color=cfg["title_color"], fontweight="bold")
         ax.grid(True, alpha=0.3, ls=":")
         _ax_tec_all[const] = ax
         if _first_tec_all is None:
@@ -705,11 +789,11 @@ def _plot_group(
         entries = _all_const_legend.get(const, [])
         if entries:
             leg_h = entries + (_all_tec_style if not _all_style_placed else [])
-            ax_a.legend(handles=leg_h, fontsize=7, loc="upper right", framealpha=0.85)
+            ax_a.legend(handles=leg_h, fontsize=20, loc="upper right", framealpha=0.85)
             _all_style_placed = True
         else:
             ax_a.text(0.5, 0.5, "No data", transform=ax_a.transAxes,
-                      ha="center", va="center", color="lightgray", fontsize=11,
+                      ha="center", va="center", color="lightgray", fontsize=20,
                       style="italic")
         ax_a.set_ylim(*alt_ylim)
         if const in ("G", "R"):
@@ -731,9 +815,9 @@ def _plot_group(
         for const, (row, col) in _CONST_POS.items():
             cfg = CONSTELLATION_CONFIG.get(const, {"name": const, "title_color": "black"})
             ax  = fig_tec.add_subplot(gs_tec[row + 2, col])
-            ax.set_title(f"IGS sTEC — {cfg['name']}", fontsize=9,
+            ax.set_title(f"IGS sTEC — {cfg['name']}", fontsize=20,
                          color=cfg["title_color"], fontweight="bold")
-            ax.set_xlabel("Elevation angle (deg)", fontsize=8)
+            ax.set_xlabel("Elevation angle (deg)", fontsize=20)
             ax.grid(True, alpha=0.3, ls=":", axis="y")
             _ax_igs_all[const] = ax
 
@@ -786,11 +870,11 @@ def _plot_group(
         ]
         for const, ax_i in _ax_igs_all.items():
             if _has_bars[const]:
-                ax_i.legend(handles=_igs_all_style, fontsize=7,
+                ax_i.legend(handles=_igs_all_style, fontsize=20,
                             loc="upper right", framealpha=0.85)
             else:
                 ax_i.text(0.5, 0.5, "No data", transform=ax_i.transAxes,
-                          ha="center", va="center", color="lightgray", fontsize=11,
+                          ha="center", va="center", color="lightgray", fontsize=20,
                           style="italic")
             if const in ("G", "R"):
                 ax_i.set_ylabel("sTEC (TECU)")
@@ -889,12 +973,12 @@ def _plot_group(
 
         if entries:
             leg_handles = entries + (style_entries if not style_placed else [])
-            ax_t.legend(handles=leg_handles, fontsize=7, loc="upper right",
+            ax_t.legend(handles=leg_handles, fontsize=20, loc="upper right",
                         framealpha=0.85)
             style_placed = True
         else:
             ax_t.text(0.5, 0.5, "No data", transform=ax_t.transAxes,
-                      ha="center", va="center", color="lightgray", fontsize=11,
+                      ha="center", va="center", color="lightgray", fontsize=20,
                       style="italic")
 
         ax_t.set_ylim(*alt_ylim)
@@ -927,7 +1011,7 @@ def _plot_group(
             )
             cbar = fig.colorbar(tc, ax=ax2, orientation="horizontal",
                                 shrink=0.75, pad=0.04, fraction=0.04)
-            cbar.set_label(f"ΔNe at hmF2 ({hmF2_label}) [m⁻³]", fontsize=8)
+            cbar.set_label(f"ΔNe at hmF2 ({hmF2_label}) [m⁻³]", fontsize=20)
             cbar.formatter.set_powerlimits((-2, 2))
             cbar.update_ticks()
     except Exception:
@@ -985,7 +1069,7 @@ def _plot_group(
         f"ΔNe at hmF2 ({hmF2_label}) + Raypaths + ROI\n"
         "(solid=top, dashed=TEC-max, dotted=bottom  ★=centre)"
     )
-    ax2.legend(loc="lower left", fontsize=7, framealpha=0.75)
+    ax2.legend(loc="lower left", fontsize=20, framealpha=0.75)
 
     # ── Panel 3 (top): KF prior / posterior EDPs ─────────────────────────────
     # log-x, capped at 1e13; ax3_abel shares this xaxis (sharex=ax3_kf) so
@@ -1050,7 +1134,7 @@ def _plot_group(
                      mec="black", mew=1.0, zorder=9,
                      label="Millstone Hill ISR")
 
-    ax3_kf.legend(handles=kf_legend_lines, fontsize=7, loc="upper right")
+    ax3_kf.legend(handles=kf_legend_lines, fontsize=20, loc="upper right")
     ax3_kf.set_title("EDP — Prior / Posterior\n(★ = centre vertex, ▲ = ISR truth)"
                      if isr_profiles else
                      "EDP — Prior / Posterior\n(★ = centre vertex)")
@@ -1094,7 +1178,7 @@ def _plot_group(
                    label=f"ISR truth ({len(isr_profiles)} sweeps)"),
         ]
 
-    ax3_abel.legend(handles=abel_legend_lines, fontsize=7, loc="upper right")
+    ax3_abel.legend(handles=abel_legend_lines, fontsize=20, loc="upper right")
     ax3_abel.set_xlabel("Electron Density (m⁻³)")
     ax3_abel.set_title("Abel Ne Profiles  (▲ = ISR truth)" if isr_profiles
                        else "Abel Ne Profiles")
@@ -1184,7 +1268,7 @@ def _plot_igs_covariance_panels(
         f"{result.get('time_window', group_key)}  |  {region}\n"
         f"Prior shown analytically (Kronecker C_v ⊗ C_s, not densified)  ·  "
         f"Posterior shown as variance only at {true_alt_ref:.0f} km  ·  ★ = centre vertex",
-        fontsize=11,
+        fontsize=20,
     )
     gs = GridSpec(2, 2, figure=fig, left=0.06, right=0.97, top=0.86, bottom=0.07,
                   wspace=0.30, hspace=0.40)
@@ -1199,9 +1283,9 @@ def _plot_igs_covariance_panels(
     )
     ax_v.axhline(true_alt_ref, color="gold", lw=1.0, ls="--", alpha=0.8)
     ax_v.axvline(true_alt_ref, color="gold", lw=1.0, ls="--", alpha=0.8)
-    ax_v.set_xlabel("Altitude (km)", fontsize=9)
-    ax_v.set_ylabel("Altitude (km)", fontsize=9)
-    ax_v.set_title("Prior Vertical Correlation C_v (analytical input)", fontsize=10)
+    ax_v.set_xlabel("Altitude (km)", fontsize=20)
+    ax_v.set_ylabel("Altitude (km)", fontsize=20)
+    ax_v.set_title("Prior Vertical Correlation C_v (analytical input)", fontsize=20)
     fig.colorbar(pcm, ax=ax_v, label="Correlation", fraction=0.046, pad=0.04)
 
     # [0,1] Prior horizontal correlation C_s at centre vertex
@@ -1220,7 +1304,7 @@ def _plot_igs_covariance_panels(
         )
         cb = fig.colorbar(tc, ax=ax_h, orientation="horizontal",
                            shrink=0.75, pad=0.04, fraction=0.04)
-        cb.set_label("Correlation", fontsize=8)
+        cb.set_label("Correlation", fontsize=20)
     except Exception:
         pass
     ctr_lon = float(verts_geo[centre_idx, 0])
@@ -1228,7 +1312,7 @@ def _plot_igs_covariance_panels(
     ax_h.plot(ctr_lon, ctr_lat, transform=ccrs.Geodetic(),
               marker="*", color="gold", ms=12, mec="black", mew=0.8, zorder=8)
     _draw_roi_boundary(ax_h, region)
-    ax_h.set_title("Prior Horizontal Correlation C_s (analytical input)", fontsize=10)
+    ax_h.set_title("Prior Horizontal Correlation C_s (analytical input)", fontsize=20)
 
     # [1,0] Posterior std-dev map (variance only — no cross-correlation)
     ax_p = fig.add_subplot(gs[1, 0], projection=proj)
@@ -1246,11 +1330,11 @@ def _plot_igs_covariance_panels(
         )
         cb2 = fig.colorbar(tc2, ax=ax_p, orientation="horizontal",
                             shrink=0.75, pad=0.04, fraction=0.04)
-        cb2.set_label("Posterior σ(Ne) [m⁻³]", fontsize=8)
+        cb2.set_label("Posterior σ(Ne) [m⁻³]", fontsize=20)
     except Exception:
         pass
     _draw_roi_boundary(ax_p, region)
-    ax_p.set_title(f"Posterior Std-Dev at {true_alt_ref:.0f} km (variance only)", fontsize=10)
+    ax_p.set_title(f"Posterior Std-Dev at {true_alt_ref:.0f} km (variance only)", fontsize=20)
 
     # [1,1] Blank note panel — truthful about what wasn't computed
     ax_note = fig.add_subplot(gs[1, 1])
@@ -1262,7 +1346,7 @@ def _plot_igs_covariance_panels(
         "plan.md, Q1). Densifying the full posterior covariance here would\n"
         "risk the same O(n³) memory blowup the SRIF batch-update fix was\n"
         "written to avoid.",
-        ha="center", va="center", fontsize=9.5,
+        ha="center", va="center", fontsize=20,
         bbox=dict(boxstyle="round", facecolor="whitesmoke", edgecolor="gray"),
     )
 
@@ -1602,13 +1686,13 @@ def _plot_isr_tec_vs_obs(
             key    = (obs_mode, filter_type)
             panel  = tec_panels.get(key)
             colour, _ls = _CONFIG_STYLES.get(key, ("gray", "-"))
-            title_prefix = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}"
+            title_prefix = _mode_filter_display_label(obs_mode, filter_type)
 
             if panel is None:
                 ax.text(0.5, 0.5, "No data", transform=ax.transAxes,
                         ha="center", va="center", color="lightgray",
-                        fontsize=12, style="italic")
-                ax.set_title(title_prefix, fontsize=10)
+                        fontsize=20, style="italic")
+                ax.set_title(title_prefix, fontsize=20)
                 continue
 
             # RO arcs (x = tangent altitude) plot altitude on the y-axis and
@@ -1622,23 +1706,23 @@ def _plot_isr_tec_vs_obs(
                         alpha=0.75, label="Prior")
                 ax.plot(panel["post"],  panel["x"], color=colour, lw=1.6, ls=":",
                         alpha=0.95, label="Posterior")
-                ax.set_xlabel("sTEC (TECU)", fontsize=8)
-                ax.set_ylabel(panel["xlabel"], fontsize=8)
+                ax.set_xlabel("sTEC (TECU)", fontsize=20)
+                ax.set_ylabel(panel["xlabel"], fontsize=20)
             else:
                 ax.plot(panel["x"], panel["measured"], color="black", lw=2.0, label="Measured")
                 ax.plot(panel["x"], panel["prior"], color=colour, lw=1.4, ls="--",
                         alpha=0.75, label="Prior")
                 ax.plot(panel["x"], panel["post"],  color=colour, lw=1.6, ls=":",
                         alpha=0.95, label="Posterior")
-                ax.set_xlabel(panel["xlabel"], fontsize=8)
-                ax.set_ylabel("sTEC (TECU)", fontsize=8)
+                ax.set_xlabel(panel["xlabel"], fontsize=20)
+                ax.set_ylabel("sTEC (TECU)", fontsize=20)
             ax.grid(True, alpha=0.3, ls=":")
-            ax.legend(fontsize=7, loc="best")
+            ax.legend(fontsize=20, loc="best")
             ax.set_title(
                 f"{title_prefix} vs measured obs — {panel['label']}\n"
                 f"RMSE prior={panel['prior_rmse']:.3f}  post={panel['post_rmse']:.3f} TECU  "
                 f"(arc {panel['dist_deg']:.2f}° from site)",
-                fontsize=8.5,
+                fontsize=20,
             )
 
     fig.suptitle(
@@ -1646,7 +1730,7 @@ def _plot_isr_tec_vs_obs(
         f"TEC vs. MEASURED obs (nearest arc to site {isr_lat:.2f}°, {isr_lon:.2f}°) "
         f"— NOT ISR truth (ISR measures Ne, not slant TEC)\n"
         f"F10.7={solar['f107']:.0f}  Ap={solar['ap']}",
-        fontsize=12, fontweight="bold",
+        fontsize=20, fontweight="bold",
     )
     fig.tight_layout(rect=[0, 0, 1, 0.92])
 
@@ -1699,7 +1783,7 @@ def _plot_isr_edp_spaghetti(
     for p in isr_profiles:
         isr_alt = np.asarray(p["alt_km"], dtype=float)
         isr_ne  = np.asarray(p["ne_m3"],  dtype=float)
-        valid = (isr_ne > 1e8) & np.isfinite(isr_ne)
+        valid = (isr_ne > 1e7) & np.isfinite(isr_ne)
         if valid.sum() < ISR_MIN_VALID_GATES:
             continue
         valid_profiles.append((p, isr_alt, isr_ne, valid))
@@ -1787,7 +1871,7 @@ def _plot_isr_edp_spaghetti(
     kindat_legend = [Line2D([0], [0], color="dimgray", ls=_isr_kindat_style(kd)[1],
                              lw=1.4, label=_isr_kindat_style(kd)[0])
                       for kd in sorted(kindats_seen, key=str)]
-    ax.legend(handles=[prior_line, post_line] + kindat_legend, fontsize=9, loc="upper left")
+    ax.legend(handles=[prior_line, post_line] + kindat_legend, fontsize=20, loc="upper left")
 
     sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
     sm.set_array([])
@@ -1800,7 +1884,7 @@ def _plot_isr_edp_spaghetti(
         f"{INSTRUMENTS[inst_name]['label']}  ·  {t_lo:%H:%M}–{t_hi:%H:%M} UTC"
         f"  ·  {filter_label} {obs_mode}\n"
         f"Mean RMSE (Ne, m⁻³) prior={prior_rmse:.2e}  post={post_rmse:.2e}",
-        fontsize=10,
+        fontsize=20,
     )
     fig.tight_layout()
 
@@ -1846,20 +1930,53 @@ def _group_edp_rmse_vs_isr(
         _dist, idx = tree.query([lat, lon])
         prior_col = prior_edp_3d[:, idx]
         post_col  = post_edp_3d[:, idx]
-
-        # F2 peak altitude from the prior column; restrict RMSE to below-peak altitudes.
-        _, prior_hmF2 = extract_robust_f2_peak(prior_col, alt_grid)
-
+        
         for p in profiles:
+
             isr_alt = np.asarray(p["alt_km"], dtype=float)
-            isr_ne  = np.asarray(p["ne_m3"],  dtype=float)
-            below_peak = (isr_alt <= prior_hmF2) if np.isfinite(prior_hmF2) \
-                         else np.ones(len(isr_alt), dtype=bool)
-            valid = (isr_ne > 1e8) & np.isfinite(isr_ne) & below_peak
+            isr_ne  = np.asarray(p["ne_m3"], dtype=float)
+
+            # Interpolate only inside tomography altitude coverage
+            prior_at_isr = np.interp(
+                isr_alt,
+                alt_grid,
+                prior_col,
+                left=np.nan,
+                right=np.nan,
+            )
+
+            post_at_isr = np.interp(
+                isr_alt,
+                alt_grid,
+                post_col,
+                left=np.nan,
+                right=np.nan,
+            )
+
+            # Whole valid ISR profile
+            valid = (
+                (isr_ne > 1e7)
+                & np.isfinite(isr_ne)
+                & np.isfinite(prior_at_isr)
+                & np.isfinite(post_at_isr)
+            )
+
             if valid.sum() < ISR_MIN_VALID_GATES:
                 continue
-            prior_at_isr = np.interp(isr_alt, alt_grid, prior_col)
-            post_at_isr  = np.interp(isr_alt, alt_grid, post_col)
+
+        # # F2 peak altitude from the prior column; restrict RMSE to below-peak altitudes.
+        # _, prior_hmF2 = extract_robust_f2_peak(prior_col, alt_grid)
+
+        # for p in profiles:
+        #     isr_alt = np.asarray(p["alt_km"], dtype=float)
+        #     isr_ne  = np.asarray(p["ne_m3"],  dtype=float)
+        #     below_peak = (isr_alt <= prior_hmF2) if np.isfinite(prior_hmF2) \
+        #                  else np.ones(len(isr_alt), dtype=bool)
+        #     valid = (isr_ne > 1e7) & np.isfinite(isr_ne) & below_peak
+        #     if valid.sum() < ISR_MIN_VALID_GATES:
+        #         continue
+        #     prior_at_isr = np.interp(isr_alt, alt_grid, prior_col)
+        #     post_at_isr  = np.interp(isr_alt, alt_grid, post_col)
             prior_vals.append(float(np.sqrt(np.mean(
                 (prior_at_isr[valid] - isr_ne[valid]) ** 2))))
             post_vals.append(float(np.sqrt(np.mean(
@@ -1981,7 +2098,7 @@ def _plot_group_summary_metrics(
         ax_curve.set_ylabel("Altitude  (km)")
         ax_curve.text(0.5, 0.5, "No ISR truth in window", transform=ax_curve.transAxes,
                       ha="center", va="center", color="lightgray",
-                      fontsize=12, style="italic")
+                      fontsize=20, style="italic")
         ax_curve.set_title("EDP vs. ISR truth")
 
     for panel_idx, site in enumerate(sites):
@@ -2000,7 +2117,7 @@ def _plot_group_summary_metrics(
         for p in site_profiles:
             isr_alt = np.asarray(p["alt_km"], dtype=float)
             isr_ne  = np.asarray(p["ne_m3"],  dtype=float)
-            valid = (isr_ne > 1e8) & np.isfinite(isr_ne)
+            valid = (isr_ne > 1e7) & np.isfinite(isr_ne)
             if valid.sum() < ISR_MIN_VALID_GATES:
                 continue
             valid_site_profiles.append((isr_alt[valid], isr_ne[valid], p.get("kindat")))
@@ -2064,7 +2181,7 @@ def _plot_group_summary_metrics(
                           lw=2.0, alpha=0.95, zorder=3)
             curve_legend.append(Line2D(
                 [0], [0], color=colour, ls=ls, lw=2.0,
-                label=f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}"))
+                label=_mode_filter_display_label(obs_mode, filter_type)))
 
             if filter_type == "parametric_ekf":
                 post_state = result.get("posterior_mean_state", result.get("post_mean_state"))
@@ -2075,15 +2192,15 @@ def _plot_group_summary_metrics(
 
             _site_config_curves.append((
                 colour, ls, prior_col, post_col, alt_grid_cfg,
-                f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}",
+                _mode_filter_display_label(obs_mode, filter_type),
             ))
 
         ax_curve.set_title(f"{site}: EDP vs. ISR truth ({len(valid_site_profiles)} scan(s))")
         if curve_legend:
-            ax_curve.legend(handles=curve_legend, fontsize=7, loc="upper left")
+            ax_curve.legend(handles=curve_legend, fontsize=10, loc="upper right")
         if param_entries:
             from demo_compare_kf_enkf import _draw_param_boxes
-            _draw_param_boxes(ax_curve, param_entries, loc="lower right", fontsize=6.0)
+            # _draw_param_boxes(ax_curve, param_entries, loc="lower right", fontsize=20)
 
         # Stash per-site data for the MHz duplicate figure below.
         if panel_idx == 0:
@@ -2093,24 +2210,24 @@ def _plot_group_summary_metrics(
     ax_edp.bar(x - width / 2, edp_prior, width, color=colours, alpha=0.45, label="Prior")
     ax_edp.bar(x + width / 2, edp_post,  width, color=colours, alpha=0.95, label="Posterior")
     ax_edp.set_xticks(x)
-    ax_edp.set_xticklabels(labels, fontsize=8)
+    ax_edp.set_xticklabels(labels, fontsize=15)
     ax_edp.set_ylabel("EDP RMSE vs. ISR truth  (Ne, m⁻³)")
     ax_edp.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
     n_profiles = sum(len(v) for v in edps_by_site.values())
     ax_edp.set_title(f"EDP vs. ISR truth ({n_profiles} scan(s), all sites)")
     ax_edp.grid(True, axis="y", alpha=0.3)
-    ax_edp.legend(fontsize=9)
+    ax_edp.legend(fontsize=15)
 
     ax_tec.bar(x - width / 2, tec_prior, width, color=colours, alpha=0.45, label="Prior")
     ax_tec.bar(x + width / 2, tec_post,  width, color=colours, alpha=0.95, label="Posterior")
     ax_tec.set_xticks(x)
-    ax_tec.set_xticklabels(labels, fontsize=8)
+    ax_tec.set_xticklabels(labels, fontsize=15)
     ax_tec.set_ylabel("TEC RMSE  (TECU)")
     ax_tec.set_title("TEC prior/posterior RMSE")
     ax_tec.grid(True, axis="y", alpha=0.3)
-    ax_tec.legend(fontsize=9)
+    ax_tec.legend(fontsize=15)
 
-    fig.suptitle(f"Group summary — {group_key}", fontsize=12)
+    fig.suptitle(f"Group summary — {group_key}", fontsize=20)
     fig.tight_layout()
 
     save_dir = Path(save_dir)
@@ -2122,7 +2239,7 @@ def _plot_group_summary_metrics(
 
     # ── Duplicate figure in plasma-frequency (MHz) units ──────────────────────
     _mhz_data = locals().get("_mhz_site_data", [])
-    fig_mhz = plt.figure(figsize=(6.5 * n_curve_panels + 7.5, 11))
+    fig_mhz = plt.figure(figsize=(10 * n_curve_panels + 7.5, 11))
     gs_mhz = fig_mhz.add_gridspec(nrows=2, ncols=n_curve_panels + 1,
                                    width_ratios=[1.0] * n_curve_panels + [1.15])
     curve_axes_mhz = [fig_mhz.add_subplot(gs_mhz[:, i]) for i in range(n_curve_panels)]
@@ -2135,7 +2252,7 @@ def _plot_group_summary_metrics(
         ax_c.grid(True, alpha=0.3)
         ax_c.set_xlabel("fₚ  (MHz)");  ax_c.set_ylabel("Altitude  (km)")
         ax_c.text(0.5, 0.5, "No ISR truth in window", transform=ax_c.transAxes,
-                  ha="center", va="center", color="lightgray", fontsize=12, style="italic")
+                  ha="center", va="center", color="lightgray", fontsize=20, style="italic")
         ax_c.set_title("EDP vs. ISR truth  (MHz)")
 
     for _pi, (site, _vsp, _cc, _lat, _lon) in enumerate(_mhz_data):
@@ -2174,27 +2291,27 @@ def _plot_group_summary_metrics(
 
         ax_c.set_title(f"{site}: EDP vs. ISR truth  ({len(_vsp)} scan(s))  [MHz]")
         if _leg_mhz:
-            ax_c.legend(handles=_leg_mhz, fontsize=7, loc="upper left")
+            ax_c.legend(handles=_leg_mhz, fontsize=20, loc="upper left")
 
     ax_edp_mhz.bar(x - width / 2, edp_prior_mhz, width, color=colours, alpha=0.45, label="Prior")
     ax_edp_mhz.bar(x + width / 2, edp_post_mhz,  width, color=colours, alpha=0.95, label="Posterior")
     ax_edp_mhz.set_xticks(x)
-    ax_edp_mhz.set_xticklabels(labels, fontsize=8)
+    ax_edp_mhz.set_xticklabels(labels, fontsize=20)
     ax_edp_mhz.set_ylabel("EDP RMSE vs. ISR truth  (MHz)")
     ax_edp_mhz.set_title(f"EDP vs. ISR truth  ({n_profiles} scan(s), all sites)  [MHz]")
     ax_edp_mhz.grid(True, axis="y", alpha=0.3)
-    ax_edp_mhz.legend(fontsize=9)
+    ax_edp_mhz.legend(fontsize=15)
 
     ax_tec_mhz.bar(x - width / 2, tec_prior, width, color=colours, alpha=0.45, label="Prior")
     ax_tec_mhz.bar(x + width / 2, tec_post,  width, color=colours, alpha=0.95, label="Posterior")
     ax_tec_mhz.set_xticks(x)
-    ax_tec_mhz.set_xticklabels(labels, fontsize=8)
+    ax_tec_mhz.set_xticklabels(labels, fontsize=20)
     ax_tec_mhz.set_ylabel("TEC RMSE  (TECU)")
     ax_tec_mhz.set_title("TEC prior/posterior RMSE")
     ax_tec_mhz.grid(True, axis="y", alpha=0.3)
-    ax_tec_mhz.legend(fontsize=9)
+    ax_tec_mhz.legend(fontsize=15)
 
-    fig_mhz.suptitle(f"Group summary (MHz) — {group_key}", fontsize=12)
+    fig_mhz.suptitle(f"Group summary (MHz) — {group_key}", fontsize=20)
     fig_mhz.tight_layout()
     out_path_mhz = save_dir / f"group_summary_{group_key}_MHz.png"
     fig_mhz.savefig(out_path_mhz, dpi=130, bbox_inches="tight")
@@ -2250,7 +2367,7 @@ def plot_isr_truth_comparison(
     t_utc   = pd.Timestamp(isr_profile["time"])
     inst_name = _identify_instrument(isr_lat)
 
-    valid = (isr_ne > 1e8) & np.isfinite(isr_ne)
+    valid = (isr_ne > 1e7) & np.isfinite(isr_ne)
     if valid.sum() < ISR_MIN_VALID_GATES:
         return None
 
@@ -2258,6 +2375,8 @@ def plot_isr_truth_comparison(
     post_curves:      dict = {}
     prior_curves_mhz: dict = {}  # (obs_mode, filter_type) -> (fp_at_isr_alt, fp_rmse)
     post_curves_mhz:  dict = {}
+    prior_alt_errs:   dict = {}  # (obs_mode, filter_type) -> (altitudes, abs_err_ne)
+    post_alt_errs:    dict = {}  # (obs_mode, filter_type) -> (altitudes, abs_err_ne)
     peak_errs:        dict = {}   # (obs_mode, filter_type) -> dict of NmF2/hmF2 errors
     peak_errs_mhz:    dict = {}   # same but NmF2 error in MHz (Δfₚ)
     tec_panels:       dict = {}   # (obs_mode, filter_type) -> nearest-arc TEC comparison data
@@ -2354,6 +2473,8 @@ def plot_isr_truth_comparison(
             post_curves[key]  = (post_at_isr,  post_rmse)
             prior_curves_mhz[key] = (_ne_to_fp(prior_at_isr), prior_fp_rmse)
             post_curves_mhz[key]  = (_ne_to_fp(post_at_isr),  post_fp_rmse)
+            prior_alt_errs[key] = (isr_alt[valid], np.abs(prior_at_isr[valid] - isr_ne[valid]))
+            post_alt_errs[key]  = (isr_alt[valid], np.abs(post_at_isr[valid]  - isr_ne[valid]))
 
             if filter_type == "parametric_ekf":
                 prior_state = result.get("prior_mean_state")
@@ -2376,7 +2497,7 @@ def plot_isr_truth_comparison(
                 post_nm_err  = np.nan
 
             # NmF2 error in MHz: Δfₚ = fₚ(est) − fₚ(truth)
-            isr_fp_nm = float(_ne_to_fp(np.asarray([isr_nm]))) if np.isfinite(isr_nm) else np.nan
+            isr_fp_nm = _ne_to_fp(np.asarray([isr_nm])).item() if np.isfinite(isr_nm) else np.nan
             prior_nm_err_mhz = (float(_ne_to_fp(np.asarray([pr_nm]))) - isr_fp_nm) \
                 if np.isfinite(isr_fp_nm) else np.nan
             post_nm_err_mhz  = (float(_ne_to_fp(np.asarray([po_nm]))) - isr_fp_nm) \
@@ -2420,28 +2541,28 @@ def plot_isr_truth_comparison(
         for key, (curve, rmse) in src_prior.items():
             obs_mode, filter_type = key
             colour, ls = _CONFIG_STYLES.get(key, ("gray", "-"))
-            lbl = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}  RMSE={rmse:.3f}" \
+            lbl = f"{_mode_filter_display_label(obs_mode, filter_type)}  RMSE={rmse:.3f}" \
                   if in_mhz else \
-                  f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}  RMSE={rmse:.2e}"
+                  f"{_mode_filter_display_label(obs_mode, filter_type)}  RMSE={rmse:.2e}"
             ax_pr.plot(curve, isr_alt, color=colour, ls=ls, lw=1.6, label=lbl)
 
         for key, (curve, rmse) in src_post.items():
             obs_mode, filter_type = key
             colour, ls = _CONFIG_STYLES.get(key, ("gray", "-"))
-            lbl = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}  RMSE={rmse:.3f}" \
+            lbl = f"{_mode_filter_display_label(obs_mode, filter_type)}  RMSE={rmse:.3f}" \
                   if in_mhz else \
-                  f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}  RMSE={rmse:.2e}"
+                  f"{_mode_filter_display_label(obs_mode, filter_type)}  RMSE={rmse:.2e}"
             ax_po.plot(curve, isr_alt, color=colour, ls=ls, lw=1.6, label=lbl)
 
-        if param_states:
-            from demo_compare_kf_enkf import _draw_param_boxes
-            prior_entries, post_entries = [], []
-            for (obs_mode, filter_type), (prior_pvec, post_pvec) in param_states.items():
-                colour = _CONFIG_STYLES.get((obs_mode, filter_type), ("gray", "-"))[0]
-                prior_entries.append((f"EKF {obs_mode}", colour, prior_pvec))
-                post_entries.append((f"EKF {obs_mode}",  colour, post_pvec))
-            _draw_param_boxes(ax_pr, prior_entries, loc="lower right", fontsize=6.0)
-            _draw_param_boxes(ax_po, post_entries,  loc="lower right", fontsize=6.0)
+        # if param_states:
+        #     from demo_compare_kf_enkf import _draw_param_boxes
+        #     prior_entries, post_entries = [], []
+        #     for (obs_mode, filter_type), (prior_pvec, post_pvec) in param_states.items():
+        #         colour = _CONFIG_STYLES.get((obs_mode, filter_type), ("gray", "-"))[0]
+        #         prior_entries.append((f"EKF { _obs_mode_display_label(obs_mode) }", colour, prior_pvec))
+        #         post_entries.append((f"EKF { _obs_mode_display_label(obs_mode) }",  colour, post_pvec))
+        #     _draw_param_boxes(ax_pr, prior_entries, loc="lower right", fontsize=20)
+        #     _draw_param_boxes(ax_po, post_entries,  loc="lower right", fontsize=20)
 
         for ax, title in ((ax_pr, "Prior"), (ax_po, "Posterior")):
             if in_mhz:
@@ -2464,7 +2585,7 @@ def plot_isr_truth_comparison(
             ax.set_xlabel(xlabel)
             ax.set_ylabel("Altitude  (km)")
             ax.set_title(f"{title} EDP vs. ISR truth")
-            ax.legend(fontsize=7, loc="upper left")
+            ax.legend(fontsize=15, loc="upper left")
 
     def _draw_rmse_scatter(ax, *, in_mhz: bool) -> None:
         src_prior = prior_curves_mhz if in_mhz else prior_curves
@@ -2484,7 +2605,7 @@ def plot_isr_truth_comparison(
             obs_mode, filter_type = key
             colour, _ls = _CONFIG_STYLES.get(key, ("gray", "-"))
             marker = _marker_for.get(filter_type, "o")
-            label  = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}"
+            label  = _mode_filter_display_label(obs_mode, filter_type)
             ax.scatter(pr, po, color=colour, marker=marker, s=90,
                        edgecolors="black", linewidths=0.8, label=label, zorder=3)
         ax.set_xlim(lims);  ax.set_ylim(lims)
@@ -2495,29 +2616,49 @@ def plot_isr_truth_comparison(
         if not in_mhz:
             ax.ticklabel_format(style="sci", axis="both", scilimits=(0, 0))
         ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=7, loc="best")
+        ax.legend(fontsize=20, loc="best")
 
     def _draw_peak_scatter(ax, errs: dict) -> None:
         for key, pe in errs.items():
             obs_mode, filter_type = key
             colour, _ls = _CONFIG_STYLES.get(key, ("gray", "-"))
-            label = f"{_FILTER_LABELS.get(filter_type, filter_type)} {obs_mode}"
+            label = _mode_filter_display_label(obs_mode, filter_type)
             ax.scatter(pe["prior_nm_err"], pe["prior_hm_err"],
                        facecolors="none", edgecolors=colour, s=70, lw=1.6)
             ax.scatter(pe["post_nm_err"],  pe["post_hm_err"],
                        facecolors=colour,  edgecolors=colour, s=70, label=label)
-        ax.axhline(0, color="gray", lw=0.8, ls="--")
-        ax.axvline(0, color="gray", lw=0.8, ls="--")
+
+    def _draw_altitude_rmse(ax) -> None:
+        for key, (altitudes, abs_err) in prior_alt_errs.items():
+            obs_mode, filter_type = key
+            colour, _ls = _CONFIG_STYLES.get(key, ("gray", "-"))
+            label = _mode_filter_display_label(obs_mode, filter_type)
+            ax.plot(altitudes, abs_err, color=colour, ls=_ls, lw=1.4, label=label)
+        for key, (altitudes, abs_err) in post_alt_errs.items():
+            obs_mode, filter_type = key
+            colour, _ls = _CONFIG_STYLES.get(key, ("gray", "-"))
+            ax.plot(altitudes, abs_err, color=colour, ls=":" if _ls == "-" else "-.", lw=1.8)
+        ax.set_xlabel("Altitude (km)")
+        ax.set_ylabel("|Ne error| (m⁻³)")
+        ax.set_title("Ne RMSE vs. ISR altitude")
         ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=7, loc="best")
+        ax.set_ylim(0, None)
+        ax.legend(fontsize=20, loc="best")
 
     # ── Ne figure ─────────────────────────────────────────────────────────────
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    ax_prior, ax_post = axes[0, 0], axes[0, 1]
-    ax_bar, ax_scatter = axes[1, 0], axes[1, 1]
+    fig = plt.figure(figsize=(30, 12))
+    gs = fig.add_gridspec(2, 3)
+    ax_prior = fig.add_subplot(gs[0, 0])
+    ax_post = fig.add_subplot(gs[0, 1])
+    ax_map = fig.add_subplot(gs[0, 2], projection=ccrs.Orthographic())
+    ax_bar = fig.add_subplot(gs[1, 0])
+    ax_alt_rmse = fig.add_subplot(gs[1, 1])
+    ax_scatter = fig.add_subplot(gs[1, 2])
 
     _draw_edp_panels(ax_prior, ax_post, in_mhz=False)
+    _plot_window_roi_context(ax_map, filter_results, isr_lat, isr_lon)
     _draw_rmse_scatter(ax_bar, in_mhz=False)
+    _draw_altitude_rmse(ax_alt_rmse)
     _draw_peak_scatter(ax_scatter, peak_errs)
     ax_scatter.set_xlabel("NmF2 error (%)")
     ax_scatter.set_ylabel("hmF2 error (km)")
@@ -2527,7 +2668,7 @@ def plot_isr_truth_comparison(
         f"{INSTRUMENTS[inst_name]['label']}  ·  {t_utc}  ·  {isr_kd_label}  ·  "
         f"F10.7={solar['f107']:.0f}  Ap={solar['ap']}"
     )
-    fig.suptitle(_suptitle, fontsize=13, fontweight="bold")
+    fig.suptitle(_suptitle, fontsize=20, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
 
     save_dir = Path(save_dir)
@@ -2538,7 +2679,7 @@ def plot_isr_truth_comparison(
     _print_saved(f"  ISR truth comparison saved → {out_path}")
 
     # ── MHz duplicate figure ──────────────────────────────────────────────────
-    fig_mhz, axes_mhz = plt.subplots(2, 2, figsize=(15, 12))
+    fig_mhz, axes_mhz = plt.subplots(2, 2, figsize=(30, 12))
     ax_pr_m, ax_po_m = axes_mhz[0, 0], axes_mhz[0, 1]
     ax_bar_m, ax_sc_m = axes_mhz[1, 0], axes_mhz[1, 1]
 
@@ -2549,7 +2690,7 @@ def plot_isr_truth_comparison(
     ax_sc_m.set_ylabel("hmF2 error (km)")
     ax_sc_m.set_title("F2-peak error  (○ prior, ● posterior)  [MHz]")
 
-    fig_mhz.suptitle(_suptitle + "  [MHz]", fontsize=13, fontweight="bold")
+    fig_mhz.suptitle(_suptitle + "  [MHz]", fontsize=20, fontweight="bold")
     fig_mhz.tight_layout(rect=[0, 0, 1, 0.95])
     out_path_mhz = save_dir / f"isr_truth_{group_key}_{inst_name}_MHz.png"
     fig_mhz.savefig(out_path_mhz, dpi=130, bbox_inches="tight")
@@ -2623,7 +2764,7 @@ def _plot_arc_innovation_diagnostic(
     sort_idx = np.argsort(np.abs(arc_prior_mean))[::-1]
 
     # ── figure layout ──────────────────────────────────────────────────────────
-    fig = _plt.figure(figsize=(18, max(10, 0.38 * n_arcs + 2)))
+    fig = _plt.figure(figsize=(20, max(10, 0.38 * n_arcs + 2)))
     gs  = fig.add_gridspec(
         3, 2,
         width_ratios  = [1.5, 1],
@@ -2692,13 +2833,13 @@ def _plot_arc_innovation_diagnostic(
     ax_bar.set_yticks(y_pos)
     ax_bar.set_yticklabels(
         [arc_labels[sort_idx[k]] for k in range(n_arcs)],
-        fontsize=8, fontfamily="monospace",
+        fontsize=20, fontfamily="monospace",
     )
-    ax_bar.set_xlabel("Mean residual  obs − model  (TECU)", fontsize=9)
+    ax_bar.set_xlabel("Mean residual  obs − model  (TECU)", fontsize=20)
     ax_bar.set_title(
         f"Per-occultation mean TEC error — {filter_name}  ·  group {group_key}\n"
         f"Global RMSE: Prior {prior_rmse:.2f} TECU  →  Post {post_rmse:.2f} TECU",
-        fontsize=9, fontweight="bold",
+        fontsize=20, fontweight="bold",
     )
     if _has_mda:
         _n_steps = len(mda_arc_means_list)
@@ -2719,7 +2860,7 @@ def _plot_arc_innovation_diagnostic(
             _mpatch.Patch(color="#1a9641", alpha=0.84, label="Post  ↓ |bias| reduced"),
             _mpatch.Patch(color="#d7191c", alpha=0.84, label="Post  ↑ |bias| increased"),
         ]
-    ax_bar.legend(handles=handles, fontsize=8, loc="lower right")
+    ax_bar.legend(handles=handles, fontsize=20, loc="lower right")
     ax_bar.grid(axis="x", lw=0.4, alpha=0.5)
 
     # ── Panel B: prior RMSE vs posterior RMSE scatter ─────────────────────────
@@ -2733,15 +2874,15 @@ def _plot_arc_innovation_diagnostic(
     lim = max(np.concatenate([arc_prior_rmse, arc_post_rmse]).max() * 1.08, 5.0)
     ax_scat.plot([0, lim], [0, lim], "--", color="0.5", lw=0.9, label="no change")
     ax_scat.set_xlim(0, lim); ax_scat.set_ylim(0, lim)
-    ax_scat.set_xlabel("Prior RMSE (TECU)", fontsize=8)
-    ax_scat.set_ylabel("Post RMSE (TECU)",  fontsize=8)
-    ax_scat.set_title(f"{filter_name}  Prior → Posterior RMSE per arc", fontsize=8)
-    ax_scat.legend(fontsize=7)
+    ax_scat.set_xlabel("Prior RMSE (TECU)", fontsize=20)
+    ax_scat.set_ylabel("Post RMSE (TECU)",  fontsize=20)
+    ax_scat.set_title(f"{filter_name}  Prior → Posterior RMSE per arc", fontsize=20)
+    ax_scat.legend(fontsize=20)
     cb_sc = fig.colorbar(sc, ax=ax_scat, fraction=0.05, pad=0.02)
-    cb_sc.set_label("ΔRMSE  post−prior (TECU)", fontsize=7)
+    cb_sc.set_label("ΔRMSE  post−prior (TECU)", fontsize=20)
     for k in range(n_arcs):
         ax_scat.annotate(arc_labels[k], (arc_prior_rmse[k], arc_post_rmse[k]),
-                         fontsize=5, ha="center", va="bottom",
+                         fontsize=20, ha="center", va="bottom",
                          xytext=(0, 3), textcoords="offset points",
                          color="k", zorder=5)
 
@@ -2795,14 +2936,14 @@ def _plot_arc_innovation_diagnostic(
     # PRN labels above each arc marker
     for k in range(n_arcs):
         ax_map.annotate(arc_labels[k], (arc_lons[k], arc_lats[k]),
-                        fontsize=5, ha="center", va="bottom",
+                        fontsize=20, ha="center", va="bottom",
                         xytext=(0, 4), textcoords="offset points",
                         color="k", zorder=5)
 
     # Colorbar for ΔRMSE
     cb_map = fig.colorbar(sc_map, ax=ax_map, fraction=0.05, pad=0.02)
     cb_map.set_label("ΔRMSE  post − prior (TECU)\n← improved   degraded →",
-                     fontsize=7)
+                     fontsize=20)
 
     # Small legend to explain the ring vs dot encoding
     map_handles = [
@@ -2811,11 +2952,11 @@ def _plot_arc_innovation_diagnostic(
         _mpatch.Patch(facecolor="grey", edgecolor="k",
                       linewidth=0.5, label="Post RMSE (dot size, coloured by ΔRMSE)"),
     ]
-    ax_map.legend(handles=map_handles, fontsize=6, loc="best")
+    ax_map.legend(handles=map_handles, fontsize=20, loc="best")
     ax_map.set_title(
         f"{filter_name}  Prior ○ vs Posterior ● RMSE per arc\n"
         f"Dot colour: ΔRMSE (green = improved, red = degraded)",
-        fontsize=8,
+        fontsize=20,
     )
 
     # ── Panel D: residual histograms ──────────────────────────────────────────
@@ -2884,7 +3025,7 @@ def _plot_arc_innovation_diagnostic(
                 pass
 
         ax_hist.set_title(
-            f"{filter_name}  residual distribution per MDA iteration", fontsize=8)
+            f"{filter_name}  residual distribution per MDA iteration", fontsize=20)
     else:
         hist_series = [
             (all_prior,     "#2166ac",
@@ -2908,12 +3049,12 @@ def _plot_arc_innovation_diagnostic(
                 pass
 
         ax_hist.set_title(
-            f"{filter_name}  residual distribution (all samples)", fontsize=8)
+            f"{filter_name}  residual distribution (all samples)", fontsize=20)
 
     ax_hist.axvline(0, color="k", lw=0.8, linestyle="--")
-    ax_hist.set_xlabel("Residual  obs − model  (TECU)", fontsize=8)
-    ax_hist.set_ylabel("Density", fontsize=8)
-    ax_hist.legend(fontsize=7)
+    ax_hist.set_xlabel("Residual  obs − model  (TECU)", fontsize=20)
+    ax_hist.set_ylabel("Density", fontsize=20)
+    ax_hist.legend(fontsize=20)
     ax_hist.grid(lw=0.3, alpha=0.4)
 
     # ── save ──────────────────────────────────────────────────────────────────
@@ -3007,12 +3148,12 @@ def _plot_covariance_panels_labeled(
     alt_extent = [float(alt_grid[0]), float(alt_grid[-1]),
                   float(alt_grid[0]), float(alt_grid[-1])]
 
-    fig = plt.figure(figsize=(18, 10))
+    fig = plt.figure(figsize=(20, 10))
     fig.suptitle(
         f"{label} — EDP Covariance Structure\n"
         f"{result.get('time_window', group_key)}  |  {region}\n"
         f"Horizontal slice at {true_alt_ref:.0f} km  ·  ★ = centre vertex",
-        fontsize=12,
+        fontsize=20,
     )
     gs = gridspec.GridSpec(2, 2, figure=fig,
                            left=0.06, right=0.97, top=0.88, bottom=0.07,
@@ -3031,9 +3172,9 @@ def _plot_covariance_panels_labeled(
         )
         ax_aa.axhline(true_alt_ref, color="gold", lw=1.0, ls="--", alpha=0.8)
         ax_aa.axvline(true_alt_ref, color="gold", lw=1.0, ls="--", alpha=0.8)
-        ax_aa.set_xlabel("Altitude (km)", fontsize=9)
-        ax_aa.set_ylabel("Altitude (km)", fontsize=9)
-        ax_aa.set_title(f"{row_lbl} — Alt-Alt Correlation", fontsize=10)
+        ax_aa.set_xlabel("Altitude (km)", fontsize=20)
+        ax_aa.set_ylabel("Altitude (km)", fontsize=20)
+        ax_aa.set_title(f"{row_lbl} — Alt-Alt Correlation", fontsize=20)
         fig.colorbar(pcm, ax=ax_aa, label="Pearson r", fraction=0.046, pad=0.04)
 
         ax_gl = fig.add_subplot(gs[row, 1], projection=proj)
@@ -3054,7 +3195,7 @@ def _plot_covariance_panels_labeled(
             )
             cb = fig.colorbar(tc, ax=ax_gl, orientation="horizontal",
                               shrink=0.75, pad=0.04, fraction=0.04)
-            cb.set_label("Pearson r", fontsize=8)
+            cb.set_label("Pearson r", fontsize=20)
         except Exception:
             pass
 
@@ -3065,7 +3206,7 @@ def _plot_covariance_panels_labeled(
         _draw_roi_boundary(ax_gl, region)
         ax_gl.set_title(
             f"{row_lbl} — Horizontal Correlation at {true_alt_ref:.0f} km",
-            fontsize=10,
+            fontsize=20,
         )
 
     os.makedirs(save_dir, exist_ok=True)
@@ -3144,12 +3285,12 @@ def _plot_ekf_param_covariance_panels(
     clat   = float(np.nanmean(lats_c)) if lats_c else 0.0
     proj   = ccrs.Orthographic(central_longitude=clon, central_latitude=clat)
 
-    fig = plt.figure(figsize=(18, 10))
+    fig = plt.figure(figsize=(30, 20))
     fig.suptitle(
         f"{label} — Parametric-State Covariance Structure\n"
         f"{result.get('time_window', group_key)}  |  {region}\n"
-        f"Horizontal slice at reference param log10(NmF2)  ·  ★ = centre vertex",
-        fontsize=12,
+        f"Horizontal slice at reference NmF2",
+        fontsize=20,
     )
     gs = gridspec.GridSpec(2, 2, figure=fig,
                             left=0.06, right=0.97, top=0.88, bottom=0.07,
@@ -3163,11 +3304,11 @@ def _plot_ekf_param_covariance_panels(
         ax_pp = fig.add_subplot(gs[row, 0])
         pcm = ax_pp.imshow(pp_corr, cmap="coolwarm", vmin=-1, vmax=1, origin="lower")
         ax_pp.set_xticks(range(N_STATE))
-        ax_pp.set_xticklabels(PARAM_NAMES, rotation=45, ha="right", fontsize=7)
+        ax_pp.set_xticklabels(PARAM_NAMES, rotation=45, ha="right", fontsize=20)
         ax_pp.set_yticks(range(N_STATE))
-        ax_pp.set_yticklabels(PARAM_NAMES, fontsize=7)
-        ax_pp.set_title(f"{row_lbl} — Param-Param Correlation", fontsize=10)
-        fig.colorbar(pcm, ax=ax_pp, label="Pearson r", fraction=0.046, pad=0.04)
+        ax_pp.set_yticklabels(PARAM_NAMES, fontsize=20)
+        ax_pp.set_title(f"{row_lbl} — Param-Param Correlation", fontsize=20)
+        fig.colorbar(pcm, ax=ax_pp, label="Correlation Coefficient", fraction=0.046, pad=0.04)
 
         # ── Right: horizontal correlation globe ───────────────────────────────
         ax_gl = fig.add_subplot(gs[row, 1], projection=proj)
@@ -3187,7 +3328,7 @@ def _plot_ekf_param_covariance_panels(
             )
             cb = fig.colorbar(tc, ax=ax_gl, orientation="horizontal",
                                shrink=0.75, pad=0.04, fraction=0.04)
-            cb.set_label("Pearson r", fontsize=8)
+            cb.set_label("Correlation Coefficient", fontsize=20)
         except Exception:
             pass
 
@@ -3197,7 +3338,7 @@ def _plot_ekf_param_covariance_panels(
                    marker="*", color="gold", ms=12, mec="black", mew=0.8, zorder=8)
         _draw_roi_boundary(ax_gl, region)
         ax_gl.set_title(
-            f"{row_lbl} — Horizontal Correlation of log10(NmF2)", fontsize=10,
+            f"{row_lbl} — Horizontal Correlation of log10(NmF2)", fontsize=20,
         )
 
     os.makedirs(save_dir, exist_ok=True)
@@ -3321,7 +3462,7 @@ def _render_globe_ax(
             )
             cbar = fig.colorbar(tc, ax=ax, orientation="horizontal",
                                 shrink=0.75, pad=0.04, fraction=0.04)
-            cbar.set_label(f"ΔNe at hmF2 ({hmF2_label}) [m⁻³]", fontsize=7)
+            cbar.set_label(f"ΔNe at hmF2 ({hmF2_label}) [m⁻³]", fontsize=20)
             cbar.formatter.set_powerlimits((-2, 2))
             cbar.update_ticks()
     except Exception:
@@ -3379,9 +3520,9 @@ def _render_globe_ax(
     ax.set_title(
         f"{label} Globe — ΔNe at hmF2 ({hmF2_label})\n"
         f"RMSE {res['prior_tec_rmse']:.2f}→{res['post_tec_rmse']:.2f} TECU",
-        fontsize=9,
+        fontsize=20,
     )
-    ax.legend(loc="lower left", fontsize=6, framealpha=0.75)
+    ax.legend(loc="lower left", fontsize=20, framealpha=0.75)
 
 
 
@@ -3579,7 +3720,7 @@ def plot_occultation_prior_post_truth(
     title_label = f" ({label})" if label else ""
     fig.suptitle(
         f"Occultation Diagnostic — {prn}{title_label}\n{group_key}",
-        fontsize=13, y=1.02,
+        fontsize=20, y=1.02,
     )
     gs = gridspec.GridSpec(2, 2, figure=fig, wspace=0.30, hspace=0.32)
     ax_tec = fig.add_subplot(gs[0, 0])
@@ -3595,14 +3736,14 @@ def plot_occultation_prior_post_truth(
     ax_tec.plot(sl["measured"],  sl["tangent_km"], color="black",     lw=2.0,               label="Measured")
     ax_tec.plot(sl["prior_tec"], sl["tangent_km"], color="royalblue", lw=1.8, ls="--",       label="Prior")
     ax_tec.plot(sl["post_tec"],  sl["tangent_km"], color="firebrick", lw=1.8, ls="-.",       label="Posterior")
-    ax_tec.set_xlabel("TEC (TECU)", fontsize=10)
-    ax_tec.set_ylabel("Tangent Altitude (km)", fontsize=10)
+    ax_tec.set_xlabel("TEC (TECU)", fontsize=20)
+    ax_tec.set_ylabel("Tangent Altitude (km)", fontsize=20)
     ax_tec.set_title(
         f"TEC: prior {res.get('prior_tec_rmse', float('nan')):.2f} → "
         f"post {res.get('post_tec_rmse', float('nan')):.2f} TECU",
-        fontsize=10,
+        fontsize=20,
     )
-    ax_tec.legend(fontsize=8, loc="best", framealpha=0.85)
+    ax_tec.legend(fontsize=20, loc="best", framealpha=0.85)
     ax_tec.grid(True, alpha=0.3, ls=":")
 
     # ── Middle: single-occultation geometry ───────────────────────────────────
@@ -3612,7 +3753,7 @@ def plot_occultation_prior_post_truth(
             isr_site=isr_site, shown_indices=[occ_idx],
         )
     except Exception:
-        ax_geo.set_title("Geometry unavailable", fontsize=9)
+        ax_geo.set_title("Geometry unavailable", fontsize=20)
 
     # ── [1,0]: prior/posterior Ne curtains along the raypath (before/after) ──
     mesh = None
@@ -3622,17 +3763,17 @@ def plot_occultation_prior_post_truth(
     ):
         mesh = ax.pcolormesh(along_km, alt_grid, field, shading="nearest",
                               cmap="cividis", norm=norm)
-        ax.set_ylabel("Alt (km)", fontsize=8.5)
-        ax.set_title(title, fontsize=9, loc="left")
-        ax.tick_params(labelsize=7.5)
+        ax.set_ylabel("Alt (km)", fontsize=20)
+        ax.set_title(title, fontsize=20, loc="left")
+        ax.tick_params(labelsize=20)
         if site_along_km is not None:
             ax.axvline(site_along_km, color="white", lw=1.2, ls="--", alpha=0.85)
         ax.axvline(tecmax_along_km, color="magenta", lw=1.2, ls=":", alpha=0.9)
 
-    ax_po.set_xlabel("Along-occultation distance (km)", fontsize=9)
+    ax_po.set_xlabel("Along-occultation distance (km)", fontsize=20)
     plt.setp(ax_pr.get_xticklabels(), visible=False)
     cbar = fig.colorbar(mesh, ax=[ax_pr, ax_po], fraction=0.046, pad=0.02)
-    cbar.set_label("Electron Density (m⁻³)", fontsize=9)
+    cbar.set_label("Electron Density (m⁻³)", fontsize=20)
 
     # ── [1,1]: EDP vs altitude -- ISR truth vs prior/posterior @
     #    the ray's TEC-max tangent point ──────────────────────────────────
@@ -3642,18 +3783,18 @@ def plot_occultation_prior_post_truth(
     else:
         ax_edp.text(0.5, 0.5, "no co-located ISR profile in window",
                     transform=ax_edp.transAxes, ha="center", va="center",
-                    fontsize=8, color="dimgray")
+                    fontsize=20, color="dimgray")
     ax_edp.plot(prior_ne_tecmax, alt_grid, color="royalblue", lw=1.8, ls="--",
                 label="Prior @ TEC-max pt")
     ax_edp.plot(post_ne_tecmax,  alt_grid, color="firebrick", lw=1.8, ls="-.",
                 label="Posterior @ TEC-max pt")
     ax_edp.set_xscale("log")
-    ax_edp.set_xlabel("Electron Density (m⁻³)", fontsize=9)
-    ax_edp.set_ylabel("Alt (km)", fontsize=8.5)
+    ax_edp.set_xlabel("Electron Density (m⁻³)", fontsize=20)
+    ax_edp.set_ylabel("Alt (km)", fontsize=20)
     ax_edp.set_ylim(alt_grid.min(), alt_grid.max())
-    ax_edp.set_title("EDP @ TEC-max tangent point", fontsize=9, loc="left")
-    ax_edp.tick_params(labelsize=7.5)
-    ax_edp.legend(fontsize=7.5, loc="best", framealpha=0.85)
+    ax_edp.set_title("EDP @ TEC-max tangent point", fontsize=20, loc="left")
+    ax_edp.tick_params(labelsize=20)
+    ax_edp.legend(fontsize=20, loc="best", framealpha=0.85)
     ax_edp.grid(True, alpha=0.3, ls=":")
 
     safe_key   = group_key.replace("/", "_").replace(" ", "_").replace(":", "")
@@ -3744,7 +3885,7 @@ def plot_kf_enkf_comparison(
     fig = plt.figure(figsize=(18, 21))
     fig.suptitle(
         f"KF vs. Parametric EKF Comparison\n{group_key}",
-        fontsize=13, y=0.99,
+        fontsize=20, y=0.99,
     )
     gs = gridspec.GridSpec(3, 2, figure=fig, wspace=0.35, hspace=0.45,
                            height_ratios=[1, 1, 1.4])
@@ -3777,13 +3918,13 @@ def plot_kf_enkf_comparison(
     ] + [Line2D([0], [0], color=occ_cols[i], lw=2.0,
                 label=sat_ids[i][1] if i < len(sat_ids) else f"Occ {i+1}")
          for i in shown_idx]
-    ax.legend(handles=_style_legend, fontsize=8, loc="upper right", framealpha=0.85)
-    ax.set_xlabel("TEC (TECU)", fontsize=10)
-    ax.set_ylabel("Tangent Altitude (km)", fontsize=10)
+    ax.legend(handles=_style_legend, fontsize=20, loc="upper right", framealpha=0.85)
+    ax.set_xlabel("TEC (TECU)", fontsize=20)
+    ax.set_ylabel("Tangent Altitude (km)", fontsize=20)
     ax.set_title(
         f"Prior TEC — KF RMSE {res_kf['prior_tec_rmse']:.2f} TECU"
         f" | EKF {res_enkf['prior_tec_rmse']:.2f} TECU",
-        fontsize=10,
+        fontsize=20,
     )
     ax.grid(True, alpha=0.3, ls=":")
 
@@ -3802,12 +3943,12 @@ def plot_kf_enkf_comparison(
         Line2D([0], [0], color="gray", lw=1.4, ls="--", label="KF posterior"),
         Line2D([0], [0], color="gray", lw=1.4, ls=":",  label="EKF posterior"),
     ]
-    ax.legend(handles=_style_legend_po, fontsize=8, loc="upper right", framealpha=0.85)
-    ax.set_xlabel("TEC (TECU)", fontsize=10)
+    ax.legend(handles=_style_legend_po, fontsize=20, loc="upper right", framealpha=0.85)
+    ax.set_xlabel("TEC (TECU)", fontsize=20)
     ax.set_title(
         f"Posterior TEC — KF RMSE {res_kf['post_tec_rmse']:.2f} TECU"
         f" | EKF {res_enkf['post_tec_rmse']:.2f} TECU",
-        fontsize=10,
+        fontsize=20,
     )
     ax.grid(True, alpha=0.3, ls=":")
 
@@ -3843,10 +3984,10 @@ def plot_kf_enkf_comparison(
             loc="lower right",
         )
 
-    ax.set_xlabel("Electron Density (m⁻³)", fontsize=10)
-    ax.set_ylabel("Altitude (km)", fontsize=10)
-    ax.set_title("Prior EDP at Millstone Hill vertex", fontsize=10)
-    ax.legend(fontsize=8, loc="upper right", framealpha=0.85)
+    ax.set_xlabel("Electron Density (m⁻³)", fontsize=20)
+    ax.set_ylabel("Altitude (km)", fontsize=20)
+    ax.set_title("Prior EDP at Millstone Hill vertex", fontsize=20)
+    ax.legend(fontsize=20, loc="upper right", framealpha=0.85)
     ax.grid(True, alpha=0.3, ls=":")
     ax.set_ylim(bottom=0)
 
@@ -3884,7 +4025,7 @@ def plot_kf_enkf_comparison(
             f"hmF2 bias — KF: {bias_hm_kf:.1f}  EKF: {bias_hm_en:.1f} km"
         )
         ax.text(0.03, 0.03, bias_text, transform=ax.transAxes,
-                fontsize=7.5, va="bottom", ha="left",
+                fontsize=20, va="bottom", ha="left",
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.75))
 
     post_state_ekf = res_enkf.get("posterior_mean_state", res_enkf.get("post_mean_state"))
@@ -3895,9 +4036,9 @@ def plot_kf_enkf_comparison(
             loc="lower right",
         )
 
-    ax.set_xlabel("Electron Density (m⁻³)", fontsize=10)
-    ax.set_title("Posterior EDP at Millstone Hill vertex", fontsize=10)
-    ax.legend(fontsize=8, loc="upper right", framealpha=0.85)
+    ax.set_xlabel("Electron Density (m⁻³)", fontsize=20)
+    ax.set_title("Posterior EDP at Millstone Hill vertex", fontsize=20)
+    ax.legend(fontsize=20, loc="upper right", framealpha=0.85)
     ax.grid(True, alpha=0.3, ls=":")
 
     # ── [2,0] KF Globe ────────────────────────────────────────────────────────

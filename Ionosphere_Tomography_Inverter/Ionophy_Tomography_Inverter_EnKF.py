@@ -176,7 +176,7 @@ class Ionosphere_Tomography_Inverter:
         edps_flat = edps.reshape(self.n_state_vars, n_sample)
 
         # 2. Enforce physical floor to prevent log(0)
-        physical_floor = 1e8  
+        physical_floor = 1e7  
         edps_flat = np.nan_to_num(edps_flat, nan=physical_floor)
         edps_flat = np.clip(edps_flat, physical_floor, None)
 

@@ -50,6 +50,7 @@ from matplotlib.patches import Patch
 import matplotlib.colors as mcolors
 from matplotlib.ticker import ScalarFormatter
 from matplotlib.gridspec import GridSpec
+from scipy.sparse import csr_matrix
 from collections import defaultdict
 import time
 import gc
@@ -642,6 +643,15 @@ def process_group(
                     "tangent_km": tang_km[_dec_mask].flatten(),
                     "LEO":        data["LEO"][:,  _dec_mask],
                     "GNSS":       data["GNSS"][:, _dec_mask],
+                    "snr_l1":     np.asarray(
+                    data["caL1_SNR"][_dec_mask],
+                    dtype=np.float64
+                ).flatten(),
+
+                "snr_l2":     np.asarray(
+                    data["pL2_SNR"][_dec_mask],
+                    dtype=np.float64
+                ).flatten(),
                     "tec_type":   "absolute",
                 })
                 clean_labels.append(file_labels[i])
@@ -913,6 +923,16 @@ def process_group(
         #   obs_joint: (sum_rays,)
         H_joint   = np.vstack(H_blocks).astype(np.float32)
         obs_joint = np.concatenate(tec_obs).astype(np.float64)
+
+        H_voxel_sparse = csr_matrix(H_joint[:, :_n_sv])
+        # Count how many rays cross each KF Ne voxel.
+        # Use only the Ne-state columns, excluding topside and bias columns.
+        
+        voxel_obs_count = np.count_nonzero(
+            H_joint[:, :_n_sv],
+            axis=0,
+        ).astype(int)
+
         print(f"  Combined H shape : {H_joint.shape}  "
               f"(total rays = {len(obs_joint)})")
 
@@ -1084,6 +1104,7 @@ def process_group(
         result["joint_post_tec_rmse"] = float(
             np.sqrt(np.mean(post_res_jnt[abs_mask] ** 2)) if has_abs else np.nan
         )
+        # so, basically Austin calculate TEC RMSE using all the absolute TEC RO rays. but Ne RMSE is only calculated below hmf2
         if run_sequential:
             post_res_seq = obs_joint - post_tec_seq
             result["post_tec_rmse"] = float(
@@ -1143,6 +1164,12 @@ def process_group(
         result["prior_edp_3d"]         = prior_state_flat.reshape(n_height, n_geo)
         result["post_edp_3d"]          = np.asarray(posterior_state_flat).reshape(n_height, n_geo)
         result["joint_post_edp_3d"]    = np.asarray(posterior_state_flat_jnt).reshape(n_height, n_geo)
+        result["voxel_obs_count"] = voxel_obs_count.reshape(
+            n_height,
+            n_geo,
+        )
+        result["H_voxel_sparse"] = H_voxel_sparse
+        result["obs_joint"] = obs_joint
         result["step_edp_snapshots"]   = step_edp_snapshots   # prior + one per step
         result["alt_grid"]             = alt_grid
         result["prior_P"]              = inverter_jnt.attrs["initial_edps_cov"]

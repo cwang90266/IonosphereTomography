@@ -105,11 +105,20 @@ def _process_single_ray(
             # The cKDTree was built on the original [lon, lat] ordering, so the
             # nearest-neighbour fallback queries must also use [lon, lat].
             geo_latlon = geolocation[:, [1, 0]]
-            tri_idx, bary = find_containing_triangles(
-                np.column_stack([lats_v, lons_v]), geo_latlon, mesh, return_bary=True
-            )
+            try:
+                tri_idx, bary = find_containing_triangles(
+                    np.column_stack([lats_v, lons_v]),
+                    geo_latlon,
+                    mesh,
+                    return_bary=True
+                )
+            except ValueError:
+                tri_idx = np.full(len(lats_v), -1, dtype=int)
+                bary = np.zeros((len(lats_v), 3), dtype=float)
+
+            
             inside  = tri_idx != -1
-            outside = tri_idx == -1
+            outside = tri_idx == -1 
 
             if np.any(inside):
                 t_idx = tri_idx[inside]
@@ -164,9 +173,17 @@ def _process_single_ray(
             # Map topside segments to spatial geo-nodes using barycentric coordinates.
             # Same [lon, lat] → [lat, lon] swap needed for find_containing_triangles.
             geo_latlon = geolocation[:, [1, 0]]
-            tri_t, bary_t = find_containing_triangles(
-                np.column_stack([lats_t, lons_t]), geo_latlon, mesh, return_bary=True
-            )
+            try:
+                tri_t, bary_t = find_containing_triangles(
+                    np.column_stack([lats_t, lons_t]),
+                    geo_latlon,
+                    mesh,
+                    return_bary=True
+                )
+            except ValueError:
+                tri_t = np.full(len(lats_t), -1, dtype=int)
+                bary_t = np.zeros((len(lats_t), 3), dtype=float)
+
             inside_t = tri_t != -1
             outside_t = tri_t == -1
 
@@ -284,7 +301,7 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         # 2. CRITICAL FIX for Log-State: Sanitize the IRI background state.
         # We use a realistic ionospheric floor (1e8 m^-3) to prevent the ensemble
         # variance from exploding when comparing normal values to near-zero values.
-        physical_floor = 1e8
+        physical_floor = 1e7
         edps_flat = np.nan_to_num(edps_flat, nan=physical_floor)
         edps_flat = np.clip(edps_flat, physical_floor, None)
 
@@ -377,7 +394,7 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
             # to drive analysis_x to zero or negative on the topside.
             ne_mean_per_alt = edps_base.reshape(n_height, n_geo).mean(axis=1)
             for k in range(k_f2 + 1, n_height):
-                if ne_mean_per_alt[k] <= 1e8 * 1.01:   # at or within 1% of floor
+                if ne_mean_per_alt[k] <= 1e7 * 1.01:   # at or within 1% of floor
                     continue
                 s, e = k * n_geo, (k + 1) * n_geo
                 w    = float(weights[k])
@@ -1029,7 +1046,7 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         # prior Ne is at the physical floor.  Clip to the same floor used at
         # initialisation so downstream functions (e.g. _fit_iri_params) receive
         # a physically valid profile.
-        analysis_x = np.maximum(analysis_x, 1e8)
+        analysis_x = np.maximum(analysis_x, 1e7)
 
         return analysis_x
 
@@ -1085,3 +1102,110 @@ class Ionosphere_Tomography_Inverter(KalmanFilter):
         plt.tight_layout()
 
         return corr_alt
+
+
+def fill_kf_topside_using_ekf_shape(
+    kf_ne,
+    ekf_ne,
+    alt_grid,
+    floor_ne=1e8,
+):
+    """
+    Replace the KF topside floor using the shape of the EKF Ne profile.
+
+    Lower boundary:
+        last KF point before KF reaches floor_ne
+
+    Upper boundary:
+        EKF value at highest altitude
+
+    The interpolation follows the EKF profile shape in log10(Ne),
+    while smoothly removing the KF-EKF offset from lower to upper boundary.
+    """
+
+    kf_ne = np.asarray(kf_ne, dtype=float).copy()
+    ekf_ne = np.asarray(ekf_ne, dtype=float)
+    alt_grid = np.asarray(alt_grid, dtype=float)
+
+    # ----------------------------------------------------------
+    # 1. Find F2 peak so we only search the TOPSIDE
+    # ----------------------------------------------------------
+    peak_idx = int(np.nanargmax(kf_ne))
+
+    # KF points at/near the floor, but only above F2
+    floor_idx = np.where(
+        (np.arange(len(kf_ne)) > peak_idx)
+        & np.isfinite(kf_ne)
+        & (kf_ne <= floor_ne * 1.01)
+    )[0]
+
+    if len(floor_idx) == 0:
+        return kf_ne
+
+    # First topside point where KF hits the floor
+    i_floor = int(floor_idx[0])
+
+    # Last valid KF point before floor
+    i_start = i_floor - 1
+
+    # Highest altitude point
+    i_end = len(alt_grid) - 1
+
+    if i_start < 0 or i_start >= i_end:
+        return kf_ne
+
+    # ----------------------------------------------------------
+    # 2. Boundary values
+    # ----------------------------------------------------------
+    kf_start = kf_ne[i_start]
+    ekf_start = ekf_ne[i_start]
+
+    if (
+        not np.isfinite(kf_start)
+        or not np.isfinite(ekf_start)
+        or kf_start <= 0
+        or ekf_start <= 0
+    ):
+        return kf_ne
+
+    # ----------------------------------------------------------
+    # 3. Difference between KF and EKF at lower boundary
+    #    in log10(Ne)
+    # ----------------------------------------------------------
+    log_offset_start = (
+        np.log10(kf_start)
+        - np.log10(ekf_start)
+    )
+
+    h_start = alt_grid[i_start]
+    h_end = alt_grid[i_end]
+
+    # ----------------------------------------------------------
+    # 4. Use EKF curve as template
+    # ----------------------------------------------------------
+    for i in range(i_start, i_end + 1):
+
+        if not np.isfinite(ekf_ne[i]) or ekf_ne[i] <= 0:
+            continue
+
+        # 0 at lower boundary -> 1 at upper boundary
+        f = (
+            (alt_grid[i] - h_start)
+            / (h_end - h_start)
+        )
+
+        f = np.clip(f, 0.0, 1.0)
+
+        # Offset decreases smoothly:
+        # lower boundary: full KF/EKF difference
+        # upper boundary: zero difference
+        log_offset = log_offset_start * (1.0 - f)
+
+        log_ne_fill = (
+            np.log10(ekf_ne[i])
+            + log_offset
+        )
+
+        kf_ne[i] = 10.0 ** log_ne_fill
+
+    return kf_ne

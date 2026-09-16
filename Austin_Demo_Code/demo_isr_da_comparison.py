@@ -22,6 +22,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -30,6 +31,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 import scipy
 from scipy.spatial import cKDTree
@@ -64,7 +67,8 @@ from demo_compare_kf_enkf import (
 )
 from plotIonosphereTomography import (
     ISR_MIN_VALID_GATES, _plot_group_all_modes, plot_isr_truth_comparison,
-    plot_occultation_prior_post_truth,
+    plot_occultation_prior_post_truth, _obs_mode_display_label,
+    _mode_filter_display_label,
 )
 from test_param_iono import (
     EKF_Param, select_arcs_by_count_bin, _get_reflection_height, _fit_power_law,
@@ -75,6 +79,17 @@ from Ionosphere_Tomography_Inverter.enkf_update import _haversine_km
 from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
 from demo import _build_hourly_global_edp, extract_robust_f2_peak
 from EDPSamples.edp_samples import EDPSamples, get_IRI2020_EDP
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+plt.rcParams.update({
+    "font.size": 20,
+    "axes.titlesize": 20,
+    "axes.labelsize": 20,
+    "xtick.labelsize": 20,
+    "ytick.labelsize": 20,
+    "legend.fontsize": 10,
+})
 
 # ── Plasma-frequency helpers ─────────────────────────────────────────────────
 
@@ -84,10 +99,10 @@ def ne_to_mhz(ne_m3) -> float | np.ndarray:
 
 
 def extract_e_layer_peak(ne_arr: np.ndarray, alt_arr: np.ndarray,
-                          e_alt_min: float = 90.0,
-                          e_alt_max: float = 150.0) -> tuple[float, float]:
+                          e_alt_min: float = 80.0,
+                          e_alt_max: float = 130.0) -> tuple[float, float]:
     """
-    Return (NmE [m⁻³], hmE [km]) — the E-layer peak in the 90–150 km band.
+    Return (NmE [m⁻³], hmE [km]) — the E-layer peak in the 80–130 km band.
     Returns (nan, nan) if no valid data in band.
     """
     mask = (alt_arr >= e_alt_min) & (alt_arr <= e_alt_max) & np.isfinite(ne_arr) & (ne_arr > 1e6)
@@ -101,11 +116,12 @@ def extract_e_layer_peak(ne_arr: np.ndarray, alt_arr: np.ndarray,
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT        = Path(__file__).parent
-PODTC_BASE  = Path("/home/austinhunter/Downloads/PlanetiQ_Code/BC_Processing/podTc2")
+PODTC_BASE  = Path("~/Desktop/tomography_project/piq_data/podTc2").expanduser()
 ISR_CACHE   = ROOT / "Data" / "ISR_Data" / "esr_edp_cache.pkl"
 IC_CATALOG  = ROOT / "Data" / "ISR_IC" / "catalog.json"
 RINEX_CACHE = ROOT / "Data" / "RINEX_Cache"
 DA_CACHE    = ROOT / "Data" / "DA_Cache"
+WINDOW_EDPS_CACHE = ROOT / "Data" / "WINDOW_EDPS"
 SAVE_DIR    = ROOT / "Figures" / "ISR_DA_Comparison"/ "OUTPUT"
 ISR_METRICS_CSV  = DA_CACHE / "isr_metrics.csv"
 PROGRESS_MANIFEST = DA_CACHE / "progress_manifest.json"
@@ -114,6 +130,9 @@ LOG_DIR     = ROOT / "Logs" / "ISR_DA_Comparison"
 IGS_STATIONS_NORDIC = ["TRO1", "NYA1", "KIR0", "SOD3", "ALRT","SCOR", "HOFN", 'REYK']
 OBS_MODES    = ["ro_only", "ro_igs", "igs_only"]
 FILTER_TYPES = ["gridded_kf", "parametric_ekf"]
+OBS_MODES_LABELS = ["RO", "IGS & RO", "IGS"]
+FILTER_TYPES_LABELS = ["KF", "EKF"]
+
 POLAR_LAT_THRESHOLD = 60.0   # matches demo_group.py
 
 # ── Parametric-EKF tuning knobs ──────────────────────────────────────────────
@@ -218,7 +237,7 @@ ISR_ROI_MAX_KM         = 2500.0   # RO peak-tangent-point → ISR site gate (gre
 # close to the ISR site).
 OCC_DIAG_FULL_PROFILE_MAX_ALT_KM = 100.0
 
-OCC_COUNT_BINS = [None, 55, 45, 35, 25, 15, 5]
+OCC_COUNT_BINS = [None] #, 55, 45, 35, 25, 15, 5]
   # None = assimilate ALL available RO occultations in the window;
   # then decreasing counts to study measurement-density sensitivity.
 WINDOW_ROLLING_HOURS = 1.0     # rolling window for availability_minima_windows
@@ -1036,24 +1055,28 @@ def _plot_ekf_convergence(
         return
     iters = np.arange(1, len(residual_history) + 1)
 
-    fig, (ax_rmse, ax_dp) = plt.subplots(2, 1, figsize=(7, 6), sharex=True)
+    fig, (ax_rmse, ax_dp) = plt.subplots(2, 1, figsize=(10, 9), sharex=True)
+
+    for ax in (ax_rmse, ax_dp):
+        ax.tick_params(axis="both", labelsize=20)
 
     ax_rmse.plot(iters, residual_history, marker="o", color="tab:blue")
-    ax_rmse.set_ylabel("RMSE (TECU)")
+    ax_rmse.set_ylabel("RMSE (TECU)", fontsize=20)
     ax_rmse.set_yscale("log")
     ax_rmse.grid(True, which="both", alpha=0.3)
     ax_rmse.set_title(
         f"EKF convergence — {group_key}  "
-        f"({'converged' if converged else 'NOT converged'} at iter {len(residual_history)})"
+        f"({'converged' if converged else 'NOT converged'} at iter {len(residual_history)})",
+        fontsize=20,
     )
 
     ax_dp.plot(iters, update_norm_history, marker="o", color="tab:orange")
     ax_dp.axhline(tol, color="k", linestyle="--", linewidth=1, label=f"tol={tol:.1e}")
-    ax_dp.set_ylabel(r"$||\Delta P|| \, / \, ||P||$")
-    ax_dp.set_xlabel("Iteration")
+    ax_dp.set_ylabel(r"$||\Delta P|| \, / \, ||P||$", fontsize=20)
+    ax_dp.set_xlabel("Iteration", fontsize=20)
     ax_dp.set_yscale("log")
     ax_dp.grid(True, which="both", alpha=0.3)
-    ax_dp.legend(loc="upper right")
+    ax_dp.legend(loc="upper right", fontsize=20)
 
     fig.tight_layout()
     out_dir = Path(save_dir)
@@ -1146,10 +1169,13 @@ def _run_parametric_ekf(
 
     print(f"  [EKF] Building IRI state at {n_geo} grid points (batch call) …")
     mean_state = np.zeros((N_STATE, n_geo), dtype=float)
+    iri_edp = None
     try:
         ne_all, feat_all = _get_iri_edp_and_features_batch(
             t_centre, grid_lats, grid_lons, alt_grid, sampling_df
         )
+
+        iri_edp = np.asarray(ne_all, dtype=float).copy()
         for g in range(n_geo):
             mean_state[:, g] = _state_from_iri_direct(
                 ne_all[:, g], feat_all[:, g], alt_grid
@@ -1815,8 +1841,20 @@ def run_all_filters(day_info: dict, windows: list[dict], igs_arcs: list,
             return
 
         window_edps = _isr_profiles_for_window(edps, t_centre)
-        window_isr_profiles = [_isr_edp_to_profile(e) for e in window_edps]
 
+        output_dir_testt = WINDOW_EDPS_CACHE
+        output_dir_testt.mkdir(parents=True, exist_ok=True)
+
+        output_path = output_dir_testt / f"{_safe_group_key(group_key)}_bin{bin_label}_window_edps.pkl"
+
+        with open(output_path, "wb") as f:
+            pickle.dump(window_edps, f)
+        
+        print(f"Saved window_edps → {output_path}")
+        
+        
+        
+        window_isr_profiles = [_isr_edp_to_profile(e) for e in window_edps]
         # Bin-tag the save_dir root passed to these two plotting helpers (they
         # each build their own group_key-keyed subfolder beneath it) so
         # different OCC_COUNT_BINS sweep points for the same window land in
@@ -2515,6 +2553,45 @@ def _isr_profiles_for_window(edps: list[dict], t_centre: pd.Timestamp) -> list[d
     return matched
 
 
+def _export_plot_data_for_figure(plot_df: pd.DataFrame, figure_name: str) -> None:
+    """
+    Save the table used to construct a figure into
+    Data/output/<year>/<doy>/<figure_name>.csv.
+    """
+    if plot_df is None or plot_df.empty:
+        return
+
+    export_root = ROOT / "Data" / "output"
+    export_root.mkdir(parents=True, exist_ok=True)
+
+    date_col = None
+    for candidate in ("t_centre", "date", "time"):
+        if candidate in plot_df.columns:
+            date_col = candidate
+            break
+
+    if date_col is None:
+        out_dir = export_root / "0000" / "000"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        plot_df.to_csv(out_dir / f"{figure_name}.csv", index=False)
+        return
+
+    date_series = pd.to_datetime(plot_df[date_col], errors="coerce")
+    valid = date_series.notna()
+    if not valid.any():
+        out_dir = export_root / "0000" / "000"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        plot_df.to_csv(out_dir / f"{figure_name}.csv", index=False)
+        return
+
+    export_df = plot_df.loc[valid].copy()
+    date_series = pd.to_datetime(export_df[date_col], errors="coerce")
+    for (year, doy), group in export_df.groupby([date_series.dt.year, date_series.dt.dayofyear]):
+        out_dir = export_root / f"{int(year):04d}" / f"{int(doy):03d}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        group.to_csv(out_dir / f"{figure_name}.csv", index=False)
+
+
 def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None:
     """
     Read the accumulated ISR-metrics CSV (see compute_isr_metrics /
@@ -2543,8 +2620,10 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
         print("[ISR-DA] No frequency-domain metrics available; skipping frequency-metric plots.")
         return
 
-    thresholds = [0.5, 0.2, 0.1]
+    thresholds = [0.5]
     combos = [(om, ft) for om in OBS_MODES for ft in FILTER_TYPES]
+    combos_label = [(om, ft) for om in OBS_MODES_LABELS for ft in FILTER_TYPES_LABELS]
+
     obs_mode_colors = dict(zip(OBS_MODES, plt.cm.tab10.colors))
 
     # ── Figures 1 & 2: foF2 / foE improvement boxplots ─────────────────────
@@ -2555,35 +2634,73 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
         if prior_col not in df.columns or post_col not in df.columns:
             continue
 
-        fig, axes = plt.subplots(1, len(ISR_SITES), figsize=(6 * len(ISR_SITES), 5), squeeze=False)
+        _export_plot_data_for_figure(df, f"isr_{metric}_improvement_boxplot")
+
+        fig, axes = plt.subplots(1, len(ISR_SITES), figsize=(15 * len(ISR_SITES), 7), squeeze=False)
         axes = axes[0]
         for ax, site in zip(axes, ISR_SITES):
             site_df = df[df["instrument"] == site]
-            positions, box_data, box_colors, tick_labels = [], [], [], []
+            positions, box_stats, box_colors, tick_labels = [], [], [], []
             pos = 0
+            filter_label_map = dict(zip(FILTER_TYPES, FILTER_TYPES_LABELS))
             for obs_mode, filter_type in combos:
                 grp = site_df[(site_df["obs_mode"] == obs_mode) & (site_df["filter_type"] == filter_type)]
-                box_data.append(grp[prior_col].abs().dropna().values)
-                positions.append(pos)
-                box_colors.append("lightgrey")
-                box_data.append(grp[post_col].abs().dropna().values)
-                positions.append(pos + 1)
-                box_colors.append("tab:blue")
-                tick_labels.append((pos + 0.5, f"{obs_mode}\n{filter_type}"))
-                pos += 3
+                vals_prior = grp[prior_col].abs().dropna().to_numpy(dtype=float)
+                vals_post = grp[post_col].abs().dropna().to_numpy(dtype=float)
 
-            bp = ax.boxplot(box_data, positions=positions, widths=0.8, patch_artist=True)
+                for vals, color in ((vals_prior, "lightgrey"), (vals_post, "tab:blue")):
+                    if vals.size == 0:
+                        stats = dict(med=np.nan, q1=np.nan, q3=np.nan, whislo=np.nan, whishi=np.nan, fliers=[])
+                    else:
+                        med = float(np.nanmedian(vals))
+                        q1, q3 = np.percentile(vals, [25, 75])
+                        sigma = float(np.nanstd(vals))
+                        whislo = med - 2.0 * sigma
+                        whishi = med + 2.0 * sigma
+                        fliers = vals[(vals < whislo) | (vals > whishi)]
+                        stats = dict(med=med, q1=q1, q3=q3, whislo=whislo, whishi=whishi, fliers=fliers)
+                    box_stats.append(stats)
+                    positions.append(pos)
+                    box_colors.append(color)
+                    pos += 1
+
+                mode_lbl = _obs_mode_display_label(obs_mode)
+                filt_lbl = filter_label_map.get(filter_type, filter_type)
+                tick_labels.append((positions[-2] + 0.5, f"{mode_lbl}\n{filt_lbl}"))
+
+            bp = ax.bxp(
+                box_stats,
+                positions=positions,
+                widths=0.8,
+                showfliers=True,
+                patch_artist=True,
+            )
             for patch, color in zip(bp["boxes"], box_colors):
                 patch.set_facecolor(color)
+            for median in bp["medians"]:
+                median.set_color("black")
+                median.set_linewidth(2.0)
+            for flier in bp["fliers"]:
+                flier.set_marker("o")
+                flier.set_markerfacecolor("black")
+                flier.set_markeredgecolor("black")
 
             for thr in thresholds:
                 ax.axhline(thr, color="tab:red", ls="--", lw=0.8, alpha=0.6)
-                ax.text(positions[-1] + 1.2, thr, f"{thr} MHz", fontsize=7, color="tab:red", va="center")
+                ax.text(positions[-1] + 1.2, thr, f"{thr} MHz", fontsize=20, color="tab:red", va="center")
 
+            legend_handles = [
+                Patch(facecolor="lightgrey", edgecolor="black", label="Prior box"),
+                Patch(facecolor="tab:blue", edgecolor="black", label="Posterior box"),
+                Line2D([0], [0], color="black", lw=2.0, label="Median"),
+                Line2D([0], [0], color="black", lw=1.0, label="2σ bounds"),
+                Line2D([0], [0], marker="o", color="black", linestyle="None", markersize=6, label="Outlier"),
+            ]
+            ax.legend(handles=legend_handles, fontsize=16, loc="upper right")
             ax.set_xticks([p for p, _ in tick_labels])
-            ax.set_xticklabels([lbl for _, lbl in tick_labels], fontsize=8)
-            ax.set_ylabel(f"|{metric} error| [MHz]")
-            ax.set_title(f"{site}: {metric} error (grey=prior, blue=post)")
+            ax.set_xticklabels([lbl for _, lbl in tick_labels], fontsize=20)
+            ax.set_ylabel(f"|{metric} error| [MHz]", fontsize=20)
+            ax.set_title(f"{site}: {metric} error", fontsize=20)
 
         fig.suptitle(f"ISR {metric} retrieval error by obs_mode / filter_type")
         fig.tight_layout()
@@ -2599,7 +2716,9 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
         for m in metric_bar_specs for phase in ("prior", "post") for t in thresholds)
 
     if thr_cols_exist:
-        fig, axes = plt.subplots(1, len(thresholds), figsize=(6 * len(thresholds), 5), sharey=True)
+        _export_plot_data_for_figure(df, "isr_threshold_fractions")
+
+        fig, axes = plt.subplots(1, len(thresholds), figsize=(20 * len(thresholds), 7), sharey=True)
         width = 0.8 / n_bars
         x0 = np.arange(len(combos)) * (n_bars * width + 1.0)
 
@@ -2609,19 +2728,19 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
             for m in metric_bar_specs:
                 for phase in ("prior", "post"):
                     col = f"{phase}_{m}_within_{ts}mhz"
-                    vals = [df[(df["obs_mode"] == om) & (df["filter_type"] == ft)][col].mean()
+                    vals = [df[(df["obs_mode"] == om) & (df["filter_type"] == ft)][col].mean()*int(100)
                             for om, ft in combos]
                     ax.bar(x0 + bar_idx * width, vals, width=width,
                            label=bar_labels[bar_idx] if ax is axes[0] else None,
                            color=plt.cm.tab20(bar_idx / n_bars))
                     bar_idx += 1
             ax.set_xticks(x0 + (n_bars * width) / 2 - width / 2)
-            ax.set_xticklabels([f"{om}\n{ft}" for om, ft in combos], fontsize=7)
-            ax.set_ylim(0, 1)
-            ax.set_title(f"within {thr} MHz")
-            ax.set_ylabel("fraction of cases")
+            ax.set_xticklabels([f"{om}\n{ft}" for om, ft in combos_label], fontsize=20)
+            ax.set_ylim(0, 100)
+            ax.set_title(f"within {thr} MHz", fontsize=20)
+            ax.set_ylabel("Percentage of cases", fontsize=20)
 
-        axes[0].legend(fontsize=7, loc="upper right")
+        axes[0].legend(fontsize=20, loc="upper right")
         fig.suptitle("Fraction of ISR comparisons within frequency threshold")
         fig.tight_layout()
         fig.savefig(save_dir / "isr_threshold_fractions.png", dpi=150, bbox_inches="tight")
@@ -2634,15 +2753,17 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
     _ekf_labels = [ft for ft in df["filter_type"].unique() if ft != "gridded_kf"]
     for _ekf_label in _ekf_labels:
         ekf_df = df[df["filter_type"] == _ekf_label]
+        _export_plot_data_for_figure(ekf_df, f"isr_foF2_scatter_by_mode_{_ekf_label}")
         if ekf_df.empty or not {"isr_foF2", "post_foF2"}.issubset(ekf_df.columns):
             continue
-        fig, axes = plt.subplots(1, len(OBS_MODES), figsize=(6 * len(OBS_MODES), 5.5), squeeze=False)
+        fig, axes = plt.subplots(1, len(OBS_MODES), figsize=(8 * len(OBS_MODES), 7), squeeze=False)
         axes = axes[0]
         sm = None
         for ax, obs_mode in zip(axes, OBS_MODES):
             grp = ekf_df[ekf_df["obs_mode"] == obs_mode].dropna(subset=["isr_foF2", "post_foF2"])
+            label = OBS_MODES_LABELS[OBS_MODES.index(obs_mode)] if obs_mode in OBS_MODES else obs_mode
             if grp.empty:
-                ax.set_title(f"{obs_mode} (no data)")
+                ax.set_title(f"{label} (no data)", fontsize=20)
                 continue
             c = grp["n_ro_occultations"] if "n_ro_occultations" in grp.columns else None
             sc = ax.scatter(grp["isr_foF2"], grp["post_foF2"], c=c, cmap="viridis",
@@ -2650,10 +2771,10 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
             lo = min(grp["isr_foF2"].min(), grp["post_foF2"].min())
             hi = max(grp["isr_foF2"].max(), grp["post_foF2"].max())
             ax.plot([lo, hi], [lo, hi], color="grey", ls="--", lw=1.0, label="perfect retrieval")
-            ax.set_xlabel("ISR truth foF2 [MHz]")
-            ax.set_ylabel("Posterior foF2 [MHz]")
-            ax.set_title(obs_mode)
-            ax.legend(fontsize=7)
+            ax.set_xlabel("ISR truth foF2 [MHz]", fontsize=20)
+            ax.set_ylabel("Posterior foF2 [MHz]", fontsize=20)
+            ax.set_title(label, fontsize=20)
+            ax.legend(fontsize=20)
             if c is not None:
                 sm = sc
         if sm is not None:
@@ -2662,42 +2783,6 @@ def plot_isr_freq_metrics(metrics_csv: str | Path, save_dir: str | Path) -> None
         fig.savefig(save_dir / f"isr_foF2_scatter_by_mode_{_ekf_label}.png",
                     dpi=150, bbox_inches="tight")
         plt.close(fig)
-
-    # ── Figure 5: HF propagation perspective (time series), per EKF mode ────
-    if {"isr_foF2", "post_foF2", "isr_foE", "post_foE"}.issubset(df.columns):
-        for _ekf_label in _ekf_labels:
-            ekf_ts_df = df[df["filter_type"] == _ekf_label].sort_values("t_centre")
-            if ekf_ts_df.empty:
-                continue
-            fig, axes = plt.subplots(len(ISR_SITES), 1, figsize=(11, 4.5 * len(ISR_SITES)), squeeze=False)
-            axes = axes[:, 0]
-            for ax, site in zip(axes, ISR_SITES):
-                site_df = ekf_ts_df[ekf_ts_df["instrument"] == site]
-                if site_df.empty:
-                    ax.set_title(f"{site} (no data)")
-                    continue
-                truth = site_df.drop_duplicates(subset=["t_centre"]).sort_values("t_centre")
-                ax.plot(truth["t_centre"], truth["isr_foF2"], color="black", lw=1.6,
-                         marker="o", ms=3, label="truth foF2")
-                ax.plot(truth["t_centre"], truth["isr_foE"], color="black", lw=1.2, ls="--",
-                         marker="o", ms=3, label="truth foE")
-                for obs_mode in OBS_MODES:
-                    mode_df = site_df[site_df["obs_mode"] == obs_mode].sort_values("t_centre")
-                    if mode_df.empty:
-                        continue
-                    color = obs_mode_colors[obs_mode]
-                    ax.plot(mode_df["t_centre"], mode_df["post_foF2"], color=color, lw=1.3,
-                             marker="s", ms=3, label=f"{obs_mode} post foF2")
-                    ax.plot(mode_df["t_centre"], mode_df["post_foE"], color=color, lw=1.0, ls="--",
-                             marker="s", ms=3, label=f"{obs_mode} post foE")
-                ax.set_ylabel("Frequency [MHz]")
-                ax.set_title(f"{site}: HF propagation frequencies ({_ekf_label})")
-                ax.legend(fontsize=6, ncol=3)
-            axes[-1].set_xlabel("time (t_centre)")
-            fig.tight_layout()
-            fig.savefig(save_dir / f"isr_hf_propagation_timeseries_{_ekf_label}.png",
-                        dpi=150, bbox_inches="tight")
-            plt.close(fig)
 
     print(f"[ISR-DA] Frequency-domain figures saved to {save_dir}")
 
@@ -2895,7 +2980,8 @@ def plot_isr_convergence_vs_occ_count(
         if metric_key not in df.columns:
             continue
 
-        fig, axes = plt.subplots(1, len(OBS_MODES), figsize=(6 * len(OBS_MODES), 5), squeeze=False)
+        plot_rows = []
+        fig, axes = plt.subplots(1, len(OBS_MODES), figsize=(8 * len(OBS_MODES), 7), squeeze=False)
         axes = axes[0]
 
         # Non-igs_only panels drive the shared x-range that the igs_only
@@ -2915,16 +3001,29 @@ def plot_isr_convergence_vs_occ_count(
                     ax.axhline(ref_val, color=style["color"], ls=style["ls"], lw=1.8,
                                 label=f"{filter_type}  (flat ref., median={ref_val:.3g})")
                 else:
-                    _plot_occ_convergence_panel(ax, series, filter_type, fit=True)
+                    fit_result = _plot_occ_convergence_panel(ax, series, filter_type, fit=True)
                     shared_xlim[0] = min(shared_xlim[0], series["n"].min())
                     shared_xlim[1] = max(shared_xlim[1], series["n"].max())
 
-            ax.set_title(obs_mode)
-            ax.set_xlabel("Occultations assimilated (n_occ_assimilated)")
-            ax.set_ylabel(meta["ylabel"])
+                for idx in range(len(series["n"])):
+                    plot_rows.append({
+                        "metric_key": metric_key,
+                        "obs_mode": obs_mode,
+                        "filter_type": filter_type,
+                        "n_occ_assimilated": float(series["n"][idx]),
+                        "median": float(series["median"][idx]),
+                        "std": float(series["std"][idx]),
+                        "fit_b": float(fit_result["b"]) if fit_result is not None else np.nan,
+                        "fit_r2": float(fit_result["r2"]) if fit_result is not None else np.nan,
+                    })
+
+            label = OBS_MODES_LABELS[OBS_MODES.index(obs_mode)] if obs_mode in OBS_MODES else obs_mode
+            ax.set_title(label, fontsize=20)
+            ax.set_xlabel("Occultations assimilated (n_occ_assimilated)", fontsize=20)
+            ax.set_ylabel(meta["ylabel"], fontsize=20)
             ax.grid(True, lw=0.3, alpha=0.4)
             if has_data:
-                ax.legend(fontsize=8)
+                ax.legend(fontsize=20)
             else:
                 ax.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax.transAxes)
 
@@ -2932,6 +3031,8 @@ def plot_isr_convergence_vs_occ_count(
             igs_ax = axes[OBS_MODES.index("igs_only")] if "igs_only" in OBS_MODES else None
             if igs_ax is not None:
                 igs_ax.set_xlim(shared_xlim[0], shared_xlim[1])
+
+        _export_plot_data_for_figure(pd.DataFrame(plot_rows), f"isr_convergence_vs_occ_count_{metric_key}")
 
         fig.suptitle(f"{meta['title']} — vs. occultation count")
         fig.tight_layout(rect=[0, 0, 1, 0.94])
