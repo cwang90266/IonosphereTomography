@@ -1049,7 +1049,7 @@ def PCA2EDP_3D_map(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | No
 # ===========================================================================
 
 Parameterization_Style = Literal[
-    'density_10ex', 'ANCHOR', 'PCA_1D', 'PCA_3D', 'PCA_1D_10ex', 'PCA_3D_10ex',
+    'raw', 'density_10ex', 'ANCHOR', 'PCA_1D', 'PCA_3D', 'PCA_1D_10ex', 'PCA_3D_10ex',
 ]
 
 
@@ -1097,6 +1097,8 @@ class EDP_Parameterization:
         # (not just None) should still pick up defaults, and a caller
         # supplying only some keys (e.g. one overridden ANCHOR bound) should
         # get the rest filled in rather than hitting a KeyError later.
+        if style == 'raw':
+            return dict(hyper_params) if hyper_params else {}
         if style == 'ANCHOR':
             merged = dict(ANCHOR_DEFAULT_BOUNDS)
             if hyper_params:
@@ -1123,6 +1125,12 @@ class EDP_Parameterization:
 
     @staticmethod
     def _build_spec(style: str, hyper_params: dict) -> ParameterizationSpec:
+        if style == 'raw':
+            return ParameterizationSpec(
+                to_density=lambda p, alt: p,
+                to_parameter=lambda d, alt: d,
+                jacobian=lambda p, alt: ('diagonal', np.ones_like(p)),
+            )
         if style == 'density_10ex':
             mld = hyper_params['minlog10Density']
             return ParameterizationSpec(
@@ -1294,6 +1302,7 @@ class Parameterized_EDPSamples:
     __slots__ = ('EDPSamples', 'style', 'Parameterization')
 
     _PARAM_DIMS = {
+        'raw': lambda E: (E.DIM_HEIGHT, E.DIM_GEO, E.DIM_SAMPLE),
         'density_10ex': lambda E: (E.DIM_HEIGHT, E.DIM_GEO, E.DIM_SAMPLE),
         'ANCHOR': lambda E: ('anchor_param', E.DIM_GEO, E.DIM_SAMPLE),
         'PCA_1D': lambda E: ('nPCA', E.DIM_GEO, E.DIM_SAMPLE),
