@@ -1805,12 +1805,12 @@ class EDPSamples(xr.Dataset):
 
         Parameters
         ----------
-        scalar : {'Ne', 'edp', 'median', 'std', 'stddev'} or np.ndarray, default 'Ne'
+        scalar : {'Ne', 'edp', 'mean', 'median', 'std', 'stddev'} or np.ndarray, default 'Ne'
             If a string, the field is extracted/computed from ``self.edps``
             at ``target_alt`` (required in that case): ``'Ne'``/``'edp'`` is
-            the raw EDP at ``sample_idx``; ``'median'``/``'std'``/``'stddev'``
-            aggregate across all samples. If an ``np.ndarray``, it is used
-            directly and must have shape ``(n_geo,)``.
+            the raw EDP at ``sample_idx``; ``'mean'``/``'median'``/``'std'``/
+            ``'stddev'`` aggregate across all samples. If an ``np.ndarray``,
+            it is used directly and must have shape ``(n_geo,)``.
         target_alt : float, optional
             Altitude (km) to slice at; required when ``scalar`` is a string.
             The closest available altitude grid point is used.
@@ -1833,6 +1833,9 @@ class EDPSamples(xr.Dataset):
             if var_req in ('ne', 'edp'):
                 values = self.edps[alt_idx, :, sample_idx]
                 default_label = f'Electron Density (m$^{{-3}}$) [Alt: {actual_alt:.1f} km, Sample: {sample_idx}]'
+            elif var_req == 'mean':
+                values = np.nanmean(self.edps[alt_idx, :, :], axis=1)
+                default_label = f'Mean Ne (m$^{{-3}}$) [Alt: {actual_alt:.1f} km]'
             elif var_req == 'median':
                 values = np.nanmedian(self.edps[alt_idx, :, :], axis=1)
                 default_label = f'Median Ne (m$^{{-3}}$) [Alt: {actual_alt:.1f} km]'
@@ -1841,8 +1844,8 @@ class EDPSamples(xr.Dataset):
                 default_label = f'Ne Std Dev (m$^{{-3}}$) [Alt: {actual_alt:.1f} km]'
             else:
                 raise ValueError(
-                    f"Unknown scalar string: '{scalar}'. Try 'Ne', 'median', "
-                    "'std', or pass an (n_geo,) array directly."
+                    f"Unknown scalar string: '{scalar}'. Try 'Ne', 'mean', "
+                    "'median', 'std', or pass an (n_geo,) array directly."
                 )
         else:
             values = np.asarray(scalar)

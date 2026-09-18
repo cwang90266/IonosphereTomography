@@ -881,7 +881,7 @@ class TestPlotHorizontalField:
         ("Global", dict(equal_spaced=True, dLat=45.0)),
         ("Regional", dict(Lat=32.0, Lon=-178.0, radius=20.0, dLat=5.0)),   # antimeridian-straddling
     ])
-    @pytest.mark.parametrize("scalar_kind", ["Ne", "median", "std"])
+    @pytest.mark.parametrize("scalar_kind", ["Ne", "mean", "median", "std"])
     def test_string_scalar_does_not_raise(self, geo_type, kwargs, scalar_kind):
         import matplotlib.pyplot as plt
         ds = self._build(geo_type, **kwargs)
