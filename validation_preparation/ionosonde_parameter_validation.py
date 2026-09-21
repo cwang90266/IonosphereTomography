@@ -344,7 +344,7 @@ def validate_ionosonde_parameters(
     csv_path = _export_ionosonde_window_csv(
         records, name, site, lo, hi, output.parent
     )
-    fig, axes = plt.subplots(1, 4, figsize=(16, 10))
+    fig, axes = plt.subplots(1, 4, figsize=(16, 1))
 
     for ax, parameter in zip(axes, PARAMETERS):
         if np.isfinite(observed[parameter]):
