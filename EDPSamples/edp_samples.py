@@ -213,7 +213,21 @@ def get_IRI2020_EDP(DateTime: str,
 
     import tempfile
 
-    IRIPath     = "~/Desktop/tomography_project/iri2020_new/src/iri2020/"
+    IRIPath = os.environ.get("IRI2020_PATH")
+    if not IRIPath:
+        raise RuntimeError(
+            "Environment variable IRI2020_PATH is not set (or empty). It "
+            "must point at the iri2020 directory containing the compiled "
+            "'iri2020_namelist_driver' executable and its 'data/' "
+            "subfolder. From the IonosphereTomography repository's main "
+            "folder, run:\n"
+            "    source init_iri2020_env.sh\n"
+            "(bash/zsh; must be sourced, not executed, so the variable "
+            "reaches your shell) or export IRI2020_PATH yourself."
+        )
+    IRIPath = os.path.expanduser(IRIPath)
+    if not IRIPath.endswith(os.sep):
+        IRIPath += os.sep
     IRIDataPath = IRIPath + "data/"
     exe         = IRIPath + "iri2020_namelist_driver"
     apf107_src  = IRIDataPath + "apf107.dat"
@@ -824,8 +838,16 @@ class EDPSamples(xr.Dataset):
             nLat=int((90-minLat)/dLat) + 1
             lat_vals = minLat+(90-minLat)*np.arange(nLat )/(nLat-1)        
         elif pole == "south":
-            nLat=int((minLat+90)/dLat) + 1
-            lat_vals = minLat-(minLat+90)*np.arange(nLat )/(nLat-1)        
+            # Mirror image of the north branch: same angular span (90-minLat)
+            # and ring count, but running from -minLat down to -90 so every
+            # latitude stays in the southern hemisphere. The previous
+            # `int((minLat+90)/dLat)` / `minLat-(minLat+90)*frac` formulas
+            # used the wrong span (170 deg instead of 90-minLat) and never
+            # negated, so a "south" cap at minLat=80 actually ran from +80
+            # down to -90 -- covering most of the globe, including most of
+            # the northern hemisphere, instead of a small cap near -90.
+            nLat=int((90-minLat)/dLat) + 1
+            lat_vals = -minLat-(90-minLat)*np.arange(nLat )/(nLat-1)
         else:
             raise ValueError(f"Invalid pole: {pole}")
 
@@ -1074,6 +1096,87 @@ class EDPSamples(xr.Dataset):
         vertices  = np.column_stack([lon_deg, lat_deg])
         triangles = simplices.astype(int)
         return vertices, triangles
+
+    @staticmethod
+    def genRegionalArea(
+        centerLat: float,
+        centerLon: float,
+        radius: float,
+        dSpace: float = 5.0,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Approximately equal-area triangular mesh covering a circular region
+        (spherical cap) of angular radius ``radius`` degrees around
+        ``(centerLat, centerLon)``.
+
+        Built the same way as :meth:`genGlobalArea` -- a Fibonacci/Vogel
+        lattice plus convex-hull triangulation, giving a near-uniform,
+        near-equal-area mesh with no polar-style over-sampling -- then
+        cropped down to the requested cap. Cropping uses true great-circle
+        angular distance (an ECEF dot product), not raw longitude/latitude
+        arithmetic, so a center near the antimeridian (e.g. lon=-178) is
+        handled correctly: nothing here ever computes a longitude
+        difference directly.
+
+        For very fine local resolution over a small region this generates
+        (and discards) a full global lattice first, which is wasteful in
+        the extreme -- fine for the modest radii/spacings this project
+        uses (a few thousand global points is cheap to hull), but a
+        cap-restricted Fibonacci sampling would scale better for, say,
+        radius=2, dSpace=0.05.
+
+        Parameters
+        ----------
+        centerLat, centerLon : float
+            Center of the region, in degrees.
+        radius : float
+            Angular radius of the region, in degrees (e.g. 20 for a cap
+            extending 20 degrees of arc from the center in every direction).
+        dSpace : float, default 5.0
+            Target great-circle spacing between adjacent vertices, in
+            degrees -- same meaning as in :meth:`genGlobalArea`.
+
+        Returns
+        -------
+        vertices : ndarray, shape (N, 2)
+            Columns are [longitude, latitude] in degrees, matching
+            genRectangularArea/genPolarArea/genGlobalArea's convention.
+        triangles : ndarray, shape (T, 3)
+            Triangle connectivity -- indices into ``vertices``. A triangle
+            is kept only if all three of its vertices fall within
+            ``radius`` of the center (same crop convention as
+            ``subset_region``/``subset_union_triangles``), so the boundary
+            is a (slightly jagged, at the mesh's own resolution)
+            approximation to a perfect circle.
+        """
+        global_vertices, global_triangles = EDPSamples.genGlobalArea(dSpace=dSpace)
+
+        center_hat = _geodetic_to_ecef(centerLat, centerLon, 0.0)
+        center_hat = center_hat / np.linalg.norm(center_hat)
+
+        vertex_xyz = _geodetic_to_ecef(global_vertices[:, 1], global_vertices[:, 0], 0.0)
+        vertex_hat = vertex_xyz / np.linalg.norm(vertex_xyz, axis=1, keepdims=True)
+
+        cos_dist = np.clip(vertex_hat @ center_hat, -1.0, 1.0)
+        angular_dist_deg = np.degrees(np.arccos(cos_dist))
+
+        kept_idx = np.where(angular_dist_deg <= radius)[0]
+        if len(kept_idx) < 3:
+            raise ValueError(
+                f"genRegionalArea: only {len(kept_idx)} vertices found within "
+                f"{radius} deg of ({centerLat}, {centerLon}) at dSpace={dSpace}. "
+                "Increase radius or decrease dSpace."
+            )
+
+        remap = np.full(global_vertices.shape[0], -1, dtype=np.int64)
+        remap[kept_idx] = np.arange(len(kept_idx), dtype=np.int64)
+
+        tri_mask = np.all(remap[global_triangles] >= 0, axis=1)
+        triangles = remap[global_triangles[tri_mask]]
+        vertices = global_vertices[kept_idx]
+
+        return vertices, triangles
+
     @staticmethod
     def generate_occultation_mesh(pt1=None, pt2=None, pt3=None, filename=None, dLat=0.5, dLon=0.5, alt_limit=600.0):
         """
@@ -1197,7 +1300,7 @@ class EDPSamples(xr.Dataset):
 
     def __init__(cls,
         DateTime: str,
-        geo_type : Literal["Point", "Rectangle", "Polar", "Occultation", "Global"],
+        geo_type : Literal["Point", "Rectangle", "Polar", "Occultation", "Global", "Regional"],
         altitude: np.ndarray,
         sampling_parameters: pd.DataFrame,
         evaluate_iri: int = None,
@@ -1217,6 +1320,7 @@ class EDPSamples(xr.Dataset):
         edps: np.ndarray = None,
         feature_edps: np.ndarray = None,
         equal_spaced: bool = False,
+        radius: float = None,
         attrs = None):
         #) -> EDPSamples:
         """
@@ -1224,7 +1328,7 @@ class EDPSamples(xr.Dataset):
 
         Parameters
         ----------
-        geo_type : Literal["Point","Rectangle","Polar","Occultation","Global"], type of 2D grid
+        geo_type : Literal["Point","Rectangle","Polar","Occultation","Global","Regional"], type of 2D grid
         altitude : (n_height,) array
             1D altitude (or height coordinate) for each index along ``height``.
         sampling_parameters: pd.Dataframe,
@@ -1247,6 +1351,9 @@ class EDPSamples(xr.Dataset):
         edps: numpy array, sample edps
         feature_edps: np.ndarray = None, sample features of edps
         equal_spaced: bool = False, if True, generates a globally equal-spaced grid. If False, uses dLat/dLon.
+        radius: float = None, angular radius in degrees for geo_type Regional
+                (a circular cap around (Lon, Lat), using dLat as the target
+                point spacing -- same "dSpace" meaning as equal_spaced Global).
         attrs : mapping, optional Dataset attributes.
         """
         if attrs is None:
@@ -1275,7 +1382,14 @@ class EDPSamples(xr.Dataset):
                     pole="north"
                 else:
                     pole="south"
-                geolocation, mesh = cls.genPolarArea(pole,minLat,dLat)
+                # genPolarArea's own contract requires a positive magnitude
+                # for both poles (e.g. 80 meaning 80 deg from the equator,
+                # regardless of hemisphere) -- the sign here only selects
+                # which pole, via `pole` above. Passing the signed minLat
+                # straight through for "south" fed genPolarArea a negative
+                # value it isn't built to handle, producing a cap spanning
+                # ~170 degrees instead of the intended small polar region.
+                geolocation, mesh = cls.genPolarArea(pole,abs(minLat),dLat)
             case "Occultation":
                 if filename is None and (pt1 is None or pt2 is None or pt3 is None):
                     raise ValueError("For geo_type Occultation, you must provide either a 'filename' or all three points ('pt1', 'pt2', 'pt3').")
@@ -1306,6 +1420,10 @@ class EDPSamples(xr.Dataset):
                         raise ValueError("For geo_type Global with equal_spaced=False, both dLat and dLon must be provided.")
                     # Re-use the rectangular area spanning the entire globe
                     geolocation, mesh = cls.genRectangularArea(-180.0, 180.0, dLon, -90.0, 90.0, dLat)
+            case "Regional":
+                if Lon is None or Lat is None or radius is None or dLat is None:
+                    raise ValueError("For geo_type Regional, Lon, Lat, radius, and dLat cannot be None.")
+                geolocation, mesh = cls.genRegionalArea(Lat, Lon, radius, dLat)
             case _:
                 raise ValueError(f"Invalid geo_type: {geo_type}")
 
@@ -1322,8 +1440,12 @@ class EDPSamples(xr.Dataset):
             if evaluate_iri == 1:
                 edps, feature_edps = get_IRI2020_EDP(DateTime,altitude,geolocation,sampling_parameters)
             else:
-                edps=np.ndarray((n_height,n_geo,n_sample))
-                feature_edps=np.ndarray((len(cls.FEATURE_LABEL),n_geo,n_sample))
+                # np.ndarray(shape) allocates uninitialized memory (unlike
+                # np.zeros) -- the placeholder EDPs were whatever garbage
+                # happened to be there, non-deterministic across runs and
+                # occasionally NaN/Inf.
+                edps=np.zeros((n_height,n_geo,n_sample))
+                feature_edps=np.zeros((len(cls.FEATURE_LABEL),n_geo,n_sample))
         else:
             print(f"EDPS: {edps.shape}, N_geo: {n_geo}")
             assert edps.ndim == 3, "EDP sample profile must be 3 dimensional"
@@ -1427,11 +1549,16 @@ class EDPSamples(xr.Dataset):
                     attrs["pole"] = "south"
             case "Global":
                 # NetCDF cannot save booleans. Convert True/False to 1/0
-                attrs["equal_spaced"] = int(equal_spaced) 
-                
+                attrs["equal_spaced"] = int(equal_spaced)
+
                 # NetCDF also hates 'None' types, so we default them to 0.0 if missing
                 attrs["dLat"] = dLat if dLat is not None else 0.0
                 attrs["dLon"] = dLon if dLon is not None else 0.0
+            case "Regional":
+                attrs["Lon"] = Lon
+                attrs["Lat"] = Lat
+                attrs["radius"] = radius
+                attrs["dLat"] = dLat
 
         super().__init__(
             data_vars=data_vars,
@@ -1492,7 +1619,7 @@ class EDPSamples(xr.Dataset):
                assert "Lat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (3)."]
                return EDPSamples(ds.attrs["DateTime"],ds.attrs["geo_type"],
                                 altitude, sampling_parameters, 
-                                Lon=ds.attrs["Lon"],Lat=ds.attrs["Lon"],
+                                Lon=ds.attrs["Lon"],Lat=ds.attrs["Lat"],
                                 edps=edps,feature_edps=feature_edps,attrs=ds.attrs)
 
             case "LOS":
@@ -1542,6 +1669,16 @@ class EDPSamples(xr.Dataset):
                                 dLat=ds.attrs["dLat"],
                                 dLon=ds.attrs["dLon"],
                                 edps=edps, feature_edps=feature_edps, attrs=ds.attrs)
+            case "Regional":
+                assert "Lon" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (20)."]
+                assert "Lat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (21)."]
+                assert "radius" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (22)."]
+                assert "dLat" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (23)."]
+                return EDPSamples(ds.attrs["DateTime"], ds.attrs["geo_type"],
+                                altitude, sampling_parameters,
+                                Lon=ds.attrs["Lon"], Lat=ds.attrs["Lat"],
+                                radius=ds.attrs["radius"], dLat=ds.attrs["dLat"],
+                                edps=edps, feature_edps=feature_edps, attrs=ds.attrs)
             case "Occultation":
                 assert "pt1" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (15)."]
                 assert "pt2" in ds.attrs, ["Loaded dataset does not have the structure of EDPSamples (16)."]
@@ -1569,26 +1706,179 @@ class EDPSamples(xr.Dataset):
         """
         self.to_netcdf(path, **kwargs)
 
-    def plot_geolocation(self):
-        match self.attrs["geo_type"]:
-            case "Point" :
-                fig, ax = plt.subplots(figsize=(8, 6))
-                # Plot the vertices
-                ax.scatter(self.geolocation[:,0], self.geolocation[:,1], color='red', s=12, label='Vertices', zorder=5)
-                ax.set_xlabel("Longitude (deg)")
-                ax.set_ylabel("Latitude (deg)")
-                ax.autoscale()
-                ax.legend()
-                ax.grid(True, alpha=0.4)
-                
-            case "Rectangle" | "Occultation":
-                plot_tri_mesh(self.geolocation, self.mesh)                
-            case "Polar":
-                if self.attrs["minLat"] > 0:
-                    plot_polar_mesh(self.geolocation, self.mesh, pole= "north")  
-                else:
-                    plot_polar_mesh(self.geolocation, self.mesh, pole= "south")  
-                    
+    def _horizontal_map_axes(self, ax=None, figsize=(8, 6)):
+        """
+        Build (or reuse) a cartopy ``GeoAxes`` with a projection, land/ocean/
+        coastline/border backdrop, gridlines, and an extent appropriate for
+        this dataset's ``geo_type`` -- shared by :meth:`plot_geolocation` and
+        :meth:`plot_horizontal_field` so both get the same map treatment.
+
+        ``"Polar"`` gets a north/south polar stereographic projection
+        (matching its pole); everything else gets Plate Carree, framed
+        tightly around the actual grid extent (with a minimum pad so a
+        single-vertex ``"Point"`` dataset doesn't collapse to a zero-size
+        view) except ``"Global"``, which shows the whole world.
+
+        The Plate Carree case is recentred on the grid's own circular-mean
+        longitude (via ``central_longitude``) rather than fixed at 0, so a
+        region straddling the antimeridian (e.g. ``"Regional"`` centred near
+        lon=-178) is framed correctly instead of naive min/max longitude
+        bounds spuriously spanning nearly the whole globe.
+        """
+        geo_type = self.attrs["geo_type"]
+        lon = self.geolocation[:, 0]
+        lat = self.geolocation[:, 1]
+
+        is_north_polar = geo_type == "Polar" and self.attrs["minLat"] > 0
+        if geo_type == "Polar":
+            proj = ccrs.NorthPolarStereo() if is_north_polar else ccrs.SouthPolarStereo()
+            center_lon = 0.0
+        else:
+            # Circular mean handles antimeridian wraparound correctly;
+            # a plain lon.mean() would not (e.g. [-179, 179] averages to 0,
+            # the wrong side of the world, instead of +/-180).
+            center_lon = float(np.degrees(np.arctan2(
+                np.mean(np.sin(np.radians(lon))), np.mean(np.cos(np.radians(lon))))))
+            proj = ccrs.PlateCarree(central_longitude=center_lon)
+
+        if ax is None:
+            fig = plt.figure(figsize=figsize)
+            ax = fig.add_subplot(1, 1, 1, projection=proj)
+        else:
+            fig = ax.figure
+
+        ax.add_feature(cfeature.LAND, facecolor='lightgray', zorder=0)
+        ax.add_feature(cfeature.OCEAN, facecolor='lightblue', zorder=0)
+        ax.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, zorder=1)
+        ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5, zorder=1)
+        ax.gridlines(draw_labels=True, alpha=0.3)
+
+        if geo_type == "Global":
+            ax.set_global()
+        elif geo_type == "Polar":
+            min_lat_abs = abs(self.attrs["minLat"])
+            pad = 5.0
+            if is_north_polar:
+                ax.set_extent([-180, 180, min_lat_abs - pad, 90], ccrs.PlateCarree())
+            else:
+                ax.set_extent([-180, 180, -90, -min_lat_abs + pad], ccrs.PlateCarree())
+        else:
+            # Express longitudes relative to center_lon (wrapped to
+            # [-180, 180)) before taking min/max, and set the extent in
+            # that same recentred CRS -- computing bounds from raw lon
+            # values would blow up for a region straddling the antimeridian.
+            lon_shifted = ((lon - center_lon + 180.0) % 360.0) - 180.0
+            pad_lon = max(1.0, 0.1 * (lon_shifted.max() - lon_shifted.min()))
+            pad_lat = max(1.0, 0.1 * (lat.max() - lat.min()))
+            ax.set_extent([lon_shifted.min() - pad_lon, lon_shifted.max() + pad_lon,
+                           lat.min() - pad_lat, lat.max() + pad_lat],
+                          ccrs.PlateCarree(central_longitude=center_lon))
+
+        return ax
+
+    def plot_geolocation(self, ax=None, figsize=(8, 6)):
+        """
+        Plot this dataset's horizontal grid (vertices, and mesh triangles if
+        present) over a land/ocean/coastline backdrop.
+        """
+        ax = self._horizontal_map_axes(ax=ax, figsize=figsize)
+        lon, lat = self.geolocation[:, 0], self.geolocation[:, 1]
+
+        mesh = self.mesh
+        if mesh is not None and len(mesh) > 0:
+            ax.triplot(lon, lat, mesh, transform=ccrs.Geodetic(),
+                       color='C0', linewidth=0.6, alpha=0.8, zorder=4)
+        ax.scatter(lon, lat, transform=ccrs.Geodetic(), color='red', s=12,
+                  zorder=5, label='Vertices')
+
+        ax.legend(loc='best')
+        ax.set_title(f"Geolocations ({self.attrs['geo_type']})")
+        return ax
+
+    def plot_horizontal_field(self, scalar='Ne', target_alt=None, sample_idx=0,
+                              ax=None, figsize=(8, 6), cmap='viridis', scalar_label=None):
+        """
+        Plot a scalar field defined on the horizontal grid (one value per
+        geolocation vertex) over the same land/ocean/coastline backdrop as
+        :meth:`plot_geolocation` -- e.g. the EDP at a specific altitude, or
+        any user-supplied per-vertex scalar array.
+
+        Parameters
+        ----------
+        scalar : {'Ne', 'edp', 'mean', 'median', 'std', 'stddev'} or np.ndarray, default 'Ne'
+            If a string, the field is extracted/computed from ``self.edps``
+            at ``target_alt`` (required in that case): ``'Ne'``/``'edp'`` is
+            the raw EDP at ``sample_idx``; ``'mean'``/``'median'``/``'std'``/
+            ``'stddev'`` aggregate across all samples. If an ``np.ndarray``,
+            it is used directly and must have shape ``(n_geo,)``.
+        target_alt : float, optional
+            Altitude (km) to slice at; required when ``scalar`` is a string.
+            The closest available altitude grid point is used.
+        sample_idx : int, default 0
+            Sample index to plot when ``scalar='Ne'``/``'edp'``.
+        cmap : str, default 'viridis'
+        scalar_label : str, optional
+            Colorbar label; a sensible default is generated when omitted.
+
+        Returns
+        -------
+        ax : the cartopy GeoAxes used.
+        """
+        if isinstance(scalar, str):
+            if target_alt is None:
+                raise ValueError("target_alt must be provided when scalar is a string.")
+            alt_idx = int(np.argmin(np.abs(self.altitude - target_alt)))
+            actual_alt = self.altitude[alt_idx]
+            var_req = scalar.lower()
+            if var_req in ('ne', 'edp'):
+                values = self.edps[alt_idx, :, sample_idx]
+                default_label = f'Electron Density (m$^{{-3}}$) [Alt: {actual_alt:.1f} km, Sample: {sample_idx}]'
+            elif var_req == 'mean':
+                values = np.nanmean(self.edps[alt_idx, :, :], axis=1)
+                default_label = f'Mean Ne (m$^{{-3}}$) [Alt: {actual_alt:.1f} km]'
+            elif var_req == 'median':
+                values = np.nanmedian(self.edps[alt_idx, :, :], axis=1)
+                default_label = f'Median Ne (m$^{{-3}}$) [Alt: {actual_alt:.1f} km]'
+            elif var_req in ('std', 'stddev'):
+                values = np.nanstd(self.edps[alt_idx, :, :], axis=1)
+                default_label = f'Ne Std Dev (m$^{{-3}}$) [Alt: {actual_alt:.1f} km]'
+            else:
+                raise ValueError(
+                    f"Unknown scalar string: '{scalar}'. Try 'Ne', 'mean', "
+                    "'median', 'std', or pass an (n_geo,) array directly."
+                )
+        else:
+            values = np.asarray(scalar)
+            n_geo = self.geolocation.shape[0]
+            if values.shape != (n_geo,):
+                raise ValueError(
+                    f"scalar must have shape ({n_geo},) to match the horizontal "
+                    f"grid, got {values.shape}."
+                )
+            default_label = 'Value'
+
+        if scalar_label is None:
+            scalar_label = default_label
+
+        ax = self._horizontal_map_axes(ax=ax, figsize=figsize)
+        lon, lat = self.geolocation[:, 0], self.geolocation[:, 1]
+        mesh = self.mesh
+
+        if mesh is not None and len(mesh) > 0:
+            plot_obj = ax.tripcolor(lon, lat, mesh, values, transform=ccrs.Geodetic(),
+                                    cmap=cmap, shading='flat', edgecolors='face',
+                                    alpha=0.9, zorder=3)
+            ax.triplot(lon, lat, mesh, transform=ccrs.Geodetic(),
+                      color='black', linewidth=0.2, alpha=0.3, zorder=4)
+        else:
+            plot_obj = ax.scatter(lon, lat, c=values, transform=ccrs.Geodetic(),
+                                  cmap=cmap, s=40, zorder=5, edgecolor='k', linewidth=0.3)
+
+        cbar = ax.figure.colorbar(plot_obj, ax=ax, orientation='horizontal', shrink=0.7, pad=0.08)
+        cbar.set_label(scalar_label)
+        ax.set_title(f"Horizontal field ({self.attrs['geo_type']})")
+        return ax
+
     def plot_mesh_globe(self, tecmax_lat, tecmax_lon, save_path,
                         podTc_data=None, tangent_lla=None, alt_limit=600.0,
                         mesh_scalars=None, target_alt=None, target_sample=0,
@@ -1727,24 +2017,53 @@ class EDPSamples(xr.Dataset):
         fig.savefig(save_path, dpi=300, bbox_inches='tight')
         
 
-    def interp(self, positions: np.array, 
+    def interp(self, positions: np.array,
                coordinate: Literal["lla","ecef"] = "lla") -> tuple[np.ndarray,  np.ndarray, np.ndarray,  np.ndarray]:
+        """
+        Locate ``positions`` (either true geodetic lat/lon/alt, or ECEF) in
+        this dataset's altitude grid and (for mesh-based geo_types) mesh.
+
+        Parameters
+        ----------
+        positions : (N, 3) array
+            ``coordinate="lla"`` (default): columns are
+            ``[latitude_deg, longitude_deg, altitude_km]``.
+            ``coordinate="ecef"``: columns are ECEF ``[x, y, z]`` in km,
+            matching the LEO/GNSS convention used elsewhere in this module
+            (e.g. :meth:`get_observation_operator`).
+        """
         if coordinate == "ecef":
-            latitude,longitude, altitude = _ecef_to_geodetic(positions)
+            # _ecef_to_geodetic (like _geodetic_to_ecef) works in meters and
+            # returns altitude in meters; convert both ways here so this
+            # method's own km convention is self-consistent and altitude
+            # lands in the same units as self.altitude (km) before being
+            # handed to interp_heights -- a prior version skipped this and
+            # fed interp_heights a raw meters value (e.g. 250 000 against a
+            # table topping out at 500), producing wild extrapolation
+            # weights instead of an interior interpolation.
+            latitude,longitude, altitude_m = _ecef_to_geodetic(np.asarray(positions) * 1000.0)
+            altitude = altitude_m / 1000.0
         else:
             latitude = positions[:,0]
             longitude = positions[:,1]
             altitude = positions[:,2]
-            positions = _geodetic_to_ecef(latitude,longitude, altitude)
-            
+
         idx_alt,weight_alt = interp_heights(self.altitude, altitude)
-        
+
         match self.attrs["geo_type"]:
-            case "Point": 
+            case "Point":
                 return idx_alt, weight_alt
-            case "Rectangle" | "Polar" | "Occultation" :
+            case "Rectangle" | "Polar" | "Occultation" | "Global" | "Regional":
+                # self.geolocation stores (lon, lat) for every geo_type
+                # reachable here (see genRectangularArea/genPolarArea/
+                # genGlobalArea/generate_occultation_mesh), regardless of
+                # this method's own lat-first "lla" contract, so the query
+                # must be reordered to (lon, lat) to match -- passing
+                # (lat, lon) as a prior version did silently mismatches
+                # every mesh-based geo_type against a lat-first-looking
+                # query that's actually lon-first data.
                 idx_mesh, weight_mesh = find_containing_triangles(
-                    np.column_stack([latitude,longitude]),
+                    np.column_stack([longitude,latitude]),
                     self.geolocation,
                     self.mesh,
                     return_bary = True,
@@ -1836,11 +2155,22 @@ class EDPSamples(xr.Dataset):
                 np.add.at(H[i], a_idx1, dl_m_v * aw1)
                 
             else:
-                # Mesh Geometry: 2D Spatial mapping
+                # Mesh Geometry: 2D Spatial mapping.
+                # self.geolocation stores (lon, lat) (see genRectangularArea/
+                # genPolarArea/genGlobalArea), so the query built from the
+                # transformer's true (lon, lat) output must match that
+                # order -- querying (lat, lon) here silently mismatched the
+                # mesh, corrupting the barycentric weights for any
+                # spatially-varying field (a uniform field masks it, since
+                # any weighting of the same constant still gives that
+                # constant -- caught via a smoothly-varying test field, ~5%
+                # error at a clean interior point vs. forward_model_mesh_
+                # tec's independent computation, which does use (lon, lat)
+                # correctly).
                 tri_idx, bary = find_containing_triangles(
-                    np.column_stack([lats_v, lons_v]), 
-                    geolocation, 
-                    self.mesh, 
+                    np.column_stack([lons_v, lats_v]),
+                    geolocation,
+                    self.mesh,
                     return_bary=True
                 )
                 
@@ -1881,8 +2211,10 @@ class EDPSamples(xr.Dataset):
 
                 # --- B. Handle points OUTSIDE the mesh (Nearest Neighbor Fallback) ---
                 if np.any(outside):
-                    # Query KDTree for the single closest vertex (weight = 1.0)
-                    _, near_v = tree.query(np.column_stack([lats_v[outside], lons_v[outside]]))
+                    # Query KDTree for the single closest vertex (weight = 1.0).
+                    # `tree` was built on `geolocation`, which is (lon, lat)
+                    # -- same ordering fix as the barycentric branch above.
+                    _, near_v = tree.query(np.column_stack([lons_v[outside], lats_v[outside]]))
                     
                     a0_out = a_idx0[outside]
                     a1_out = a_idx1[outside]

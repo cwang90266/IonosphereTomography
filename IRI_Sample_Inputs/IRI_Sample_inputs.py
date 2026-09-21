@@ -358,7 +358,12 @@ class IRI_Sample_Inputs:
             idx_start=max((0,self.current_idx_f107-ap_sample_range))
             idx_end=min((self.current_idx_f107+ap_sample_range,len(ap_range)-1))
             ap_range=ap_range[idx_start:idx_end]
-            ap_range=[max([0,min(min(ap_range))]),float(np.mean(ap_range)),max(max(ap_range))]
+            # ap_range is a list of 8-value rows (3-hour ap indices per day);
+            # min(ap_range)/max(ap_range) would compare rows lexicographically
+            # rather than finding the true min/max value across all of them,
+            # so flatten first.
+            ap_flat=[v for row in ap_range for v in row]
+            ap_range=[max([0,min(ap_flat)]),float(np.mean(ap_range)),max(ap_flat)]
             ap_range.append(None)
         #
         if ig_sample_range == None:
@@ -390,7 +395,7 @@ class IRI_Sample_Inputs:
         for hour in hour_range:
             for f107 in f107_range:
                 for ap in ap_range:
-                    for ig12 in f107_range:
+                    for ig12 in ig12_range:
                         for Rz12 in Rz12_range:
                             Samples['hour'].append(hour)
                             Samples['f107'].append(f107)
