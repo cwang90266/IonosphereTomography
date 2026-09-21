@@ -11,7 +11,12 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
-from .roi_tools import circular_roi_points, geodesic_circle_latlon
+from .roi_tools import (
+    circular_roi_points,
+    geodesic_circle_latlon,
+    DEFAULT_FIBONACCI_SPACING_DEG,
+    DEFAULT_FIBONACCI_SPACING_KM,
+)
 
 from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent, ECEFtolla
 from Abel_Inverter.lei_abel_inverter import run_abel_inversion
@@ -242,10 +247,30 @@ def _build_clean_ro_entry(
         "occ_type": data.get("occ_type"),
     }
 
-    if "caL1_SNR" in data:
-        entry["snr_l1"] = np.asarray(data["caL1_SNR"][mask], dtype=np.float64).flatten()
-    if "pL2_SNR" in data:
-        entry["snr_l2"] = np.asarray(data["pL2_SNR"][mask], dtype=np.float64).flatten()
+    # Optional SNR arrays are diagnostic only.  Some podTc2 parser versions
+    # leave SNR at the original raw-file length even after TEC/LEO/GNSS have
+    # been geometry-QC masked.  Never index a mismatched diagnostic array with
+    # the post-QC TEC mask.  Keep aligned SNR when available; otherwise return
+    # NaNs of the correct output-ray length and record the mismatch in the
+    # per-file report instead of rejecting an otherwise valid occultation.
+    n_parser_rays = len(meas_tec)
+    n_out = int(mask.sum())
+
+    for src_key, out_key in (("caL1_SNR", "snr_l1"), ("pL2_SNR", "snr_l2")):
+        if src_key not in data:
+            continue
+
+        arr = np.asarray(data[src_key])
+        arr = np.ma.filled(arr, np.nan) if np.ma.isMaskedArray(arr) else arr
+        arr = np.asarray(arr, dtype=np.float64).squeeze()
+
+        if arr.ndim == 1 and len(arr) == n_parser_rays:
+            entry[out_key] = np.asarray(arr[mask], dtype=np.float64).flatten()
+        else:
+            entry[out_key] = np.full(n_out, np.nan, dtype=np.float64)
+            info[f"{src_key}_alignment"] = (
+                f"skipped_unaligned: shape={arr.shape}, parser_rays={n_parser_rays}"
+            )
 
     info["accepted"] = True
     info["n_output_rays"] = int(mask.sum())
@@ -486,6 +511,7 @@ def export_ro_outputs(
     out.mkdir(parents=True, exist_ok=True)
     accepted = {x.get("label") for x in observations}
     rows = []
+    abel_rows = []
 
     # Keep one row for selected files rejected by parser/clean QC.
     for meta in report.get("metadata_selected", []):
@@ -510,7 +536,25 @@ def export_ro_outputs(
         ab = e.get("abel") or {}
         an = np.asarray(ab.get("Ne", []), float).ravel()
         aa = np.asarray(ab.get("alt_km", ab.get("alt", [])), float).ravel()
+        at = np.asarray(ab.get("TEC_cal", []), float).ravel()
+        af = np.asarray(ab.get("TEC_forward", []), float).ravel()
         t = pd.Timestamp(e.get("date"))
+
+        # IMPORTANT: Abel profile length is generally NOT the same as the
+        # tomography-clean ray count because Abel runs on the full parsed arc
+        # while the observation entry can be downsampled to <= max_rays.
+        # Store the complete Abel profile in a companion profile table instead
+        # of index-pairing/truncating it onto the ray table.
+        n_ab = max(len(an), len(aa), len(at), len(af))
+        for j in range(n_ab):
+            abel_rows.append({
+                "filename": e.get("label"),
+                "profile_index": j,
+                "Abel_Ne": an[j] if j < len(an) else np.nan,
+                "Abel_alt_km": aa[j] if j < len(aa) else np.nan,
+                "Abel_TEC_cal_TECU": at[j] if j < len(at) else np.nan,
+                "Abel_TEC_forward_TECU": af[j] if j < len(af) else np.nan,
+            })
 
         for i in range(n):
             rows.append({
@@ -531,8 +575,6 @@ def export_ro_outputs(
                 "GNSS_x": e["GNSS"][0, i],
                 "GNSS_y": e["GNSS"][1, i],
                 "GNSS_z": e["GNSS"][2, i],
-                "Abel_Ne": an[i] if i < len(an) else np.nan,
-                "Abel_alt_km": aa[i] if i < len(aa) else np.nan,
             })
 
         _plot_ro_event(
@@ -547,6 +589,13 @@ def export_ro_outputs(
         center_lat, center_lon, radius_km, start_time, end_time
     )
     pd.DataFrame(rows).to_csv(csv_path, index=False)
+
+    # Full Abel profiles: one row per Abel altitude level, never truncated to
+    # the downsampled ray table length.
+    abel_csv_path = csv_path.with_name(csv_path.stem + "_abel_profiles.csv")
+    pd.DataFrame(abel_rows).to_csv(abel_csv_path, index=False)
+    report["abel_profiles_csv"] = str(abel_csv_path)
+
     return csv_path
 
 def _bearing_and_distance_km(lat0, lon0, lat, lon):
@@ -645,14 +694,17 @@ def _plot_ro_event(e, path, center_lat, center_lon, radius_km):
         if radius_km is not None and np.isfinite(float(radius_km)):
             # Reuse the project's existing circular/Fibonacci ROI generator.
             fib_lat, fib_lon = circular_roi_points(
-                float(center_lat), float(center_lon), float(radius_km)
+                float(center_lat),
+                float(center_lon),
+                float(radius_km),
+                spacing_deg=DEFAULT_FIBONACCI_SPACING_DEG,
             )
             if len(fib_lat):
                 ax_map.scatter(
                     fib_lon, fib_lat,
                     transform=ccrs.PlateCarree(),
-                    s=7, color="limegreen", alpha=0.20, zorder=2,
-                    label="Existing circular ROI",
+                    s=28, color="k", alpha=0.90, zorder=2,
+                    label="voxels",
                 )
 
             # Draw the exact requested-radius edge for readability. The region

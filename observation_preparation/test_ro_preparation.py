@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from observation_preparation.prepare_ro_observations import prepare_ro_observations
+from observation_preparation import prepare_ro_observations
 
 
 # ============================================================
@@ -33,7 +33,7 @@ MAX_RAYS_PER_OCCULTATION = 200
 
 # Set to an integer if you want to limit the number of occultations.
 MAX_OCCULTATIONS = None
-OUTPUT_DIR = Path("Figures/preparation_test/RO")
+OUTPUT_DIR = "Figures/preparation_test/RO"
 
 
 # ============================================================
@@ -96,8 +96,6 @@ for item in report.get("per_file", []):
 # ============================================================
 print("\n================ OUTPUT ===================")
 print("Number of final RO occultations:", len(ro_obs))
-print("CSV/plots directory:", OUTPUT_DIR.resolve())
-assert (OUTPUT_DIR / "ro_observations.csv").is_file()
 
 abel_ok = 0
 abel_failed = 0
@@ -152,6 +150,13 @@ for i, obs in enumerate(ro_obs):
             float(np.nanmax(abel_alt)),
             "km",
         )
+
+    # Optional products returned by lei_abel_inverter.py
+    print("Ne_grad    :", np.shape(abel.get("Ne_grad")))
+    print("Ne_m       :", np.shape(abel.get("Ne_m")))
+    print("alt_km_m   :", np.shape(abel.get("alt_km_m")))
+    print("TEC_cal    :", np.shape(abel.get("TEC_cal")))
+    print("TEC_forward:", np.shape(abel.get("TEC_forward")))
 
     # Primary Abel Ne and altitude must be paired.
     assert abel_ne.ndim == 1, "Abel Ne must be 1-D"

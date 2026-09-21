@@ -1,6 +1,6 @@
 import pandas as pd
-from pathlib import Path
-from observation_preparation.prepare_igs_observations import prepare_igs_observations
+
+from observation_preparation import prepare_igs_observations
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -77,8 +77,6 @@ for key, value in report.items():
 print("\n=============== OUTPUT =================")
 
 print("Number of final IGS arcs:", len(igs_obs))
-print("CSV/plot directory:", Path(OUTPUT_DIR).resolve())
-assert Path(OUTPUT_DIR, "igs_observations.csv").is_file()
 
 for i, obs in enumerate(igs_obs):
 

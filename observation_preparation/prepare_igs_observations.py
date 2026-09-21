@@ -12,7 +12,10 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
-from .roi_tools import circular_roi_points, geodesic_circle_latlon
+from .roi_tools import (
+    circular_roi_points, geodesic_circle_latlon,
+    DEFAULT_FIBONACCI_SPACING_DEG, DEFAULT_FIBONACCI_SPACING_KM,
+)
 
 from TEC_model.igs_tec_pipeline import (
     igs_obs_to_clean_entry,
@@ -403,6 +406,9 @@ def prepare_igs_observations(
         "max_rays_per_arc": int(max_rays_per_arc),
         "epoch_mode": epoch_mode,
         "roi_filter_applied": bool(roi_requested),
+        "roi_radius_km": float(radius_km) if radius_km is not None else None,
+        "roi_fibonacci_spacing_deg": float(DEFAULT_FIBONACCI_SPACING_DEG),
+        "roi_fibonacci_spacing_km": float(DEFAULT_FIBONACCI_SPACING_KM),
         "station_runs": station_reports,
     }
 
@@ -531,7 +537,7 @@ def export_igs_outputs(
     ax_map = fig.add_subplot(121, projection=map_crs)
     ax_tec = fig.add_subplot(122)
 
-    ax_map.set_title("IGS IPP locations")
+    ax_map.set_title("IGS IPP locations + common 5° Fibonacci voxels")
     ax_map.set_global()
     ax_map.add_feature(cfeature.LAND, facecolor="0.88", zorder=0)
     ax_map.add_feature(cfeature.OCEAN, facecolor="white", zorder=0)
@@ -576,14 +582,15 @@ def export_igs_outputs(
         if radius_km is not None and np.isfinite(float(radius_km)):
             # Reuse the project's existing circular/Fibonacci ROI generator.
             fib_lat, fib_lon = circular_roi_points(
-                float(center_lat), float(center_lon), float(radius_km)
+                float(center_lat), float(center_lon), float(radius_km),
+                spacing_deg=DEFAULT_FIBONACCI_SPACING_DEG,
             )
             if len(fib_lat):
                 ax_map.scatter(
                     fib_lon, fib_lat,
                     transform=ccrs.PlateCarree(),
-                    s=7, color="limegreen", alpha=0.20, zorder=2,
-                    label="Existing circular ROI",
+                    s=28, color="k", alpha=0.90, zorder=2,
+                    label="Voxels",
                 )
 
             # Draw the exact requested-radius edge for readability. The region
