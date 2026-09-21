@@ -6,6 +6,8 @@ import numpy as np
 # Copied from the existing main-code ROI implementation so ROI geometry is
 # owned by observation_preparation rather than imported from main.
 _EARTH_RADIUS_KM = 6371.0
+DEFAULT_FIBONACCI_SPACING_DEG = 5.0
+DEFAULT_FIBONACCI_SPACING_KM = _EARTH_RADIUS_KM * np.deg2rad(DEFAULT_FIBONACCI_SPACING_DEG)
 
 
 def fibonacci_sphere_latlon(n_points: int) -> tuple[np.ndarray, np.ndarray]:
@@ -122,11 +124,21 @@ def circular_roi_points(
     center_lon: float,
     radius_km: float,
     spacing_km: float | None = None,
+    spacing_deg: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return Fibonacci points inside a circular great-circle ROI."""
+    """Return Fibonacci points inside an exact circular great-circle ROI.
+
+    By default the point spacing is the same 5-degree great-circle target used
+    by the project's equal-area global Fibonacci grid.  At Earth radius 6371 km
+    this is about 556 km.  Pass ``spacing_km`` explicitly to override it.
+    """
     radius_km = float(radius_km)
+    if spacing_km is not None and spacing_deg is not None:
+        raise ValueError("Specify only one of spacing_km or spacing_deg.")
     if spacing_km is None:
-        spacing_km = max(75.0, min(200.0, radius_km / 8.0))
+        if spacing_deg is None:
+            spacing_deg = DEFAULT_FIBONACCI_SPACING_DEG
+        spacing_km = _EARTH_RADIUS_KM * np.deg2rad(float(spacing_deg))
     return fibonacci_roi_grid(
         [float(center_lat)],
         [float(center_lon)],
@@ -213,6 +225,8 @@ def square_roi_boundary_latlon(
 
 
 __all__ = [
+    "DEFAULT_FIBONACCI_SPACING_DEG",
+    "DEFAULT_FIBONACCI_SPACING_KM",
     "fibonacci_sphere_latlon",
     "latlon_unit_vectors",
     "robust_sphere_centroid",
