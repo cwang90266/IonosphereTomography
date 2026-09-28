@@ -67,7 +67,10 @@ def vertical_ray_geometry(real_edp_samples):
     for i, (a0, a1) in enumerate(alt_bounds_km):
         GNSS[:, i] = edp_samples_module._geodetic_to_ecef(lat, lon, a0 * 1000.0) / 1000.0
         LEO[:, i] = edp_samples_module._geodetic_to_ecef(lat, lon, a1 * 1000.0) / 1000.0
-    return {"LEO": LEO, "GNSS": GNSS}
+    # rec_ecef_km/gnss_ecef_km: EDPSamples.get_observation_operator's renamed
+    # keys (plan Section 8a) -- this fixture is only ever fed to that method
+    # via GenericObservationOperator.from_edp_samples, not forward_model_mesh_tec.
+    return {"rec_ecef_km": LEO, "gnss_ecef_km": GNSS}
 
 
 _STYLE_HYPERPARAMS = {

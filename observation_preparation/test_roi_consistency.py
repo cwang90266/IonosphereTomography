@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import numpy as np
-from observation_preparation.roi_tools import (
+from observation_preparation.roi import (
     circular_roi_points, DEFAULT_FIBONACCI_SPACING_DEG, DEFAULT_FIBONACCI_SPACING_KM
 )
 

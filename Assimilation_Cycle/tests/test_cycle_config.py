@@ -1,0 +1,73 @@
+# -*- coding: utf-8 -*-
+"""Tests for cycle_config.py's grid-margin math (grid_margin_km ->
+effective_grid_radius_deg) -- the rest of CycleConfig is exercised
+implicitly throughout the other test modules."""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from Assimilation_Cycle.cycle_config import CycleConfig
+
+
+def _make_cfg(**overrides):
+    defaults = dict(
+        start_time="2025-11-18T10:00:00", end_time="2025-11-18T11:00:00",
+        center_lat=69.6, center_lon=19.2, radius_km=2000.0,
+    )
+    defaults.update(overrides)
+    return CycleConfig(**defaults)
+
+
+class TestEffectiveGridRadiusDeg:
+    def test_zero_margin_matches_resolved_grid_radius(self):
+        cfg = _make_cfg(grid_radius_deg=18.0, grid_margin_km=0.0)
+        assert cfg.effective_grid_radius_deg == cfg.resolved_grid_radius_deg == 18.0
+
+    def test_margin_adds_degrees_on_top(self):
+        cfg = _make_cfg(grid_radius_deg=18.0, grid_margin_km=500.0)
+        expected_margin_deg = np.degrees(500.0 / 6371.0)
+        assert cfg.effective_grid_radius_deg == pytest.approx(18.0 + expected_margin_deg)
+
+    def test_margin_applies_on_top_of_the_radius_km_fallback_too(self):
+        # grid_radius_deg unset -> resolved_grid_radius_deg falls back to
+        # radius_km's bare number; margin still adds on top of that.
+        cfg = _make_cfg(radius_km=5.0, grid_radius_deg=None, grid_margin_km=500.0)
+        expected_margin_deg = np.degrees(500.0 / 6371.0)
+        assert cfg.effective_grid_radius_deg == pytest.approx(5.0 + expected_margin_deg)
+
+    def test_default_margin_is_zero(self):
+        cfg = _make_cfg(grid_radius_deg=10.0)
+        assert cfg.grid_margin_km == 0.0
+        assert cfg.effective_grid_radius_deg == 10.0
+
+
+class TestInterBatchInflationFactorDefault:
+    def test_defaults_to_none_no_behavior_change(self):
+        cfg = _make_cfg()
+        assert cfg.inter_batch_inflation_factor is None
+
+
+class TestDiagonalBoostValidation:
+    def test_defaults_to_none_no_behavior_change(self):
+        cfg = _make_cfg()
+        assert cfg.diagonal_boost_amplitude is None
+        assert cfg.diagonal_boost_log_space is False
+        assert cfg.diagonal_boost_vertical_scale_km == 30.0
+        assert cfg.diagonal_boost_horizontal_scale_km == 200.0
+
+    def test_negative_amplitude_rejected(self):
+        with pytest.raises(ValueError, match="diagonal_boost_amplitude"):
+            _make_cfg(diagonal_boost_amplitude=-0.1)
+
+    def test_zero_amplitude_allowed_as_explicit_noop(self):
+        cfg = _make_cfg(diagonal_boost_amplitude=0.0)
+        assert cfg.diagonal_boost_amplitude == 0.0
+
+    def test_nonpositive_vertical_scale_rejected(self):
+        with pytest.raises(ValueError, match="diagonal_boost_vertical_scale_km"):
+            _make_cfg(diagonal_boost_vertical_scale_km=0.0)
+
+    def test_nonpositive_horizontal_scale_rejected(self):
+        with pytest.raises(ValueError, match="diagonal_boost_horizontal_scale_km"):
+            _make_cfg(diagonal_boost_horizontal_scale_km=-5.0)

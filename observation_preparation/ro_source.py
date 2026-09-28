@@ -3,49 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import math
+import zlib
 
 import netCDF4
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 
-from .roi_tools import (
-    circular_roi_points,
-    geodesic_circle_latlon,
-    DEFAULT_FIBONACCI_SPACING_DEG,
-    DEFAULT_FIBONACCI_SPACING_KM,
-)
+from .roi_selection import haversine_km, los_within_roi, build_roi_dict
+from .time_filter import normalize_timestamp, format_filename_number, time_window_tag
+from .schema import ObservationEntry
+from .netcdf_io import write_observations
+from .diagnostics import plot_geolocation
 
-from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent, ECEFtolla
+from TEC_model.podTc_file_processing import parse_podTc2_nc_file, rayTangent
 from Abel_Inverter.lei_abel_inverter import run_abel_inversion
-
-
-def _haversine_km(lat0: float, lon0: float, lat, lon) -> np.ndarray:
-    lat = np.asarray(lat, dtype=float)
-    lon = np.asarray(lon, dtype=float)
-    r_earth_km = 6371.0
-
-    p0 = np.deg2rad(float(lat0))
-    p1 = np.deg2rad(lat)
-    dphi = p1 - p0
-    dlambda = np.deg2rad(lon - float(lon0))
-
-    a = (
-        np.sin(dphi / 2.0) ** 2
-        + np.cos(p0) * np.cos(p1) * np.sin(dlambda / 2.0) ** 2
-    )
-    return 2.0 * r_earth_km * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
-
-
-def _normalize_timestamp(value) -> pd.Timestamp | None:
-    if value is None:
-        return None
-    ts = pd.Timestamp(value)
-    if ts.tzinfo is not None:
-        ts = ts.tz_convert("UTC").tz_localize(None)
-    return ts
 
 
 def _read_ro_metadata(file_path: Path) -> dict[str, Any] | None:
@@ -116,23 +87,37 @@ def filter_ro_metadata(
     radius_km: float | None = None,
     start_time=None,
     end_time=None,
+    apply_geo_filter: bool = True,
 ) -> pd.DataFrame:
     """
     Filter RO occultations by TEC-max tangent-point location and peak time.
 
     Time convention is [start_time, end_time), matching the current main code.
+
+    apply_geo_filter : bool, default True
+        Set False for ``roi_mode="full_los"`` (Plan Section 5.3/10 step 3):
+        the TEC-max tangent point being within ``radius_km`` is neither
+        necessary nor sufficient for the *entire* LOS below
+        ``alt_limit_km`` to be inside the ROI, so this cheap scan-stage
+        pre-filter would silently reject occultations that full_los would
+        otherwise accept (and vice versa). full_los's real decision is made
+        per-ray, post-parse, in ``_build_clean_ro_entry`` -- this flag just
+        keeps the (still valid, still cheap) time filter below active
+        while skipping the geo one.
     """
     if metadata.empty:
         return metadata.copy()
 
     keep = np.ones(len(metadata), dtype=bool)
 
-    if center_lat is not None or center_lon is not None or radius_km is not None:
+    if apply_geo_filter and (
+        center_lat is not None or center_lon is not None or radius_km is not None
+    ):
         if center_lat is None or center_lon is None or radius_km is None:
             raise ValueError(
                 "center_lat, center_lon, and radius_km must either all be set or all be None."
             )
-        dist = _haversine_km(
+        dist = haversine_km(
             center_lat,
             center_lon,
             metadata["lat"].to_numpy(),
@@ -140,8 +125,8 @@ def filter_ro_metadata(
         )
         keep &= dist <= float(radius_km)
 
-    start = _normalize_timestamp(start_time)
-    end = _normalize_timestamp(end_time)
+    start = normalize_timestamp(start_time)
+    end = normalize_timestamp(end_time)
     dates = pd.to_datetime(metadata["date"])
 
     if start is not None:
@@ -150,6 +135,77 @@ def filter_ro_metadata(
         keep &= dates.to_numpy() < np.datetime64(end)
 
     return metadata.loc[keep].sort_values("date").reset_index(drop=True)
+
+
+def select_arcs_by_count_bin(
+    arc_list: list,
+    bin_count: int | None,
+    window_key: str,
+) -> tuple[list, dict]:
+    """
+    Randomly subsample *arc_list* down to *bin_count* arcs.
+
+    Vendored from Austin_Demo_Code/test_param_iono.py (Plan Section 8.6):
+    that module is outside the surviving module set (Plan Section 8a) and
+    this selection logic is genuinely observation_preparation's own concern,
+    not a leftover cross-module dependency.
+
+    bin_count=None means "use all available arcs" (no subsampling -- the
+    OCC_COUNT_BINS convention for the densest bin).  If arc_list already has
+    fewer than bin_count arcs there is nothing to subsample, so the full list
+    is returned unchanged.  Otherwise the arcs are subsampled to bin_count
+    entries that are both:
+
+      * reproducible -- the RNG is seeded from a stable zlib.crc32 of
+        window_key (NOT the process-salted built-in hash()), so re-running the
+        same window reproduces the same subsets across runs / restarts, which
+        checkpoint-resume and the DA cache rely on; and
+      * nested -- every bin_count takes the first bin_count entries of a single
+        window-level random permutation, so a smaller bin is always a subset
+        of every larger bin (bin=5 ⊂ bin=15 ⊂ … ⊂ all).  The occultation-count
+        sweep therefore *adds* measurements between bins instead of drawing an
+        unrelated random set each time, isolating measurement density as the
+        only variable.
+
+    Returns
+    -------
+    selected : list
+        The chosen arcs (or all of arc_list, per the rules above).
+    meta : dict
+        "requested_count"  : bin_count as passed in.
+        "actual_count"     : len(selected).
+        "selected_indices" : indices into arc_list that were kept, ascending.
+    """
+    n = len(arc_list)
+
+    if bin_count is None or bin_count >= n:
+        selected_indices = list(range(n))
+        selected = list(arc_list)
+    else:
+        # Reproducible seed: Python's built-in hash() is salted per process
+        # (PYTHONHASHSEED), so it draws a different subset every run and
+        # desyncs the DA cache.  zlib.crc32 is a stable, process-independent
+        # hash of the window key, so the same window always seeds identically.
+        seed = zlib.crc32(str(window_key).encode("utf-8"))
+        rng = np.random.default_rng(seed)
+        # NESTED subsets: draw ONE reproducible random permutation of all n
+        # arcs (the seed depends only on window_key, NOT bin_count) and take
+        # its first bin_count entries.  Because every bin_count reuses the
+        # same permutation, a smaller bin is always a subset of a larger one
+        # (bin=5 ⊂ bin=15 ⊂ … ⊂ all), so the occultation-count sweep *adds*
+        # measurements rather than swapping to an unrelated random draw --
+        # removing the "which arcs happened to be picked" confound from the
+        # count-sensitivity study while keeping the selection random.
+        perm = rng.permutation(n)
+        selected_indices = sorted(int(i) for i in perm[:bin_count])
+        selected = [arc_list[i] for i in selected_indices]
+
+    meta = dict(
+        requested_count=bin_count,
+        actual_count=len(selected),
+        selected_indices=selected_indices,
+    )
+    return selected, meta
 
 
 def select_ro_occultations(
@@ -164,8 +220,6 @@ def select_ro_occultations(
     """
     if max_occultations is None or len(metadata) <= max_occultations:
         return metadata.reset_index(drop=True)
-
-    from test_param_iono import select_arcs_by_count_bin
 
     dummy_arcs = list(range(len(metadata)))
     _, selection_meta = select_arcs_by_count_bin(
@@ -182,6 +236,14 @@ def _build_clean_ro_entry(
     label: str,
     min_valid_rays: int,
     max_rays_per_occultation: int,
+    *,
+    roi_mode: str = "tangent_point",
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+    radius_km: float | None = None,
+    alt_limit_km: float | None = None,
+    fraction_required: float = 1.0,
+    los_num_segments: int = 200,
 ) -> tuple[dict | None, dict]:
     """
     Reproduce the RO clean-list preparation formerly inside process_group().
@@ -189,6 +251,13 @@ def _build_clean_ro_entry(
     parse_podTc2_nc_file() has already applied its file-level geometry QC.
     This function preserves the second-stage rules:
       finite TEC, TEC > 0, >= min_valid_rays, uniform stride decimation.
+
+    roi_mode="full_los" (Plan Section 5/10 step 3) additionally requires
+    each individual ray's own LOS, below alt_limit_km, to be within
+    radius_km of (center_lat, center_lon) -- applied here (per-ray, on the
+    full pre-decimation geometry) rather than in filter_ro_metadata's
+    lightweight scan-stage pre-filter, since it needs the full parsed
+    LEO/GNSS geometry that only exists after parse_podTc2_nc_file().
     """
     _, _, tang_raw = rayTangent(data["LEO"], data["GNSS"], units="km")
 
@@ -202,6 +271,14 @@ def _build_clean_ro_entry(
     )
 
     valid = np.isfinite(meas_tec) & (meas_tec > 0)
+
+    if roi_mode == "full_los":
+        valid &= los_within_roi(
+            data["LEO"], data["GNSS"],
+            center_lat, center_lon, radius_km, alt_limit_km,
+            num_segments=los_num_segments, fraction_required=fraction_required,
+        )
+
     n_valid = int(valid.sum())
 
     info = {
@@ -234,8 +311,12 @@ def _build_clean_ro_entry(
     entry = {
         "tec": np.asarray(meas_tec[mask], dtype=np.float64).flatten(),
         "tangent_km": np.asarray(tang_km[mask], dtype=np.float64).flatten(),
-        "LEO": np.asarray(data["LEO"][:, mask], dtype=np.float64),
-        "GNSS": np.asarray(data["GNSS"][:, mask], dtype=np.float64),
+        # rec_ecef_km/gnss_ecef_km: observation_preparation's schema names
+        # (plan Section 6.1/8a) -- data['LEO']/data['GNSS'] above is
+        # TEC_model's own raw parser output and keeps its own convention;
+        # this is the boundary where the rename happens.
+        "rec_ecef_km": np.asarray(data["LEO"][:, mask], dtype=np.float64),
+        "gnss_ecef_km": np.asarray(data["GNSS"][:, mask], dtype=np.float64),
         "tec_type": "absolute",
         "leo_id": leo_id,
         "prn_id": full_prn,
@@ -286,6 +367,10 @@ def prepare_ro_observations(
     radius_km: float | None = None,
     start_time=None,
     end_time=None,
+    roi_mode: str = "full_los",
+    alt_limit_km: float | None = None,
+    fraction_required: float = 1.0,
+    los_num_segments: int = 200,
     max_occultations: int | None = None,
     selection_key: str | None = None,
     min_valid_rays: int = 50,
@@ -302,17 +387,41 @@ def prepare_ro_observations(
     Processing order
     ----------------
     1. Scan lightweight netCDF metadata.
-    2. Filter by ROI and [start_time, end_time).
+    2. Filter by [start_time, end_time), and by ROI (roi_mode="tangent_point"
+       only -- see roi_mode below).
     3. Optionally subsample the number of occultations using the project's
        select_arcs_by_count_bin() routine.
     4. Parse each selected podTc2 file. The parser performs the existing
        file-level geometry QC.
-    5. Keep finite positive TEC only.
+    5. Keep finite positive TEC only, and (roi_mode="full_los") rays whose
+       own LOS satisfies the full-LOS ROI containment check.
     6. Reject occultations with fewer than min_valid_rays.
     7. Uniformly decimate to max_rays_per_occultation.
     8. If include_abel=True, run Lei-Abel inversion on the FULL parsed RO arc
        (not on the downsampled tomography rays) and attach the result as
        entry["abel"].
+
+    Parameters
+    ----------
+    roi_mode : {"full_los", "tangent_point"}, default "full_los"
+        "tangent_point" (today's original behavior) keeps an occultation
+        if its TEC-max tangent point is within radius_km -- a cheap,
+        scan-stage-only check. "full_los" (Plan Section 5, objective 3;
+        the new default per Section 8.1) instead requires, per ray, that
+        at least fraction_required of that ray's own LOS below
+        alt_limit_km stay within radius_km -- a stricter, per-ray check
+        made after parsing (see _build_clean_ro_entry), since it needs
+        the full receiver/transmitter geometry. Because that geometry
+        isn't available at the cheap scan stage, "full_los" parses every
+        file in [start_time, end_time) regardless of location -- a known,
+        accepted cost (Plan Section 10 step 3), not optimized here.
+    alt_limit_km : float, required when roi_mode="full_los"
+        No auto-default (Plan Section 8.1): receiver altitude varies
+        across LEOs in a batch, so there's no single value to derive it
+        from without a first pass over the batch.
+    fraction_required : float, default 1.0
+        Minimum fraction of each ray's sub-alt_limit_km LOS that must be
+        within radius_km (Plan Section 8.2). 1.0 = every such point.
 
     Returns
     -------
@@ -322,9 +431,19 @@ def prepare_ro_observations(
     If return_report=True:
         (observations, report)
     """
+    if roi_mode not in {"full_los", "tangent_point"}:
+        raise ValueError(f"roi_mode must be 'full_los' or 'tangent_point', got {roi_mode!r}.")
+    if roi_mode == "full_los" and alt_limit_km is None:
+        raise ValueError(
+            "alt_limit_km is required when roi_mode='full_los' (Plan Section 8.1) "
+            "-- e.g. the LEO's own altitude, or the model's configured top altitude."
+        )
+
     podtc_dir = Path(podtc_dir)
     if not podtc_dir.is_dir():
         raise FileNotFoundError(f"RO directory does not exist: {podtc_dir}")
+
+    apply_geo_filter = roi_mode != "full_los"
 
     metadata_all = scan_ro_metadata(podtc_dir, file_pattern=file_pattern)
     metadata_selected = filter_ro_metadata(
@@ -334,12 +453,13 @@ def prepare_ro_observations(
         radius_km=radius_km,
         start_time=start_time,
         end_time=end_time,
+        apply_geo_filter=apply_geo_filter,
     )
 
     if selection_key is None:
         if start_time is not None and end_time is not None:
             selection_key = (
-                f"{_normalize_timestamp(start_time)}__{_normalize_timestamp(end_time)}"
+                f"{normalize_timestamp(start_time)}__{normalize_timestamp(end_time)}"
             )
         else:
             selection_key = str(podtc_dir)
@@ -389,6 +509,13 @@ def prepare_ro_observations(
             label=label,
             min_valid_rays=min_valid_rays,
             max_rays_per_occultation=max_rays_per_occultation,
+            roi_mode=roi_mode,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            radius_km=radius_km,
+            alt_limit_km=alt_limit_km,
+            fraction_required=fraction_required,
+            los_num_segments=los_num_segments,
         )
         if entry is not None and include_abel:
             # IMPORTANT: Abel must use the full parsed podTc2 arc.  The clean
@@ -430,6 +557,7 @@ def prepare_ro_observations(
                 radius_km=radius_km,
                 start_time=start_time,
                 end_time=end_time,
+                apply_geo_filter=apply_geo_filter,
             ))
         ),
         "n_files_after_occultation_selection": int(len(metadata_selected)),
@@ -442,6 +570,9 @@ def prepare_ro_observations(
         "min_valid_rays": int(min_valid_rays),
         "max_rays_per_occultation": int(max_rays_per_occultation),
         "max_occultations": max_occultations,
+        "roi_mode": roi_mode,
+        "alt_limit_km": alt_limit_km,
+        "fraction_required": float(fraction_required),
         "per_file": per_file,
         "metadata_selected": metadata_selected.to_dict("records"),
     }
@@ -451,48 +582,22 @@ def prepare_ro_observations(
             observations, report, output_dir, output_prefix,
             center_lat=center_lat, center_lon=center_lon, radius_km=radius_km,
             start_time=start_time, end_time=end_time,
+            roi_mode=roi_mode, alt_limit_km=alt_limit_km, fraction_required=fraction_required,
         )
 
     return (observations, report) if return_report else observations
 
 
-def _format_filename_number(value) -> str:
-    """Compact, filesystem-safe numeric token used in exported CSV names."""
-    value = float(value)
-    if value.is_integer():
-        return str(int(value))
-    return f"{value:.4f}".rstrip("0").rstrip(".")
-
-
-def _time_window_csv_tag(start_time, end_time) -> str:
-    """Return e.g. ``timewindow1hr_20251118_10001100``."""
-    start = _normalize_timestamp(start_time)
-    end = _normalize_timestamp(end_time)
-    if start is None or end is None:
-        return "timewindow_unknown"
-
-    minutes = (end - start).total_seconds() / 60.0
-    if np.isclose(minutes % 60.0, 0.0):
-        hours = minutes / 60.0
-        duration = f"{_format_filename_number(hours)}hr"
-    else:
-        duration = f"{_format_filename_number(minutes)}min"
-
-    if start.date() == end.date():
-        return f"timewindow{duration}_{start:%Y%m%d}_{start:%H%M}{end:%H%M}"
-    return f"timewindow{duration}_{start:%Y%m%d_%H%M}_{end:%Y%m%d_%H%M}"
-
-
-def _ro_csv_filename(center_lat, center_lon, radius_km, start_time, end_time) -> str:
+def _ro_nc_filename(center_lat, center_lon, radius_km, start_time, end_time) -> str:
     if center_lat is None or center_lon is None or radius_km is None:
         roi = "roi_unspecified"
     else:
         roi = (
-            f"lat{_format_filename_number(center_lat)}"
-            f"lon{_format_filename_number(center_lon)}_"
-            f"radius{_format_filename_number(radius_km)}km"
+            f"lat{format_filename_number(center_lat)}"
+            f"lon{format_filename_number(center_lon)}_"
+            f"radius{format_filename_number(radius_km)}km"
         )
-    return f"ro_{roi}_{_time_window_csv_tag(start_time, end_time)}.csv"
+    return f"ro_{roi}_{time_window_tag(start_time, end_time)}.nc"
 
 
 def export_ro_outputs(
@@ -505,235 +610,35 @@ def export_ro_outputs(
     radius_km=None,
     start_time=None,
     end_time=None,
+    roi_mode="tangent_point",
+    alt_limit_km=None,
+    fraction_required=None,
 ):
-    """Write per-ray RO CSV and one three-panel figure per accepted occultation."""
+    """Write one netCDF file (Plan Section 6.2) and one combined
+    geolocation map. Replaces the old per-ray CSV + companion Abel-profile
+    CSV outright (Section 8.7) -- the Abel profiles now live in the same
+    netCDF file as a properly dimensioned ``abel_level`` variable instead
+    of being joined to the ray table only by filename string. Also
+    replaces the old one-PNG-per-occultation map (Section 7.1/10 step 4)
+    with a single combined plot via ``diagnostics.plot_geolocation``; call
+    ``diagnostics.plot_obs_detail`` yourself for the per-occultation
+    TEC/Abel panels the old PNGs also carried."""
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    accepted = {x.get("label") for x in observations}
-    rows = []
-    abel_rows = []
 
-    # Keep one row for selected files rejected by parser/clean QC.
-    for meta in report.get("metadata_selected", []):
-        label = Path(str(meta.get("filename", ""))).name
-        if label not in accepted:
-            reject_reason = ";".join(
-                str(item.get("reject_reason", ""))
-                for item in report.get("per_file", [])
-                if item.get("label") == label
-            )
-            # Do not export the redundant metadata ``year`` field.
-            clean_meta = {k: v for k, v in meta.items() if k != "year"}
-            rows.append({
-                "accepted": False,
-                "reject_reason": reject_reason,
-                "filename": label,
-                **clean_meta,
-            })
+    entries = [ObservationEntry.from_dict(e, obs_type="RO") for e in observations]
+    roi = build_roi_dict(
+        center_lat, center_lon, radius_km, roi_mode,
+        alt_limit_km=alt_limit_km, fraction_required=fraction_required,
+    )
 
-    for e in observations:
-        n = len(e["tec"])
-        ab = e.get("abel") or {}
-        an = np.asarray(ab.get("Ne", []), float).ravel()
-        aa = np.asarray(ab.get("alt_km", ab.get("alt", [])), float).ravel()
-        at = np.asarray(ab.get("TEC_cal", []), float).ravel()
-        af = np.asarray(ab.get("TEC_forward", []), float).ravel()
-        t = pd.Timestamp(e.get("date"))
+    plot_geolocation(entries, roi=roi, output_path=out / f"{prefix}_geolocation.png")
 
-        # IMPORTANT: Abel profile length is generally NOT the same as the
-        # tomography-clean ray count because Abel runs on the full parsed arc
-        # while the observation entry can be downsampled to <= max_rays.
-        # Store the complete Abel profile in a companion profile table instead
-        # of index-pairing/truncating it onto the ray table.
-        n_ab = max(len(an), len(aa), len(at), len(af))
-        for j in range(n_ab):
-            abel_rows.append({
-                "filename": e.get("label"),
-                "profile_index": j,
-                "Abel_Ne": an[j] if j < len(an) else np.nan,
-                "Abel_alt_km": aa[j] if j < len(aa) else np.nan,
-                "Abel_TEC_cal_TECU": at[j] if j < len(at) else np.nan,
-                "Abel_TEC_forward_TECU": af[j] if j < len(af) else np.nan,
-            })
-
-        for i in range(n):
-            rows.append({
-                "accepted": True,
-                "reject_reason": "",
-                "filename": e.get("label"),
-                "LEO": e.get("leo_id"),
-                "PRN": e.get("prn_id"),
-                # ``year`` intentionally omitted: it duplicates ``date``.
-                "date": t.date().isoformat() if t is not pd.NaT else "",
-                "time": t.time().isoformat() if t is not pd.NaT else "",
-                "setting_rising": e.get("occ_type"),
-                "TEC": e["tec"][i],
-                "tangent_height_km": e["tangent_km"][i],
-                "LEO_x": e["LEO"][0, i],
-                "LEO_y": e["LEO"][1, i],
-                "LEO_z": e["LEO"][2, i],
-                "GNSS_x": e["GNSS"][0, i],
-                "GNSS_y": e["GNSS"][1, i],
-                "GNSS_z": e["GNSS"][2, i],
-            })
-
-        _plot_ro_event(
-            e,
-            out / f"{prefix}_{e.get('label', 'event')}.png",
-            center_lat,
-            center_lon,
-            radius_km,
-        )
-
-    csv_path = out / _ro_csv_filename(
+    nc_path = out / _ro_nc_filename(
         center_lat, center_lon, radius_km, start_time, end_time
     )
-    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    write_observations(entries, nc_path, roi=roi)
+    report["output_nc_path"] = str(nc_path)
 
-    # Full Abel profiles: one row per Abel altitude level, never truncated to
-    # the downsampled ray table length.
-    abel_csv_path = csv_path.with_name(csv_path.stem + "_abel_profiles.csv")
-    pd.DataFrame(abel_rows).to_csv(abel_csv_path, index=False)
-    report["abel_profiles_csv"] = str(abel_csv_path)
-
-    return csv_path
-
-def _bearing_and_distance_km(lat0, lon0, lat, lon):
-    """Return initial great-circle bearing [rad] and distance [km] from center."""
-    lat = np.asarray(lat, dtype=float)
-    lon = np.asarray(lon, dtype=float)
-    phi0 = np.deg2rad(float(lat0))
-    phi = np.deg2rad(lat)
-    dlon = np.deg2rad(lon - float(lon0))
-
-    y = np.sin(dlon) * np.cos(phi)
-    x = np.cos(phi0) * np.sin(phi) - np.sin(phi0) * np.cos(phi) * np.cos(dlon)
-    bearing = np.mod(np.arctan2(y, x), 2.0 * np.pi)
-    distance = _haversine_km(lat0, lon0, lat, lon)
-    return bearing, distance
-
-
-
-def _plot_ro_event(e, path, center_lat, center_lon, radius_km):
-    """Plot RO tangent track over a geographic map, plus TEC and Abel Ne."""
-    fig = plt.figure(figsize=(15, 5))
-
-    if center_lat is not None and center_lon is not None:
-        map_crs = ccrs.Orthographic(
-            central_longitude=float(center_lon),
-            central_latitude=float(center_lat),
-        )
-    else:
-        map_crs = ccrs.Robinson()
-
-    ax_map = fig.add_subplot(131, projection=map_crs)
-    ax_map.set_title("RO tangent track")
-    ax_map.set_global()
-    ax_map.add_feature(cfeature.LAND, facecolor="0.88", zorder=0)
-    ax_map.add_feature(cfeature.OCEAN, facecolor="white", zorder=0)
-    ax_map.add_feature(cfeature.COASTLINE, linewidth=0.65, zorder=1)
-    ax_map.add_feature(cfeature.BORDERS, linewidth=0.35, alpha=0.55, zorder=1)
-    ax_map.gridlines(
-        crs=ccrs.PlateCarree(),
-        draw_labels=False,
-        linewidth=0.35,
-        color="gray",
-        alpha=0.35,
-        linestyle="--",
-    )
-
-    # Recompute tangent-point ECEF from the SAME downsampled LEO/GNSS geometry
-    # stored in the clean observation, then convert to geodetic coordinates.
-    tangent_xyz, _, _ = rayTangent(
-        np.asarray(e["LEO"], dtype=float),
-        np.asarray(e["GNSS"], dtype=float),
-        units="km",
-    )
-    tangent_lat, tangent_lon, _ = ECEFtolla(tangent_xyz)
-    tangent_lat = np.asarray(tangent_lat, dtype=float).ravel()
-    tangent_lon = np.asarray(tangent_lon, dtype=float).ravel()
-    tangent_alt = np.asarray(e.get("tangent_km", []), dtype=float).ravel()
-
-    valid = (
-        np.isfinite(tangent_lat)
-        & np.isfinite(tangent_lon)
-        & np.isfinite(tangent_alt)
-    )
-
-    if np.any(valid):
-        lat_v = tangent_lat[valid]
-        lon_v = tangent_lon[valid]
-        alt_v = tangent_alt[valid]
-
-        ax_map.plot(
-            lon_v, lat_v,
-            transform=ccrs.Geodetic(),
-            color="red",
-            linewidth=2.2,
-            zorder=4,
-            label="RO tangent track",
-        )
-        sc = ax_map.scatter(
-            lon_v, lat_v,
-            transform=ccrs.PlateCarree(),
-            c=alt_v,
-            s=16,
-            zorder=5,
-        )
-        cb = fig.colorbar(sc, ax=ax_map, pad=0.04, shrink=0.78)
-        cb.set_label("Tangent altitude (km)")
-
-    if center_lat is not None and center_lon is not None:
-        ax_map.scatter(
-            [float(center_lon)], [float(center_lat)],
-            transform=ccrs.PlateCarree(),
-            marker="*", s=95, c="k", zorder=7,
-            label=f"Center ({float(center_lat):.1f}°, {float(center_lon):.1f}°)",
-        )
-
-        if radius_km is not None and np.isfinite(float(radius_km)):
-            # Reuse the project's existing circular/Fibonacci ROI generator.
-            fib_lat, fib_lon = circular_roi_points(
-                float(center_lat),
-                float(center_lon),
-                float(radius_km),
-                spacing_deg=DEFAULT_FIBONACCI_SPACING_DEG,
-            )
-            if len(fib_lat):
-                ax_map.scatter(
-                    fib_lon, fib_lat,
-                    transform=ccrs.PlateCarree(),
-                    s=28, color="k", alpha=0.90, zorder=2,
-                    label="voxels",
-                )
-
-            # Draw the exact requested-radius edge for readability. The region
-            # itself above comes from the existing Fibonacci ROI code.
-            roi_lat, roi_lon = geodesic_circle_latlon(
-                float(center_lat), float(center_lon), float(radius_km)
-            )
-            ax_map.plot(
-                roi_lon, roi_lat,
-                transform=ccrs.Geodetic(),
-                color="green", linewidth=2.0, zorder=6,
-                label=f"ROI = {float(radius_km):.0f} km",
-            )
-
-    ax_map.legend(loc="lower left", fontsize=8)
-
-    ax_tec = fig.add_subplot(132)
-    ax_tec.plot(e["tec"], e["tangent_km"])
-    ax_tec.set(xlabel="TEC (TECU)", ylabel="Tangent height (km)")
-    ax_tec.grid(True, alpha=0.25)
-
-    ax_abel = fig.add_subplot(133)
-    ab = e.get("abel") or {}
-    ax_abel.plot(ab.get("Ne", []), ab.get("alt_km", ab.get("alt", [])))
-    ax_abel.set(xlabel="Abel Ne (m$^{-3}$)", ylabel="Altitude (km)")
-    ax_abel.grid(True, alpha=0.25)
-
-    fig.suptitle(Path(path).name)
-    fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    return nc_path
 

@@ -687,7 +687,13 @@ class TestLineOfSightTEC:
     def _radial_ray(lat, lon, alt_top_km=1000.0):
         gnss = (M._geodetic_to_ecef(lat, lon, 0.0) / 1000.0).reshape(3, 1)
         leo = (M._geodetic_to_ecef(lat, lon, alt_top_km * 1000.0) / 1000.0).reshape(3, 1)
-        return {"LEO": leo, "GNSS": gnss}
+        # Both key spellings on purpose: forward_model_mesh_tec still reads
+        # the legacy 'LEO'/'GNSS' (its only callers -- TEC_model,
+        # Austin_Demo_Code -- are outside the observation_preparation
+        # rename's scope), while get_observation_operator now reads the
+        # renamed 'rec_ecef_km'/'gnss_ecef_km' (plan Section 8a). This test
+        # exercises both methods against the same geometry.
+        return {"LEO": leo, "GNSS": gnss, "rec_ecef_km": leo, "gnss_ecef_km": gnss}
 
     def _make_point(self):
         sp = _make_sampling_parameters(1)

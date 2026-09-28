@@ -17,13 +17,22 @@ from observation_preparation import prepare_ro_observations
 # USER TEST SETTINGS
 # ============================================================
 PODTC_DIR = Path(
-    "/home/pin/Desktop/tomography_project/piq_data/podTc2/2025.322/"
+    "/Users/cwang/Documents/Consulting/PlanetIQ/Data/Tomography_data/RO_Data"
 )
 
 # Tromsø-centered example used in the recent RO tests.
 CENTER_LAT = 69.6
 CENTER_LON = 19.2
 RADIUS_KM = 2000.0
+
+# prepare_ro_observations() now defaults to roi_mode="full_los" (Plan
+# Section 8.1/10 step 3), which requires alt_limit_km and has different
+# selection behavior than this script's originally-validated results.
+# Pinned to "tangent_point" here to keep reproducing exactly that known
+# behavior; switch to "full_los" (and set ALT_LIMIT_KM, e.g. to the LEO's
+# own altitude) to try the new selection mode against real data.
+ROI_MODE = "tangent_point"
+ALT_LIMIT_KM = None
 
 START_TIME = pd.Timestamp("2025-11-18 10:00:00")
 END_TIME = pd.Timestamp("2025-11-18 11:00:00")
@@ -33,7 +42,7 @@ MAX_RAYS_PER_OCCULTATION = 200
 
 # Set to an integer if you want to limit the number of occultations.
 MAX_OCCULTATIONS = None
-OUTPUT_DIR = "Figures/preparation_test/RO"
+OUTPUT_DIR = "/Users/cwang/Documents/Consulting/PlanetIQ/Runs/Tomography_Test/Claude_Test/RO_step5"
 
 
 # ============================================================
@@ -52,6 +61,8 @@ ro_obs, report = prepare_ro_observations(
     center_lat=CENTER_LAT,
     center_lon=CENTER_LON,
     radius_km=RADIUS_KM,
+    roi_mode=ROI_MODE,
+    alt_limit_km=ALT_LIMIT_KM,
     start_time=START_TIME,
     end_time=END_TIME,
     max_occultations=MAX_OCCULTATIONS,
@@ -110,8 +121,8 @@ for i, obs in enumerate(ro_obs):
     print("occ type   :", obs.get("occ_type"))
     print("TEC shape  :", np.shape(obs.get("tec")))
     print("tangent    :", np.shape(obs.get("tangent_km")))
-    print("LEO shape  :", np.shape(obs.get("LEO")))
-    print("GNSS shape :", np.shape(obs.get("GNSS")))
+    print("rec shape  :", np.shape(obs.get("rec_ecef_km")))
+    print("GNSS shape :", np.shape(obs.get("gnss_ecef_km")))
 
     tec = np.asarray(obs.get("tec", []), dtype=float)
     tan = np.asarray(obs.get("tangent_km", []), dtype=float)
@@ -189,8 +200,8 @@ for obs in ro_obs:
     assert n >= MIN_VALID_RAYS
     assert n <= MAX_RAYS_PER_OCCULTATION
     assert len(obs["tangent_km"]) == n
-    assert np.shape(obs["LEO"]) == (3, n)
-    assert np.shape(obs["GNSS"]) == (3, n)
+    assert np.shape(obs["rec_ecef_km"]) == (3, n)
+    assert np.shape(obs["gnss_ecef_km"]) == (3, n)
     assert np.all(np.isfinite(obs["tec"]))
     assert np.all(np.asarray(obs["tec"]) > 0)
 

@@ -319,27 +319,35 @@ def write_IRI2020_namelist(DateTime: str,
             f.write(f'longitude({idx+1})  = {geolocation[idx,0]}\n')
 
         for idx in range(nSample):
-            if np.isnan(sampling_parameters["hour"][idx]):
+            # pd.isna, not np.isnan: quantileSamples/randomSamples represent
+            # "no spread requested for this index" as a column of literal
+            # Python `None` (not np.nan) whenever every draw for that index
+            # is unconstrained -- pandas only coerces such a column to
+            # float64/NaN if at least one row in it is numeric, so an
+            # index left with zero spread stays object-dtype `None`, and
+            # np.isnan(None) raises TypeError instead of the intended
+            # "use fill_value" fallback.
+            if pd.isna(sampling_parameters["hour"][idx]):
                 f.write(f'phy_inputs(1,{idx+1})  = {fill_value}\n')
             else:
                 f.write(f'phy_inputs(1,{idx+1})  = {sampling_parameters["hour"][idx]}\n')
                 
-            if np.isnan(sampling_parameters["f107"][idx]):
+            if pd.isna(sampling_parameters["f107"][idx]):
                 f.write(f'phy_inputs(2,{idx+1})  = {fill_value}\n')
             else:
                 f.write(f'phy_inputs(2,{idx+1})  = {sampling_parameters["f107"][idx]}\n')
                 
-            if np.isnan(sampling_parameters["ap"][idx]):
+            if pd.isna(sampling_parameters["ap"][idx]):
                 f.write(f'phy_inputs(3,{idx+1})  = {fill_value}\n')
             else:                    
                 f.write(f'phy_inputs(3,{idx+1})  = {sampling_parameters["ap"][idx]}\n')
                 
-            if np.isnan(sampling_parameters["ig12"][idx]):
+            if pd.isna(sampling_parameters["ig12"][idx]):
                 f.write(f'phy_inputs(4,{idx+1})  = {fill_value}\n')
             else:
                 f.write(f'phy_inputs(4,{idx+1})  = {sampling_parameters["ig12"][idx]}\n')
                 
-            if np.isnan(sampling_parameters["rz12"][idx]):
+            if pd.isna(sampling_parameters["rz12"][idx]):
                 f.write(f'phy_inputs(5,{idx+1})  = {fill_value}\n')
             else:
                 f.write(f'phy_inputs(5,{idx+1})  = {sampling_parameters["rz12"][idx]}\n')
@@ -1360,7 +1368,17 @@ class EDPSamples(xr.Dataset):
             attrs = sampling_parameters.attrs
             attrs["sample_param_attrs"]=list(sampling_parameters.attrs.keys())
             
-        sample_param_value=sampling_parameters.to_numpy()
+        # dtype=float64, not the bare .to_numpy(): IRI2020 driving-index
+        # columns are a real number or None (never a string) by
+        # quantileSamples/randomSamples's own convention, but a real
+        # apf107/ig_rz source can mix int-valued (e.g. ap) and float-valued
+        # columns, which pandas can only losslessly represent as a
+        # dtype=object 2-D array -- fine in memory, but xarray's netCDF
+        # writer (saveNetCDF) cannot infer a serializable dtype for an
+        # object array holding mixed native int/float instances and raises.
+        # float64 also turns any None (no spread requested for that index)
+        # into np.nan, matching write_IRI2020_namelist's own pd.isna check.
+        sample_param_value=sampling_parameters.to_numpy(dtype=np.float64)
         sample_Param_name=sampling_parameters.columns
         n_sample = sampling_parameters.shape[0]
         
@@ -2078,27 +2096,30 @@ class EDPSamples(xr.Dataset):
         Parameters
         ----------
         podTc2_data : dict
-            Dictionary containing 'LEO' and 'GNSS' ECEF coordinate arrays.
+            Dictionary containing 'rec_ecef_km' (receiver) and 'gnss_ecef_km'
+            (transmitter) ECEF coordinate arrays -- the schema
+            ``observation_preparation.schema.ObservationEntry.to_operator_dict()``
+            produces.
         num_segments : int, default 1000
             Number of segments to divide each ray into for integration.
-            
+
         Returns
         -------
         H : np.ndarray
-            Observation matrix of shape (n_rays, n_state_vars), where 
+            Observation matrix of shape (n_rays, n_state_vars), where
             n_state_vars = n_height * n_geo.
         """
         from scipy.spatial import cKDTree
         import pyproj
-        
+
         altitude = self.altitude
         geolocation = self.geolocation
         n_height = len(altitude)
         n_geo = geolocation.shape[0]
         n_state_vars = n_height * n_geo
-        
-        LEO = podTc2_data['LEO']
-        GNSS = podTc2_data['GNSS']
+
+        LEO = podTc2_data['rec_ecef_km']
+        GNSS = podTc2_data['gnss_ecef_km']
         n_rays = LEO.shape[1]
         
         # Initialize the H matrix (n_observations x n_state_variables)

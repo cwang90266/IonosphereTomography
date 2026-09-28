@@ -14,14 +14,35 @@ IGS_STATIONS_NORDIC = [
     "WUTH",
 ]
 
-RINEX_CACHE = "/home/pin/Desktop/tomography_project/Data/RINEX_cache"
+RINEX_CACHE = "/Users/cwang/Documents/Consulting/PlanetIQ/Data/Tomography_data/RINEX_Cache"
 
 center_LAT = 69.6
 center_LON = 19.2
 ROI_RADIUS_KM = 2000.0
+
+# prepare_igs_observations() now defaults to roi_mode="full_los" (Plan
+# Section 8.1/10 step 3), which requires alt_limit_km and has different
+# selection behavior than this script's originally-validated results.
+# Pinned to "pierce_point" here to keep reproducing exactly that known
+# behavior; switch to "full_los" (and set ALT_LIMIT_KM) to try the new
+# selection mode against real data.
+ROI_MODE = "pierce_point"
+ALT_LIMIT_KM = None
+
+# No CDDIS/Earthdata credentials (~/.netrc) are configured in this
+# environment, so point directly at the already-cached RINEX/nav/DCB files
+# (Plan Section 10 step 5) instead of letting process_igs_station() try to
+# fetch/list from CDDIS over the network.
+LOCAL_OBS_BY_STATION = {
+    "TRO1": f"{RINEX_CACHE}/TRO100NOR_S_20253220000_01D_30S_MO.crx",
+    "WUTH": f"{RINEX_CACHE}/WUTH00NOR_R_20253220000_01D_30S_MO.crx",
+}
+LOCAL_NAV = f"{RINEX_CACHE}/BRDC00IGS_R_20253220000_01D_MN.rnx"
+LOCAL_DCB = f"{RINEX_CACHE}/CAS0OPSRAP_20253220000_01D_01D_DCB.BIA"
+
 lo = pd.Timestamp("2025-11-18 10:00:00")
 hi = pd.Timestamp("2025-11-18 11:00:00")
-OUTPUT_DIR = "Figures/preparation_test/IGS"
+OUTPUT_DIR = "/Users/cwang/Documents/Consulting/PlanetIQ/Runs/Tomography_Test/Claude_Test/IGS_step5"
 
 
 print("\n==========================================")
@@ -43,6 +64,12 @@ igs_obs, report = prepare_igs_observations(
     center_lat=center_LAT,
     center_lon=center_LON,
     radius_km=ROI_RADIUS_KM,
+    roi_mode=ROI_MODE,
+    alt_limit_km=ALT_LIMIT_KM,
+
+    local_obs_by_station=LOCAL_OBS_BY_STATION,
+    local_nav=LOCAL_NAV,
+    local_dcb=LOCAL_DCB,
 
     rinex_version=3,
     use_iri=False,
@@ -90,8 +117,8 @@ for i, obs in enumerate(igs_obs):
 
     print("TEC shape  :", obs["tec"].shape)
     print("tangent    :", obs["tangent_km"].shape)
-    print("LEO shape  :", obs["LEO"].shape)
-    print("GNSS shape :", obs["GNSS"].shape)
+    print("rec shape  :", obs["rec_ecef_km"].shape)
+    print("GNSS shape :", obs["gnss_ecef_km"].shape)
 
     print("TEC        :", obs["tec"])
     print("elevation  :", obs.get("elev_deg"))
@@ -109,8 +136,8 @@ for i, obs in enumerate(igs_obs):
 
     assert len(obs["tangent_km"]) == 1
 
-    assert obs["LEO"].shape == (3, 1)
-    assert obs["GNSS"].shape == (3, 1)
+    assert obs["rec_ecef_km"].shape == (3, 1)
+    assert obs["gnss_ecef_km"].shape == (3, 1)
 
     assert obs["tec"][0] > 0
 

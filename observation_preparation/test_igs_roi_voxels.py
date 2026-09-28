@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from .roi_tools import circular_roi_points, geodesic_circle_latlon, DEFAULT_FIBONACCI_SPACING_DEG, DEFAULT_FIBONACCI_SPACING_KM
+from .roi import circular_roi_points, geodesic_circle_latlon, DEFAULT_FIBONACCI_SPACING_DEG, DEFAULT_FIBONACCI_SPACING_KM
 
 def main():
     ap=argparse.ArgumentParser()

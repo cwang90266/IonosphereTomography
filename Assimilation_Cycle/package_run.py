@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Final packaging orchestrator (``Final_Packaging.docx``): one function,
+``run_package``, that runs the complete assimilation-cycle workflow --
+IRI sampling, ``EDPSamples`` construction, per-style parameterization,
+observation preparation, per-style assimilation, and cross-style
+comparison -- against one ``CycleConfig``, writing every intermediate and
+final artifact the docx specifies under ``cfg.output_dir``.
+
+This module is wiring only: every real step is an already-built,
+already-tested function from ``iri_selection``/``ensemble_init``/
+``observation_stream``/``cycle_driver``/``output``. The one piece of new
+control flow is per-batch, per-RO decoding for the TEC/EDP comparison
+plots (steps 7-8), done via ``cycle_driver.run_batch_loop``'s ``on_batch``
+callback so a real run's per-batch density fields are decoded, plotted,
+and discarded one batch at a time rather than all held in memory at once.
+
+Deferred imports of ``Parameterization``/``edp_samples`` (only importable
+once their own directories are on ``sys.path`` -- see the package
+``__init__.py`` docstring), matching every other module in this package.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+except ImportError:
+    pass
+import matplotlib.pyplot as plt
+
+from Ensemble_Kalman_Engine import EnsembleState
+from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
+
+from .cycle_config import CycleConfig
+from . import iri_selection, ensemble_init, observation_stream, output
+from .cycle_driver import CycleResult, run_cycle
+
+
+@dataclass
+class PackageResult:
+    output_dir: Path
+    edp_samples: Any
+    batches: list
+    results_by_style: dict[str, tuple[CycleResult, int, float]]
+    """style -> (CycleResult, n_state, wall_time_seconds)."""
+
+
+def _savefig(fig_or_ax_or_axes, path: Path) -> None:
+    """Accepts a bare ``Figure``, a single ``Axes`` (``.figure`` used), or
+    an array/list of ``Axes`` sharing one figure (e.g.
+    ``Parameterized_EDPSamples.plot_reconstruction_error_statistics``'s
+    ``plt.subplots(1, 2, ...)`` return) -- every plotting function used
+    in this module returns one of these three shapes."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    obj = fig_or_ax_or_axes
+    if isinstance(obj, (list, tuple, np.ndarray)):
+        obj = obj.flat[0] if isinstance(obj, np.ndarray) else obj[0]
+    fig = obj.figure if hasattr(obj, "figure") else obj
+    fig.savefig(path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _collect_unique_entries(batches: list) -> list:
+    """Every distinct ``ObservationEntry`` referenced across all batches'
+    ``entry_ray_ranges``, in first-seen order. Uses ``id()`` for
+    de-duplication, not ``entry in seen``/hashing the entry itself --
+    ``ObservationEntry``'s auto-generated ``__eq__`` would compare numpy
+    array fields with ``==``, which raises rather than giving a bool."""
+    seen_ids: set[int] = set()
+    entries = []
+    for batch in batches:
+        for entry, _ray_slice in batch.entry_ray_ranges:
+            if id(entry) not in seen_ids:
+                seen_ids.add(id(entry))
+                entries.append(entry)
+    return entries
+
+
+def run_package(cfg: CycleConfig) -> PackageResult:
+    """Run the complete packaged workflow for one assimilation cycle.
+
+    Requires ``cfg.output_dir`` and ``cfg.label`` (both used to name every
+    artifact written). Every other field's existing default applies --
+    in particular ``cfg.styles``/``cfg.hyper_params_by_style`` (default
+    ANCHOR/PCA_3D_10ex/PCA_1D_10ex), ``cfg.n_ensemble`` (2000),
+    ``cfg.altitude_grid`` (90-900km/10km), ``cfg.max_tec_per_batch``
+    (unset by default -- pass 300 explicitly for the docx's stated
+    default batching policy) and ``cfg.min_tangent_alt_km`` (unset by
+    default -- no RO filtering unless set).
+    """
+    if cfg.output_dir is None:
+        raise ValueError("run_package: cfg.output_dir is required")
+    if not cfg.label:
+        raise ValueError("run_package: cfg.label is required")
+
+    # -- Step 1: output folder -------------------------------------------
+    out = Path(cfg.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    # -- Steps 2-3: IRI sample inputs + input-distribution plot -----------
+    cfg = cfg if cfg.iri_sample_inputs_output_path is not None else replace(
+        cfg, iri_sample_inputs_output_path=out / f"{cfg.label}_iri_sample_inputs",
+    )
+    sampling_parameters = iri_selection.sampling_parameters_for_cycle(cfg)
+    _savefig(output.plot_iri_input_distributions(sampling_parameters),
+             out / f"{cfg.label}_iri_input_distributions.png")
+
+    # -- Step 4: EDPSamples + per-style parameterization + plots ----------
+    cfg = cfg if cfg.edp_samples_output_path is not None else replace(
+        cfg, edp_samples_output_path=out / f"{cfg.label}_edp_samples.nc",
+    )
+    edp_samples = ensemble_init.load_or_build_edp_samples(cfg)
+
+    _savefig(edp_samples.plot_geolocation(), out / f"{cfg.label}_horizontal_grid.png")
+
+    raw_edps = np.asarray(edp_samples.edps)
+    for target_alt in (100, 200, 300, 400, 500):
+        alt_idx = int(np.argmin(np.abs(edp_samples.altitude - target_alt)))
+        actual_alt = float(edp_samples.altitude[alt_idx])
+        mean_density = raw_edps[alt_idx, :, :].mean(axis=1)
+        _savefig(
+            output.plot_horizontal(edp_samples, mean_density, target_alt=actual_alt,
+                                    scalar_label=f"mean Ne (m$^{{-3}}$) [{actual_alt:.0f} km]"),
+            out / f"{cfg.label}_mean_density_{int(actual_alt)}km.png",
+        )
+
+    from Parameterization import Parameterized_EDPSamples
+
+    parameterizations: dict[str, Any] = {}
+    for style in cfg.styles:
+        hyper_params = cfg.hyper_params_by_style.get(style)
+        pes = Parameterized_EDPSamples(edp_samples, style=style, hyper_params=hyper_params)
+        pes.saveNetCDF(out / f"{cfg.label}_{style}_parameterized.nc")
+        parameterizations[style] = pes
+
+        _savefig(pes.plot_reconstruction_error_statistics(),
+                 out / f"{cfg.label}_{style}_reconstruction_error.png")
+
+    # -- Step 5: observation preparation + geolocation/obs-operator plots -
+    if cfg.ro_observations_output_path is None and cfg.obs_sources in ("RO", "both"):
+        cfg = replace(cfg, ro_observations_output_path=out / f"{cfg.label}_ro_observations.nc")
+    if cfg.igs_observations_output_path is None and cfg.obs_sources in ("IGS", "both"):
+        cfg = replace(cfg, igs_observations_output_path=out / f"{cfg.label}_igs_observations.nc")
+    batches = observation_stream.assemble(cfg)
+
+    all_entries = _collect_unique_entries(batches)
+
+    from observation_preparation import plot_geolocation as obs_plot_geolocation
+    obs_plot_geolocation(all_entries, output_path=out / f"{cfg.label}_observations_geolocation.png")
+
+    for entry in all_entries:
+        if entry.obs_type != "RO":
+            continue
+        fig = output.plot_observation_operator_sum(edp_samples, entry)
+        _savefig(fig, out / f"{cfg.label}_obs_operator" / f"{entry.label}.png")
+
+    # -- Steps 6-8: per-style assimilation, RMSE/rank plots, per-RO -------
+    #    TEC/EDP comparison plots (via the on_batch callback -- decodes
+    #    and plots one batch's forecast/analysis density at a time). -----
+    results_by_style: dict[str, tuple[CycleResult, int, float]] = {}
+    for style, pes in parameterizations.items():
+        ensemble_prior = EnsembleState.from_parameterized_edp_samples(pes)
+        style_cfg = replace(
+            cfg, style=style, hyper_params=cfg.hyper_params_by_style.get(style),
+            save_intermediate_ensembles=True,
+            ensemble_output_dir=out / f"{cfg.label}_{style}_ensembles",
+        )
+        style_dir = out / f"{cfg.label}_{style}"
+
+        def _on_batch(batch, obs_operator, ensemble_forecast, ensemble_analysis, outcome,
+                      _style_dir=style_dir):
+            ro_here = [(e, s) for e, s in batch.entry_ray_ranges if e.obs_type == "RO"]
+            if not ro_here:
+                return
+            decoded_forecast = obs_operator.decode(ensemble_forecast.to_param_shape())
+            decoded_analysis = obs_operator.decode(ensemble_analysis.to_param_shape())
+            for entry, ray_slice in ro_here:
+                _savefig(
+                    output.plot_tec_profile_comparison(
+                        entry, outcome.y_forecast[ray_slice], outcome.y_analysis[ray_slice],
+                        outcome.y_obs_used[ray_slice],
+                    ),
+                    _style_dir / "tec_profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png",
+                )
+                try:
+                    edp_ax = output.plot_edp_profile_comparison(
+                        edp_samples, entry, decoded_forecast, decoded_analysis,
+                    )
+                except ValueError:
+                    continue  # no ray in the default 250-350km window for this entry
+                _savefig(edp_ax, _style_dir / "edp_profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png")
+
+        t0 = time.time()
+        result = run_cycle(style_cfg, edp_samples, pes.Parameterization, batches, ensemble_prior,
+                            on_batch=_on_batch)
+        wall_time_s = time.time() - t0
+
+        _savefig(output.plot_rmse_reduction(result), style_dir / "rmse_reduction.png")
+        _savefig(output.plot_rank_histogram(result), style_dir / "rank_histogram.png")
+        _savefig(output.plot_effective_rank_series(result), style_dir / "effective_rank.png")
+
+        # Spatial distribution of the optimal (final analysis) EDP field,
+        # at the same altitudes as Step 4's forecast/prior mean-density
+        # plots -- lets a reviewer compare prior vs. analysis side by side
+        # for the same style. Decode needs a real (any) obs_operator for
+        # this style (decode() is geometry-independent -- see
+        # observation_operator.py -- so any batch's operator works).
+        decode_driver = GeneralEnKFDriver(style=style, hyper_params=cfg.hyper_params_by_style.get(style))
+        decode_op = decode_driver.build_observation_operator(
+            edp_samples, pes.Parameterization, ensemble_prior.param_shape, batches[0].podTc2_data,
+        )
+        analysis_mean_density = decode_op.decode(result.final_ensemble.to_param_shape()).mean(axis=2)
+        for target_alt in (100, 200, 300, 400, 500):
+            alt_idx = int(np.argmin(np.abs(edp_samples.altitude - target_alt)))
+            actual_alt = float(edp_samples.altitude[alt_idx])
+            _savefig(
+                output.plot_horizontal(
+                    edp_samples, analysis_mean_density[alt_idx, :], target_alt=actual_alt,
+                    scalar_label=f"analysis mean Ne (m$^{{-3}}$) [{actual_alt:.0f} km]",
+                ),
+                style_dir / f"{cfg.label}_{style}_analysis_mean_density_{int(actual_alt)}km.png",
+            )
+
+        results_by_style[style] = (result, ensemble_prior.n_state, wall_time_s)
+
+    # -- Step 9: cross-style comparison ------------------------------------
+    _savefig(output.plot_style_comparison_summary(results_by_style),
+             out / f"{cfg.label}_style_comparison.png")
+
+    return PackageResult(
+        output_dir=out, edp_samples=edp_samples, batches=batches, results_by_style=results_by_style,
+    )
