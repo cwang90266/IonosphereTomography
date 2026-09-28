@@ -155,14 +155,16 @@ def run_package(cfg: CycleConfig) -> PackageResult:
 
     all_entries = _collect_unique_entries(batches)
 
-    from observation_preparation import plot_geolocation as obs_plot_geolocation
-    obs_plot_geolocation(all_entries, output_path=out / f"{cfg.label}_observations_geolocation.png")
+    _savefig(output.plot_observations_geolocation(edp_samples, all_entries),
+             out / f"{cfg.label}_observations_geolocation.png")
 
-    for entry in all_entries:
-        if entry.obs_type != "RO":
-            continue
+    ro_entries = [e for e in all_entries if e.obs_type == "RO"]
+    for entry in ro_entries:
         fig = output.plot_observation_operator_sum(edp_samples, entry)
         _savefig(fig, out / f"{cfg.label}_obs_operator" / f"{entry.label}.png")
+    if ro_entries:
+        _savefig(output.plot_observation_operator_sum_combined(edp_samples, ro_entries),
+                 out / f"{cfg.label}_obs_operator_sum_all_ro.png")
 
     # -- Steps 6-8: per-style assimilation, RMSE/rank plots, per-RO -------
     #    TEC/EDP comparison plots (via the on_batch callback -- decodes
@@ -208,6 +210,8 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         _savefig(output.plot_rmse_reduction(result), style_dir / "rmse_reduction.png")
         _savefig(output.plot_rank_histogram(result), style_dir / "rank_histogram.png")
         _savefig(output.plot_effective_rank_series(result), style_dir / "effective_rank.png")
+        _savefig(output.plot_igs_tec_scatter(batches, result, style_label=style),
+                 style_dir / "igs_tec_scatter.png")
 
         # Spatial distribution of the optimal (final analysis) EDP field,
         # at the same altitudes as Step 4's forecast/prior mean-density

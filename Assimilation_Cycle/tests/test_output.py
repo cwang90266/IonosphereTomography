@@ -165,6 +165,28 @@ def _make_rectangle_with_mesh(altitude, n_sample=1, placeholder_value=1e11):
     )
 
 
+def _make_rectangle_with_mesh_high_latitude(altitude, n_sample=1, placeholder_value=1e11):
+    """Same as _make_rectangle_with_mesh, but entirely at high latitude
+    (mean ~75N) -- for testing the auto-polar-projection switch, which
+    _make_rectangle_with_mesh's mid-latitude grid never triggers."""
+    import pandas as pd
+    import edp_samples as E
+
+    sp = pd.DataFrame({
+        "hour": [12.0] * n_sample, "f107": [120.0] * n_sample,
+        "ap": [10.0] * n_sample, "ig12": [80.0] * n_sample, "rz12": [70.0] * n_sample,
+    })
+    sp.attrs = {}
+    n_geo = E.EDPSamples.genRectangularArea(-10, 10, 5, 65, 85, 5)[0].shape[0]
+    edps = np.full((len(altitude), n_geo, n_sample), placeholder_value)
+    feature_edps = np.zeros((len(E.EDPSamples.FEATURE_LABEL), n_geo, n_sample))
+    return E.EDPSamples(
+        DateTime="2026-01-01", geo_type="Rectangle", altitude=altitude,
+        sampling_parameters=sp, minLon=-10, maxLon=10, dLon=5, minLat=65, maxLat=85, dLat=5,
+        edps=edps, feature_edps=feature_edps,
+    )
+
+
 def _radial_ray_entry(edp_samples, lat, lon, alt_top_km, tec_value=10.0, tangent_alt_km=None, label="ro1"):
     import edp_samples as E
     from observation_preparation import ObservationEntry
@@ -189,6 +211,164 @@ class TestObservationOperatorSumPlot:
         # one axes per requested altitude
         visible_axes = [a for a in fig.axes if a.get_visible() and a.has_data()]
         assert len(visible_axes) >= 1
+
+    def test_high_latitude_grid_uses_polar_projection(self):
+        """Regression test for a real bug (2026-09-28): this function
+        used to build its multi-panel figure via a separately hardcoded
+        ccrs.PlateCarree(), so it never picked up EDPSamples' own
+        auto-polar switch even for a grid that clearly should use one."""
+        import cartopy.crs as ccrs
+        pytest.importorskip("cartopy")
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh_high_latitude(altitude)
+        entry = _radial_ray_entry(edp, 75.0, 2.0, alt_top_km=500.0)
+
+        fig = output.plot_observation_operator_sum(edp, entry, altitudes=(150, 250, 350))
+        geo_axes = [a for a in fig.axes if hasattr(a, "projection")]   # excludes colorbar axes
+        assert len(geo_axes) >= 1
+        for ax in geo_axes:
+            assert isinstance(ax.projection, ccrs.NorthPolarStereo)
+
+
+class TestObservationOperatorSumCombinedPlot:
+    def test_combines_multiple_entries(self):
+        pytest.importorskip("cartopy")
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh(altitude)
+        e1 = _radial_ray_entry(edp, 3.0, 2.0, alt_top_km=500.0, label="ro1")
+        e2 = _radial_ray_entry(edp, 5.0, 5.0, alt_top_km=500.0, label="ro2")
+
+        fig = output.plot_observation_operator_sum_combined(edp, [e1, e2], altitudes=(150, 250, 350))
+        visible_axes = [a for a in fig.axes if a.get_visible() and a.has_data()]
+        assert len(visible_axes) >= 1
+        assert "2 entries" in fig.get_suptitle()
+        assert "2 rays" in fig.get_suptitle()   # 1 ray per _radial_ray_entry
+
+    def test_high_latitude_grid_uses_polar_projection(self):
+        """Regression test for the same real bug as
+        TestObservationOperatorSumPlot's equivalent test -- this
+        function had its own separately hardcoded ccrs.PlateCarree()."""
+        import cartopy.crs as ccrs
+        pytest.importorskip("cartopy")
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh_high_latitude(altitude)
+        e1 = _radial_ray_entry(edp, 75.0, 2.0, alt_top_km=500.0, label="ro1")
+        e2 = _radial_ray_entry(edp, 78.0, 5.0, alt_top_km=500.0, label="ro2")
+
+        fig = output.plot_observation_operator_sum_combined(edp, [e1, e2], altitudes=(150, 250, 350))
+        geo_axes = [a for a in fig.axes if hasattr(a, "projection")]   # excludes colorbar axes
+        assert len(geo_axes) >= 1
+        for ax in geo_axes:
+            assert isinstance(ax.projection, ccrs.NorthPolarStereo)
+
+    def test_sum_differs_from_a_single_entry(self):
+        """The combined sum should reflect both entries, not just one --
+        catches a bug where only the first/last entry's geometry made it
+        into the concatenated operator."""
+        pytest.importorskip("cartopy")
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh(altitude)
+        e1 = _radial_ray_entry(edp, 3.0, 2.0, alt_top_km=500.0, label="ro1")
+        e2 = _radial_ray_entry(edp, 7.0, 8.0, alt_top_km=500.0, label="ro2")
+
+        H1 = edp.get_observation_operator(e1.to_operator_dict(), num_segments=200)
+        H2 = edp.get_observation_operator(e2.to_operator_dict(), num_segments=200)
+        rec = np.concatenate([e1.rec_ecef_km, e2.rec_ecef_km], axis=1)
+        gnss = np.concatenate([e1.gnss_ecef_km, e2.gnss_ecef_km], axis=1)
+        H_combined = edp.get_observation_operator({"rec_ecef_km": rec, "gnss_ecef_km": gnss}, num_segments=200)
+
+        combined_sum = np.asarray(H_combined).sum(axis=0)
+        separate_sum = np.asarray(H1).sum(axis=0) + np.asarray(H2).sum(axis=0)
+        np.testing.assert_allclose(combined_sum, separate_sum, atol=1e-8)
+
+
+class TestObservationsGeolocationPlot:
+    def test_runs_with_ro_and_igs_entries(self):
+        pytest.importorskip("cartopy")
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh(altitude)
+        ro = _radial_ray_entry(edp, 3.0, 2.0, alt_top_km=500.0, label="ro1")
+        from observation_preparation import ObservationEntry
+        igs = ObservationEntry(
+            obs_type="IGS", tec=np.array([12.0]),
+            gnss_ecef_km=np.zeros((3, 1)), rec_ecef_km=np.zeros((3, 1)),
+            pierce_lat=np.array([4.0]), pierce_lon=np.array([3.0]), label="igs1",
+        )
+
+        ax = output.plot_observations_geolocation(edp, [ro, igs])
+        assert ax.get_title().startswith("Geolocation")
+        assert ax.get_legend() is not None
+
+    def test_uses_same_projection_and_extent_as_the_grid_plot(self):
+        """Regression check for the reported bug: the old
+        observation_preparation.diagnostics.plot_geolocation used an
+        un-extent-limited Orthographic/Robinson view, putting real content
+        in a small corner of an otherwise-empty global disc. This must
+        reuse the grid's own projection+extent instead."""
+        pytest.importorskip("cartopy")
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh(altitude)
+        ro = _radial_ray_entry(edp, 3.0, 2.0, alt_top_km=500.0)
+
+        ax = output.plot_observations_geolocation(edp, [ro])
+        grid_ax = edp.plot_geolocation()
+        assert type(ax.projection) is type(grid_ax.projection)
+        assert ax.get_extent() == grid_ax.get_extent()
+
+    def test_runs_with_no_entries(self):
+        pytest.importorskip("cartopy")
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh(altitude)
+        ax = output.plot_observations_geolocation(edp, [])
+        assert ax.get_title().startswith("Geolocation")
+
+
+def _toy_cycle_result_with_obs_type(n_batches=3, n_igs=1, n_ro=2, seed=1):
+    """Like _toy_cycle_result, but also sets CycleBatch.obs_type (a mix of
+    IGS/RO) -- returns (batches, result) since plot_igs_tec_scatter needs
+    the original batches list zipped with result.batch_outcomes (obs_type
+    lives on CycleBatch, not on BatchOutcome)."""
+    rng = np.random.default_rng(seed)
+    n_state, n_members = 6, 100
+    n_obs = n_igs + n_ro
+    x_true = rng.standard_normal(n_state)
+    X = x_true[:, None] + 1.5 * rng.standard_normal((n_state, n_members))
+    ensemble = EnsembleState(X=X, param_shape=(n_state,))
+    driver = GeneralEnKFDriver(style="raw", config=AnalysisConfig(linearization="linear", centering="mean"))
+
+    batches, operators = [], []
+    obs_type = np.array(["IGS"] * n_igs + ["RO"] * n_ro)
+    for i in range(n_batches):
+        H = rng.standard_normal((n_obs, n_state))
+        operators.append(LinearToyOperator(H=H))
+        batches.append(CycleBatch(podTc2_data={}, y_obs=H @ x_true, R=0.05 * np.eye(n_obs),
+                                   obs_type=obs_type, batch_index=i))
+
+    result = run_batch_loop(ensemble, driver, operators, batches)
+    return batches, result
+
+
+class TestIgsTecScatterPlot:
+    def test_runs_and_produces_two_panels(self):
+        batches, result = _toy_cycle_result_with_obs_type(n_batches=2, n_igs=2, n_ro=3)
+        fig = output.plot_igs_tec_scatter(batches, result, style_label="raw")
+        assert len(fig.axes) == 2
+        for ax in fig.axes:
+            assert ax.has_data()
+        assert "raw" in fig.get_suptitle()
+
+    def test_pools_igs_rays_across_all_batches(self):
+        n_batches, n_igs = 4, 2
+        batches, result = _toy_cycle_result_with_obs_type(n_batches=n_batches, n_igs=n_igs, n_ro=1)
+        fig = output.plot_igs_tec_scatter(batches, result)
+        ax_forecast = fig.axes[0]
+        scatter_offsets = ax_forecast.collections[0].get_offsets()
+        assert len(scatter_offsets) == n_batches * n_igs
+
+    def test_handles_no_igs_data_gracefully(self):
+        batches, result = _toy_cycle_result_with_obs_type(n_batches=2, n_igs=0, n_ro=3)
+        fig = output.plot_igs_tec_scatter(batches, result)
+        assert len(fig.axes) == 2   # still produces the 2-panel figure, with a placeholder message
 
 
 class TestTecProfileComparisonPlot:

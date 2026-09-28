@@ -11,9 +11,13 @@ batches.
 
 See ``Assimilation_Cycle_Integration_Plan.md`` (repository root) for the
 full design. Per that plan's Section 3, this package imports the five
-survivor modules but adds no logic to them, with one additive exception
-(``Ensemble_Kalman_Engine.driver.GeneralEnKFDriver``'s ``build_ensemble``/
-``build_observation_operator`` split, Section 4.5).
+survivor modules but adds no logic to them, with two additive exceptions:
+``Ensemble_Kalman_Engine.driver.GeneralEnKFDriver``'s ``build_ensemble``/
+``build_observation_operator`` split (Section 4.5), and
+``EDPSamples.EDPSamples``'s ``select_map_projection``/auto-polar-projection
+addition to its shared horizontal-plot axes builder (Section 20) -- both
+additive-only, no existing behavior changed for any caller that doesn't
+opt into the new capability.
 
 Heavier, cartopy/xarray/IRI2020-dependent imports (``EDPSamples``,
 ``Parameterization``, ``IRI_Sample_inputs``) are deferred inside the

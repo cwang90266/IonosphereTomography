@@ -2040,3 +2040,156 @@ synthetic unit test, since `decode()`/`plot_horizontal` are already
 independently unit-tested) -- all 5 per-style plots produced, non-trivial
 file sizes, correctly named by actual nearest grid altitude. Full
 existing suite (164 tests) still passes -- purely additive change.
+
+## 19. Three artifact-review fixes/additions (2026-09-27/28)
+
+User reviewed the boosted full-scale run's artifacts and requested three
+changes.
+
+**1. Bad map projection on the observation-geolocation plot.** Root
+cause: `package_run.py`'s Step 5 called
+`observation_preparation.diagnostics.plot_geolocation`, which uses
+`ccrs.Orthographic` centered on the ROI but never calls `set_extent` --
+so the plot shows the whole visible hemisphere, and this project's real
+data (all within ~2000km of one point) ends up squeezed into a small
+part of an otherwise-empty disc (user: "all the interesting items are
+plotted near the top"). Per this package's own architectural rule (the
+five survivor modules get no logic added), fixed without touching
+`observation_preparation`: new `output.plot_observations_geolocation(edp_samples, entries)`
+reuses `edp_samples.plot_geolocation()` itself (identical
+projection/extent-framing logic already used for `foo_horizontal_grid.png`)
+and overlays RO tangent tracks (colored by altitude) + IGS pierce points
+on top of that same axes, replicating the old function's geometry/plot
+calls but on correctly-framed axes. `package_run.py` Step 5 now calls
+this instead. Verified visually on a real smoke run: RO/IGS content now
+fills a properly-framed regional map matching the grid extent (was
+squeezed into ~10% of the frame near the top before).
+
+**2. Combined observation-operator-sum plot for all RO.** New
+`output.plot_observation_operator_sum_combined(edp_samples, entries, ...)`
+-- same sum(H)-by-altitude visualization as the existing per-RO
+`plot_observation_operator_sum`, but concatenates every RO entry's ray
+geometry into one `get_observation_operator` call first, showing the
+*cumulative* sensitivity pattern across the whole RO dataset rather than
+one occultation at a time. `package_run.py` Step 5 now also calls this
+once (after the existing per-RO loop), saved as
+`foo_obs_operator_sum_all_ro.png`. Unit-tested that the combined sum
+exactly equals the sum of the per-entry sums (catches a concatenation
+bug that would silently drop an entry).
+
+**3. IGS performance visualization (previously entirely missing).** New
+`output.plot_igs_tec_scatter(batches, result, style_label=None)`: 2-panel
+scatter (forecast vs. measured TEC, analysis vs. measured TEC), IGS rays
+only, pooled across every batch via `CycleBatch.obs_type` (zipped with
+`result.batch_outcomes`, since `BatchOutcome` itself doesn't carry an
+obs-type back-reference), with a 1:1 reference line on each panel.
+`package_run.py`'s per-style loop now calls this once per style, saved as
+`foo_{style}/igs_tec_scatter.png`. Handles the no-IGS-data case
+gracefully (placeholder text, not a crash).
+
+**Verified:** 8 new unit tests (`test_output.py`) covering all three --
+projection/extent match, combined-sum correctness, IGS-ray pooling across
+batches, empty-entries/no-IGS-data edge cases. Full suite: 172 passed.
+Real end-to-end smoke run (small/fast IRI2020, matching this project's
+established `package_run.py`-testing convention) confirmed all three
+artifacts render correctly and look sensible against real geometry --
+the geolocation fix was visually inspected and confirmed to actually
+solve the reported framing problem, not just run without error.
+
+## 20. Automatic polar projection for high-latitude grids (2026-09-28)
+
+User reviewed the (freshly Plate-Carree-framed) geolocation plot and
+pointed out the projection itself was still wrong for this project's real
+region: Plate Carree ("mercator-like") badly stretches shape/area near
+the poles (longitude lines that actually converge get drawn as parallel)
+-- asked for automatic switching to a polar projection when the grid is
+close to a pole, Plate Carree otherwise.
+
+**Implemented in `EDPSamples._horizontal_map_axes`** (the one shared
+method underlying every horizontal plot in the whole pipeline --
+`plot_geolocation`, `plot_horizontal_field`, and everything in
+`Assimilation_Cycle/output.py` that calls through them, including the new
+`plot_observations_geolocation`/analysis-density plots from Section 19) --
+a deliberate, flagged exception to this package's "no added logic to the
+five survivor modules" rule (matching the one prior precedent, the
+`GeneralEnKFDriver` split), chosen because fixing it in one shared place
+is far better than duplicating divergent projection logic per-plot.
+
+`geo_type=="Polar"` already used north/south polar stereographic; now any
+*other* geo_type whose grid's **mean** latitude exceeds 60 degrees (either
+hemisphere) also automatically switches to polar stereographic, framed
+down to the grid's own actual minimum |latitude| (same extent-setting
+pattern the existing `"Polar"` branch already used, generalized off the
+real data instead of `geo_type`-specific attrs). Mean rather than
+"every point" beyond the threshold -- a first attempt using "every point"
+failed its own test against this project's real production grid
+(Regional, Lat=69.6/radius=18deg): that grid's southern edge dips to
+~52N, well below any reasonable polar threshold, even though the grid is
+clearly polar-region on the whole (mean ~69.5N). Caught by writing the
+test against the real grid parameters *first*, before assuming the
+initial criterion was right.
+
+**Verified:** 6 new tests (`EDPSamples/test_edp_samples.py`): the real
+production grid correctly switches to `NorthPolarStereo` despite its
+low-latitude edge, a southern high-latitude grid switches to
+`SouthPolarStereo`, a mid-latitude grid stays `PlateCarree`, a grid whose
+*mean* sits below threshold stays `PlateCarree` even with a high-latitude
+edge, `geo_type="Polar"` behavior is unchanged, `"Global"` never
+auto-switches. Full suite: EDPSamples 108 passed, combined with
+Assimilation_Cycle/Ensemble_Kalman_Engine/Parameterization 254 passed.
+Visually verified on a real smoke run: the actual grid/RO/IGS content
+now renders in a proper circumpolar view with correct great-circle
+geometry, no more horizontal stretching.
+
+### 20.1 Follow-on bug: observation-operator plots missed the polar switch (2026-09-28)
+
+User reviewed the regenerated `step20` artifacts and reported the
+observation-operator plots (per-RO and the new combined-all-RO plot)
+were *still* narrow, stretched Plate Carree rectangles, despite the
+report above -- correctly asked why, since that report was wrong for
+these two specific plots (only the geolocation/mean-density plots were
+actually checked visually).
+
+**Root cause:** `output.plot_observation_operator_sum`/
+`plot_observation_operator_sum_combined` build their multi-panel figure
+via `plt.subplots(nrows, ncols, subplot_kw={"projection": _cartopy_projection()})`
+-- and `_cartopy_projection()` was a *separate*, hardcoded
+`return ccrs.PlateCarree()` in `output.py`, never consulting
+`EDPSamples`'s own (now auto-polar-aware) projection logic at all. Each
+panel then called `plot_horizontal_field(ax=ax, ...)` with that
+already-built axes; the shared axes-builder only *selects* a projection
+when it creates a fresh axes itself (`ax is None`) -- handed an existing
+`ax`, it just uses whatever projection that axes already has. So the
+auto-polar switch (Section 20) never had a chance to run for these two
+plots specifically, even though it was correctly wired into every other
+horizontal plot in the pipeline.
+
+**Fix -- eliminated the duplication risk that caused this, not just the
+symptom:** extracted the projection-selection logic out of
+`_horizontal_map_axes` into a new public method,
+`EDPSamples.select_map_projection()` (returns
+`(proj, is_polar, is_north_polar, center_lon)`), which `_horizontal_map_axes`
+now calls internally, and which `output.py`'s `_cartopy_projection`
+now also calls (taking `edp_samples` as an argument) instead of
+hardcoding a choice. Single source of truth -- this exact class of bug
+(a second call site quietly re-deriving/hardcoding the same decision and
+drifting out of sync) can no longer happen for this decision.
+
+**Verified:** 2 new regression tests (one per affected function), using
+a dedicated high-latitude fixture (the existing mid-latitude fixture
+would never have caught this) -- both check the actual panel axes'
+`.projection` type is `NorthPolarStereo`, not just "does not raise" (the
+original tests' weakness, which is exactly why this bug shipped past
+them). Caught a test-writing mistake immediately after writing these:
+`fig.axes` includes the colorbar axes `plot_horizontal_field` adds per
+panel (plain `Axes`, no `.projection` attribute) alongside the actual
+`GeoAxes` panels -- fixed by filtering to `hasattr(ax, "projection")`
+before asserting. Full suite: 364 passed. Visually confirmed on a real
+smoke run: the observation-operator-sum plots (both per-RO and combined)
+now render in the same proper circumpolar view as every other horizontal
+plot.
+
+**Process note:** the "report" that started this sub-section was
+based on visually checking only two of the several plots the fix should
+have affected -- a reminder to check every affected artifact, not a
+representative sample, before reporting a visual fix as verified.

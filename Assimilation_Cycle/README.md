@@ -56,6 +56,7 @@ cfg = CycleConfig(
     center_lat=69.6, center_lon=19.2,        # cycle/ROI center
     radius_km=2000.0,                        # observation CAPTURE radius (see Section 4)
     grid_radius_deg=18.0,                    # assimilation GRID radius, in degrees (see Section 4)
+    max_tec_per_batch=100_000,               # bigger than any real ray count -> single batch (recommended, see Section 3)
 
     # --- observation sources: real data on disk ---
     obs_sources="both",                      # "RO", "IGS", or "both"
@@ -259,11 +260,14 @@ instead of linear density (converted back via `10**(...)`) -- no
 positivity constraint, so no clip is ever needed. Re-running the
 `PCA_3D_10ex` sweep with this setting gave a clean, large, robust win: no
 catastrophic values, every amplitude converges, and a real optimum
-around **amplitude~0.8** giving a **~65% held-out RMSE reduction** (33.44
--> 11.59), tightly reproducible across 3 boost seeds (11.50-11.60).
-`n_state` still grows substantially under boosting (110 -> ~1900) --
-confirming state-dimension growth itself was never the problem, only the
-linear-space clip artifact was.
+around amplitude~0.8 on this first (single-split) pass, giving a ~65%
+held-out RMSE reduction (33.44 -> 11.59), tightly reproducible across 3
+boost seeds (11.50-11.60) -- **revised down to amplitude~0.5 below**
+once checked against multiple splits, so treat 0.8 here as a
+now-superseded data point, not the recommendation. `n_state` still grows
+substantially under boosting (110 -> ~1900) -- confirming state-dimension
+growth itself was never the problem, only the linear-space clip artifact
+was.
 
 **Recommendation:** always set `diagonal_boost_log_space=True` when using
 `diagonal_boost_amplitude` with `density_10ex`/`PCA_*_10ex` -- the
@@ -390,10 +394,12 @@ foo_mean_density_{100,200,300,400,500}km.png   # step 4
 foo_{style}_parameterized.nc           # step 4, one per style
 foo_{style}_reconstruction_error.png   # step 4, one per style
 foo_ro_observations.nc, foo_igs_observations.nc   # step 5
-foo_observations_geolocation.png       # step 5
+foo_observations_geolocation.png       # step 5 -- RO tangent tracks + IGS pierce points, on the SAME projection/extent as foo_horizontal_grid.png (not a separate Orthographic/global view)
 foo_obs_operator/{ro_label}.png        # step 5, one per RO occultation
+foo_obs_operator_sum_all_ro.png        # step 5 -- same sum(H)-by-altitude view as the per-RO plots, but summed over every RO occultation combined
 foo_{style}_ensembles/ensemble_batch_NNNN.nc   # step 6, one per batch per style
 foo_{style}/rmse_reduction.png, rank_histogram.png, effective_rank.png   # step 6
+foo_{style}/igs_tec_scatter.png        # step 6, one per style -- 2-panel scatter, forecast/analysis TEC vs. measured TEC, IGS rays only, pooled across all batches
 foo_{style}_analysis_mean_density_{alt}km.png   # step 6, one per style, same 5 altitudes as the step-4 forecast plots -- the optimal (final analysis) EDP field's spatial distribution, directly comparable to the step-4 prior/forecast mean-density plots at the same altitude
 foo_{style}/tec_profiles/batchNNNN_{ro_label}.png   # step 7, one per RO per batch
 foo_{style}/edp_profiles/batchNNNN_{ro_label}.png   # step 8, one per RO per batch (skipped if no ray fell in the 250-350km window)
@@ -439,6 +445,21 @@ Takeaways:
   `n_ensemble` (10-50) and a coarse grid first (as above) to catch
   configuration mistakes (wrong `podtc_dir`, wrong `grid_radius_deg`,
   missing IGS local files) before committing to a multi-hour run.
+
+**The table above uses `max_tec_per_batch=300` (13 batches), the
+`Final_Packaging.docx`-stated default -- but Section 3's batch-size
+findings recommend a single batch instead** (`max_tec_per_batch` set
+above the real total ray count), which is both more accurate and
+substantially faster for the assimilation step specifically (the
+parameterization costs above -- IRI2020 build, `ANCHOR`'s Chapman fit --
+are unaffected by batching, since they happen once regardless). Measured
+on the same real production-scale data, single-batch: `ANCHOR` assimilation
+~12 minutes (vs. ~88 minutes across 13 batches -- ~52 total with the
+Chapman fit, vs. ~128 total); `PCA_3D_10ex`/`PCA_1D_10ex` assimilation
+~2 minutes each (both were already fast in 13-batch mode; single-batch
+mainly helps `ANCHOR`, which pays the most per-batch linearization-restart
+overhead). Recommended default going forward: set `max_tec_per_batch`
+large enough to force one batch, not `300`.
 
 ## 7. Troubleshooting
 

@@ -266,7 +266,7 @@ def plot_observation_operator_sum(
     nrows = int(np.ceil(n_alt / ncols))
     if fig is None:
         fig, axes = plt.subplots(nrows, ncols, figsize=figsize,
-                                  subplot_kw={"projection": _cartopy_projection()})
+                                  subplot_kw={"projection": _cartopy_projection(edp_samples)})
     axes = np.asarray(fig.axes).ravel()
 
     for ax, target_alt in zip(axes, altitudes):
@@ -282,9 +282,19 @@ def plot_observation_operator_sum(
     return fig
 
 
-def _cartopy_projection():
-    import cartopy.crs as ccrs
-    return ccrs.PlateCarree()
+def _cartopy_projection(edp_samples):
+    """Delegates to ``edp_samples.select_map_projection()`` -- the single
+    source of truth for the projection/auto-polar decision (also used by
+    ``EDPSamples._horizontal_map_axes`` internally) -- rather than a
+    separately hardcoded choice, which previously left this module's
+    multi-panel figures (built via ``plt.subplots(...,
+    subplot_kw={"projection": ...})``, needing one projection fixed
+    before any panel's axes exists) stuck on Plate Carree even for a
+    high-latitude grid that should auto-switch to polar (real bug, found
+    2026-09-28 from a user report after the auto-polar switch was already
+    live for every *other* horizontal plot)."""
+    proj, _, _, _ = edp_samples.select_map_projection()
+    return proj
 
 
 def plot_tec_profile_comparison(entry, y_forecast: np.ndarray, y_analysis: np.ndarray,
@@ -441,5 +451,183 @@ def plot_style_comparison_summary(results_by_style: dict, fig=None, figsize=(11,
         ax.tick_params(axis="x", rotation=30)
 
     fig.suptitle("Cross-style comparison")
+    fig.tight_layout()
+    return fig
+
+
+def plot_observations_geolocation(edp_samples, entries, ax=None, figsize=(10, 8)):
+    """
+    RO tangent-point tracks (colored by tangent altitude) + IGS pierce
+    points, drawn on the *same* map projection/extent as the horizontal
+    grid plots (``edp_samples.plot_geolocation()``) -- replaces
+    ``observation_preparation.diagnostics.plot_geolocation``'s
+    Orthographic/Robinson view for this package's own artifact, since
+    that view has no ``set_extent`` call and shows the whole visible
+    hemisphere/globe, leaving the actual ROI content (this project's real
+    data all sits within ~2000km of one point) squeezed into a small part
+    of an otherwise-empty frame (2026-09-27 user report: "all the
+    interesting items are plotted near the top of the plot"). Reuses
+    ``edp_samples.plot_geolocation()`` itself (same grid vertices/mesh
+    drawing, same projection/framing logic) and overlays observation
+    geometry on top of it, rather than duplicating that framing logic.
+
+    Parameters
+    ----------
+    edp_samples : EDPSamples
+        Whatever grid this cycle used -- its own projection/extent is
+        reused as-is.
+    entries : list[ObservationEntry]
+        Real RO+IGS entries (e.g. from ``package_run.py``'s
+        ``_collect_unique_entries``).
+    """
+    import cartopy.crs as ccrs
+    from TEC_model.podTc_file_processing import rayTangent, ECEFtolla
+
+    ax = edp_samples.plot_geolocation(ax=ax, figsize=figsize)
+
+    ro_entries = [e for e in entries if e.obs_type == "RO"]
+    igs_entries = [e for e in entries if e.obs_type == "IGS"]
+
+    if ro_entries:
+        lat_parts, lon_parts, alt_parts = [], [], []
+        for e in ro_entries:
+            tangent_xyz, _, _ = rayTangent(
+                np.asarray(e.rec_ecef_km, dtype=float), np.asarray(e.gnss_ecef_km, dtype=float), units="km",
+            )
+            lat, lon, _ = ECEFtolla(tangent_xyz)
+            lat = np.asarray(lat, dtype=float).ravel()
+            lon = np.asarray(lon, dtype=float).ravel()
+            alt = (np.asarray(e.tangent_alt_km, dtype=float).ravel()
+                   if e.tangent_alt_km is not None else np.full(lat.shape, np.nan))
+            valid = np.isfinite(lat) & np.isfinite(lon)
+            if np.any(valid):
+                ax.plot(lon[valid], lat[valid], transform=ccrs.Geodetic(),
+                        color="red", linewidth=1.0, alpha=0.6, zorder=3)
+            lat_parts.append(lat)
+            lon_parts.append(lon)
+            alt_parts.append(alt)
+
+        cat_lat, cat_lon, cat_alt = np.concatenate(lat_parts), np.concatenate(lon_parts), np.concatenate(alt_parts)
+        valid = np.isfinite(cat_lat) & np.isfinite(cat_lon) & np.isfinite(cat_alt)
+        if np.any(valid):
+            sc = ax.scatter(cat_lon[valid], cat_lat[valid], transform=ccrs.PlateCarree(),
+                             c=cat_alt[valid], s=10, zorder=4, label=f"RO tangent points (n={len(ro_entries)})")
+            cb = ax.figure.colorbar(sc, ax=ax, pad=0.04, shrink=0.7)
+            cb.set_label("RO tangent altitude (km)")
+
+    if igs_entries:
+        ipp_lat = np.concatenate([
+            np.asarray(e.pierce_lat, dtype=float) if e.pierce_lat is not None else np.array([np.nan])
+            for e in igs_entries
+        ])
+        ipp_lon = np.concatenate([
+            np.asarray(e.pierce_lon, dtype=float) if e.pierce_lon is not None else np.array([np.nan])
+            for e in igs_entries
+        ])
+        valid = np.isfinite(ipp_lat) & np.isfinite(ipp_lon)
+        if np.any(valid):
+            ax.scatter(ipp_lon[valid], ipp_lat[valid], transform=ccrs.PlateCarree(),
+                       s=18, color="tab:blue", marker="^", zorder=5,
+                       label=f"IGS pierce points (n={len(igs_entries)})")
+
+    ax.legend(loc="lower left", fontsize=8)
+    ax.set_title(f"Geolocation of prepared observations (n={len(entries)})")
+    return ax
+
+
+def plot_observation_operator_sum_combined(
+    edp_samples, entries, altitudes=(100, 200, 300, 400, 500, 600, 700, 800),
+    num_segments: int = 1000, fig=None, figsize=(14, 7), label: str = "all RO",
+):
+    """Same as ``plot_observation_operator_sum``, but sums the observation
+    operator's rows over *every ray from every entry* combined (e.g. all
+    RO occultations at once), rather than one entry at a time -- "where,
+    cumulatively, does this whole RO dataset have sensitivity, and at what
+    height" (2026-09-27 user request, complements the existing per-RO
+    plots rather than replacing them)."""
+    rec = np.concatenate([np.asarray(e.rec_ecef_km, dtype=np.float64) for e in entries], axis=1)
+    gnss = np.concatenate([np.asarray(e.gnss_ecef_km, dtype=np.float64) for e in entries], axis=1)
+    H_combined = edp_samples.get_observation_operator(
+        {"rec_ecef_km": rec, "gnss_ecef_km": gnss}, num_segments=num_segments,
+    )
+    n_height = len(edp_samples.altitude)
+    n_geo = edp_samples.geolocation.shape[0]
+    summed = np.asarray(H_combined).sum(axis=0).reshape(n_height, n_geo)
+
+    n_alt = len(altitudes)
+    ncols = min(4, n_alt)
+    nrows = int(np.ceil(n_alt / ncols))
+    if fig is None:
+        fig, axes = plt.subplots(nrows, ncols, figsize=figsize,
+                                  subplot_kw={"projection": _cartopy_projection(edp_samples)})
+    axes = np.asarray(fig.axes).ravel()
+
+    for ax, target_alt in zip(axes, altitudes):
+        alt_idx = int(np.argmin(np.abs(edp_samples.altitude - target_alt)))
+        actual_alt = float(edp_samples.altitude[alt_idx])
+        plot_horizontal(edp_samples, summed[alt_idx, :], target_alt=actual_alt, ax=ax,
+                         scalar_label=f"sum(H) [{actual_alt:.0f} km]")
+    for ax in axes[n_alt:]:
+        ax.axis("off")
+
+    total_rays = sum(e.n_rays for e in entries)
+    fig.suptitle(f"Observation operator sum: {label} ({len(entries)} entries, {total_rays} rays)")
+    fig.tight_layout()
+    return fig
+
+
+def plot_igs_tec_scatter(batches, result: CycleResult, style_label: str | None = None, figsize=(12, 6)):
+    """Two-panel scatter (2026-09-27 user request): forecast TEC vs.
+    measured TEC, and analysis TEC vs. measured TEC, for IGS rays only,
+    pooled across every batch -- the IGS-side counterpart to the existing
+    per-RO TEC/EDP profile comparison plots, which don't cover IGS. One
+    call per style (pass ``style_label`` for the title).
+
+    Parameters
+    ----------
+    batches : list[CycleBatch]
+        Same batches (same order) passed to ``run_cycle`` for this style
+        -- supplies each batch's ``obs_type`` to select IGS rays, since
+        ``BatchOutcome`` itself doesn't carry that back-reference.
+    result : CycleResult
+        This style's own cycle result (``batch_outcomes`` zipped 1:1 with
+        ``batches``).
+    """
+    forecast_parts, analysis_parts, measured_parts = [], [], []
+    for batch, outcome in zip(batches, result.batch_outcomes):
+        if batch.obs_type is None or outcome.y_forecast is None or outcome.y_analysis is None:
+            continue
+        igs_mask = np.asarray(batch.obs_type) == "IGS"
+        if not np.any(igs_mask):
+            continue
+        forecast_parts.append(outcome.y_forecast[igs_mask])
+        analysis_parts.append(outcome.y_analysis[igs_mask])
+        measured_parts.append(outcome.y_obs_used[igs_mask])
+
+    fig, (ax_f, ax_a) = plt.subplots(1, 2, figsize=figsize)
+    if not measured_parts:
+        for ax in (ax_f, ax_a):
+            ax.text(0.5, 0.5, "no IGS observations in this cycle", ha="center", va="center",
+                    transform=ax.transAxes)
+        fig.suptitle(f"IGS forecast/analysis vs. measured TEC" + (f" -- {style_label}" if style_label else ""))
+        fig.tight_layout()
+        return fig
+
+    measured = np.concatenate(measured_parts)
+    forecast = np.concatenate(forecast_parts)
+    analysis = np.concatenate(analysis_parts)
+
+    for ax, predicted, panel_label in ((ax_f, forecast, "Forecast"), (ax_a, analysis, "Analysis")):
+        ax.scatter(measured, predicted, s=18, alpha=0.6, color="C0")
+        lo = float(min(measured.min(), predicted.min()))
+        hi = float(max(measured.max(), predicted.max()))
+        pad = 0.05 * max(hi - lo, 1e-6)
+        ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], "k--", linewidth=1, label="1:1")
+        ax.set_xlabel("Measured TEC (TECU)")
+        ax.set_ylabel(f"{panel_label} TEC (TECU)")
+        ax.set_title(f"{panel_label} vs. measured (n={len(measured)})")
+        ax.legend(loc="best", fontsize=8)
+
+    fig.suptitle("IGS forecast/analysis vs. measured TEC" + (f" -- {style_label}" if style_label else ""))
     fig.tight_layout()
     return fig
