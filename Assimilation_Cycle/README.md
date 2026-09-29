@@ -136,6 +136,55 @@ real Tromsø data this session, §11/§12). Reducing any of them speeds up
 every downstream step but changes results -- see Section 7 for what each
 actually costs.
 
+### IRI2020 ensemble spread
+
+| field | default | meaning |
+|---|---|---|
+| `iri_spread_kwargs` | see below | forwarded to `IRI_Sample_Inputs.randomSamples` as `hour_sample_range`/`f107_sample_range`/`ap_sample_range`/`ig_sample_range`/`rz_sample_range` -- how far each IRI2020 driving index is allowed to vary member-to-member |
+
+Default (`default_iri_spread_kwargs()` in `cycle_config.py`, confirmed
+with the user 2026-09-29 after directly inspecting the real underlying
+IRI2020 input files):
+
+```python
+{"hour_sample_range": 3, "f107_sample_range": 30, "ap_sample_range": 30,
+ "ig_sample_range": 12, "rz_sample_range": 12}
+```
+
+**Each number is a window of table *rows*, not a uniform time unit** --
+the two underlying files have different native cadences, confirmed by
+reading their actual structure, not assumed:
+- `apf107.dat` (`f107`/`ap`) is indexed **one row per calendar day** --
+  `f107_sample_range=30`/`ap_sample_range=30` means **+/-30 real days**.
+  (`ap`'s value within a day is itself 8 genuinely 3-hourly sub-values,
+  but the window steps in whole days, not 3-hour steps.)
+- `ig_rz.dat` (`ig12`/`rz12`) is indexed **one row per calendar month**
+  (confirmed via its own `Start_end_month` header) --
+  `ig_sample_range=12`/`rz_sample_range=12` means **+/-12 real months**.
+  These are 12-month *smoothed* indices by construction, so they move
+  slowly regardless of window width -- 12 is a real month-scale window
+  despite the smaller number, not a narrow one.
+- `hour` indexes local time-of-day directly in whole hours --
+  `hour_sample_range=3` means **+/-3 real hours**, no file/cadence
+  question.
+
+This replaced an earlier default of `{}` (no spread at all) -- a real bug
+found this way: every `*_sample_range` left unset means every one of the
+`n_ensemble` members draws the exact same (nominal) driving indices, a
+fully degenerate ensemble with zero climatological variability
+(`Assimilation_Cycle_Integration_Plan.md` §21-22: the
+`foo_iri_input_distributions.png` histograms showed single spikes because
+of this). Only matters for a **fresh** IRI2020 build (`edp_samples_path`
+unset) -- has no effect in precomputed-file mode, since the real
+ensemble there comes from the cached file, and the distribution plot now
+reads that file's own real `sampling_parameters` regardless (Section 4).
+Verified against the real event-date tables: the new default gives 7
+distinct `hour` values, 58 distinct `f107` values, 25 distinct `ap`
+values, 24 distinct `ig12`/`rz12` values each (was 2-3 distinct values
+per index under the old default). Check `foo_iri_input_distributions.png`
+after any fresh-build run to confirm real spread, the same way you'd
+check `rmse_reduction.png` before trusting a result.
+
 ### Styles
 
 | field | default | meaning |
@@ -387,7 +436,7 @@ for the exact mapping):
 
 ```
 foo_iri_sample_inputs.pkl              # step 2
-foo_iri_input_distributions.png        # step 3
+foo_iri_input_distributions.png        # step 3 -- the REAL driving indices of the ensemble actually built/loaded in step 4 (edp_samples.sampling_parameters), not an independent redraw; a single spike per panel means iri_spread_kwargs was left at its default {} (no spread requested), not a plotting bug
 foo_edp_samples.nc                     # step 4
 foo_horizontal_grid.png                # step 4
 foo_mean_density_{100,200,300,400,500}km.png   # step 4

@@ -2193,3 +2193,122 @@ plot.
 based on visually checking only two of the several plots the fix should
 have affected -- a reminder to check every affected artifact, not a
 representative sample, before reporting a visual fix as verified.
+
+## 21. IRI input-distribution plot showed no spread (2026-09-29)
+
+User noticed the `iri_input_distributions.png` histograms had no spread
+(each driving index a single spike) and asked if that was correct.
+**It wasn't -- a real bug, confirmed by tracing the exact mechanism.**
+
+**Immediate cause:** the script that produced `step19`/`step20` never set
+`iri_spread_kwargs` (defaults to `{}`). With every `*_sample_range` left
+`None`, `IRI_Sample_Inputs.randomSamples` sets each driving index's
+sampling range to `[None]` -- every one of the 2000 draws picks the same
+"use nominal value" placeholder for every index, a genuinely degenerate
+draw, not a rendering artifact.
+
+**But the real, assimilated ensemble was never affected.** Loaded the
+actual cached ensemble those runs used (`step15_n2000_10km`, via
+`edp_samples_path`) and checked its own `.sampling_parameters` directly:
+real, non-degenerate spread (hour 9-11, f107 117.4-129.4, ap 0-22, ig12/
+rz12 modest ranges) -- confirming the assimilation results themselves
+were correct throughout; only this one diagnostic plot was wrong.
+
+**Root cause is structural, not just a missing kwarg in one script:**
+`package_run.py`'s steps 2-3 *always* called
+`iri_selection.sampling_parameters_for_cycle(cfg)` fresh for the
+distribution plot -- completely disconnected from whatever ensemble step
+4 actually used. In precomputed-`edp_samples_path` mode this silently
+plots an unrelated, differently-configured (here, degenerate) redraw
+instead of the real ensemble's real driving indices. Even in the
+*fresh-build* case it was a second, independently-seeded `randomSamples`
+call from the one that actually built the ensemble (`ensemble_init.py`
+calls the same function again internally) -- not literally the values
+used, just a statistically similar redraw.
+
+**Fix:** reordered `package_run.py` so step 4 (load/build `EDPSamples`)
+happens before the distribution plot, and the plot now reads
+`edp_samples.sampling_parameters` -- the real, authoritative values for
+whatever ensemble is actually in use, whether freshly drawn or loaded
+from a cache -- instead of an independent re-derivation. Step 2's
+`load_or_build_iri_sample_inputs` call (saving the `.pkl` artifact) is
+kept as its own step, since that artifact should exist regardless of
+`edp_samples_path`.
+
+**Verified:** full suite still 364 passed (pure reordering + a different
+data source for one plot call, no new logic to unit-test beyond what
+`plot_iri_input_distributions` and `EDPSamples.sampling_parameters`
+already cover independently). Directly confirmed the fix against the
+exact bug scenario (`edp_samples_path` set, `iri_spread_kwargs` left
+default): the plot now shows real multi-bar spread for every index
+matching the cached ensemble's true driving indices. Regenerated just
+this one artifact in `step20` (the only thing affected -- no change to
+the assimilation results, ensemble, or any other plot, so no need to
+re-run the full ~45-60min pipeline).
+
+## 22. `iri_spread_kwargs` default changed from "no spread" to real windows (2026-09-29)
+
+After the §21 fix, user looked at the *now-real* distribution plot and
+noticed the spread still looked surprisingly sparse -- `ig12`/`rz12`
+showing only 2 distinct values, `f107` showing a gap in the middle. Asked
+whether the sample generation itself was working correctly.
+
+**Investigated directly against the real underlying tables (not
+speculation).** Loaded the actual `IRI_Sample_Inputs` object for the real
+event date and printed both `apf107["f107"]` and `ig_rz["ig"]`/`["rz"]`
+around their `current_idx`:
+
+- `f107` window (this cycle used `f107_sample_range=3`) landed exactly on
+  a real ~10-unit day-to-day jump in the historical F10.7 record (129.3
+  -> 119.5 between two adjacent real days) -- the "gap in the middle" is
+  genuine solar activity in the real historical data for this specific
+  event window, not a sampling defect.
+- `ig`/`rz` window (`ig_sample_range=1`/`rz_sample_range=1`) mechanically
+  can only ever include the 2 adjacent table rows -- exactly the 2
+  spikes observed, reproduced precisely from the real table values
+  (88.0/90.7 for ig, 106.9/108.5 for rz).
+
+**No bug in the sampling code** -- the sparseness was the deterministic,
+correct consequence of narrow `*_sample_range` windows applied to real
+data, independent of ensemble size (2000 vs 20000 samples would show the
+same number of discrete bars, since the window -- not the sample count --
+bounds how many distinct table rows are reachable).
+
+**But this exposed a real units mismatch worth getting right before
+setting new defaults.** User proposed default windows (ig12/rz12: 12;
+f107/ap: 30; hour: already-correct +/-3) based on stating "ig12 and
+rz12 are daily values" and "f107 and ap are 3 hour values." Checked the
+actual file-reading code before accepting this at face value:
+- `apf107.dat` (`get_apf107()`) parses one row per `yr`/`mn`/`dy` --
+  **daily-indexed**, not 3-hourly. `ap`'s *value* within a row is 8
+  genuinely 3-hourly sub-values, but the sample-range *window* itself
+  steps in whole days.
+- `ig_rz.dat` (`get_ig_rz()`) header literally reads `Start_end_month` --
+  **monthly-indexed**, not daily. Matches the indices' own physical
+  definition (12-month smoothed running means).
+
+Presented this correction back to the user (window=60 would have meant
++/-60 *days* for f107/ap given day-indexing, and ig/rz are month- not
+day-indexed) before implementing anything -- user confirmed: **use window
+12 for ig12/rz12 (+/-12 months) and window 30 for f107/ap (+/-30 days)**.
+
+**Implemented as the new default**, replacing the old `{}` (no spread)
+default entirely: `default_iri_spread_kwargs()` in `cycle_config.py`
+returns `{"hour_sample_range": 3, "f107_sample_range": 30,
+"ap_sample_range": 30, "ig_sample_range": 12, "rz_sample_range": 12}`,
+with a docstring recording the exact cadence evidence above so the
+reasoning doesn't have to be re-derived later. Only affects fresh IRI2020
+builds (`edp_samples_path` unset) -- precomputed-file-mode runs are
+unaffected, and no existing cached ensemble (`step15`/`step17`/`step19`/
+`step20`) needs rebuilding, since none of them relied on this default
+(all used an explicit `iri_spread_kwargs` or loaded a precomputed file).
+
+**Verified:** 3 new tests (`test_cycle_config.py`: default value is the
+real-window dict not `{}`, an explicit `{}` override still means no
+spread, two configs don't share the same mutable dict via
+`default_factory`). 367 total passed. Directly re-ran
+`sampling_parameters_for_cycle` with the new default against the real
+event date: 7 distinct `hour` values, 58 distinct `f107` values, 25
+distinct `ap` values (0-300, physically plausible up to a severe-storm
+level), 24 distinct `ig12`/`rz12` values each -- a dramatic, confirmed
+improvement over the old default's 2-6 distinct values per index.

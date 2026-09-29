@@ -50,6 +50,42 @@ def default_hyper_params_by_style() -> dict:
     }
 
 
+def default_iri_spread_kwargs() -> dict:
+    """Real-window defaults, confirmed with the user 2026-09-29 after
+    directly inspecting the underlying IRI2020 input files (previously
+    defaulted to `{}` -- no spread at all on any index, a real bug found
+    the same day: a fresh-build ensemble with this left unset is
+    2000 identical IRI2020 runs, see
+    `Assimilation_Cycle_Integration_Plan.md` Section 21/22).
+
+    Each `*_sample_range` is a window of *table rows*, not a fixed real
+    time span -- the two input files have different native cadences, so
+    the same integer means a different real span depending on which
+    index it's applied to:
+      - `apf107.dat` (`f107`/`ap`) is indexed one row per *calendar day*
+        (confirmed via its `yr`/`mn`/`dy` fields) -- `ap`'s value within
+        each row is itself 8 genuinely 3-hourly sub-values, but the
+        *window* steps in whole days. `f107_sample_range=30`/
+        `ap_sample_range=30` -> +/-30 real days.
+      - `ig_rz.dat` (`ig12`/`rz12`) is indexed one row per *calendar
+        month* (confirmed via its own `Start_end_month` header) --
+        `ig_sample_range=12`/`rz_sample_range=12` -> +/-12 real months.
+        These are 12-month *smoothed* indices by construction, so even a
+        wide window changes them slowly -- 12 is a real month-scale
+        window, not a narrow one, despite the smaller number.
+      - `hour` indexes local time-of-day directly in whole hours (no
+        separate file/cadence question) -- `hour_sample_range=3` ->
+        +/-3 real hours, exactly as stated.
+    """
+    return {
+        "hour_sample_range": 3,
+        "f107_sample_range": 30,
+        "ap_sample_range": 30,
+        "ig_sample_range": 12,
+        "rz_sample_range": 12,
+    }
+
+
 @dataclass
 class CycleConfig:
     # --- Time window and ROI (Section 4.1) ---
@@ -118,11 +154,19 @@ class CycleConfig:
 
     # --- Ensemble size / IRI spread (Section 4.3-4.4) ---
     n_ensemble: int = 2000
-    iri_spread_kwargs: dict = field(default_factory=dict)
+    iri_spread_kwargs: dict = field(default_factory=default_iri_spread_kwargs)
     """Forwarded to ``IRI_Sample_Inputs.randomSamples`` as
     ``hour_sample_range``/``f107_sample_range``/``ap_sample_range``/
-    ``ig_sample_range``/``rz_sample_range`` (all optional; omitted ones
-    default to no spread on that index -- see ``IRI_Sample_Inputs``)."""
+    ``ig_sample_range``/``rz_sample_range`` (all optional; a key left out
+    of an explicit override means no spread on that specific index, not a
+    fallback to the default below -- see ``IRI_Sample_Inputs``). Default
+    is ``default_iri_spread_kwargs()`` (+/-3 hours, +/-30 days for
+    `f107`/`ap`, +/-12 months for `ig12`/`rz12`) -- see that function's
+    docstring for why those numbers, and note they're table-row windows
+    at two different native cadences, not a single uniform unit. Only
+    matters for a *fresh* IRI2020 build (``edp_samples_path`` unset);
+    has no effect in precomputed-``edp_samples_path`` mode, since the
+    real ensemble there comes from the cached file, not a fresh draw."""
 
     # --- Batching and observation error (Section 4.2, 8.1, 8.2) ---
     batch_size: int = 200

@@ -71,3 +71,35 @@ class TestDiagonalBoostValidation:
     def test_nonpositive_horizontal_scale_rejected(self):
         with pytest.raises(ValueError, match="diagonal_boost_horizontal_scale_km"):
             _make_cfg(diagonal_boost_horizontal_scale_km=-5.0)
+
+
+class TestIriSpreadKwargsDefault:
+    """Confirmed with the user 2026-09-29 after directly inspecting the
+    underlying IRI2020 input files' real cadences -- previously defaulted
+    to `{}` (no spread at all), a real bug: a fresh-build ensemble with
+    that default is 2000 identical IRI2020 runs."""
+
+    def test_defaults_to_real_windows_not_empty(self):
+        cfg = _make_cfg()
+        assert cfg.iri_spread_kwargs == {
+            "hour_sample_range": 3,
+            "f107_sample_range": 30,
+            "ap_sample_range": 30,
+            "ig_sample_range": 12,
+            "rz_sample_range": 12,
+        }
+
+    def test_explicit_empty_override_still_means_no_spread(self):
+        """An explicit {} must still work as "no spread" (existing
+        precomputed-file-mode tests rely on this) -- the new default only
+        applies when the field is left unset entirely."""
+        cfg = _make_cfg(iri_spread_kwargs={})
+        assert cfg.iri_spread_kwargs == {}
+
+    def test_two_separately_constructed_configs_dont_share_the_dict(self):
+        """default_factory, not a bare mutable default -- mutating one
+        config's dict must not leak into another's."""
+        cfg1 = _make_cfg()
+        cfg2 = _make_cfg()
+        cfg1.iri_spread_kwargs["hour_sample_range"] = 999
+        assert cfg2.iri_spread_kwargs["hour_sample_range"] == 3

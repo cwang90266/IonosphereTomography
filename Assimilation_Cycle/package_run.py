@@ -107,19 +107,39 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     out = Path(cfg.output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # -- Steps 2-3: IRI sample inputs + input-distribution plot -----------
+    # -- Step 2: IRI sample inputs (.pkl artifact) -------------------------
+    # Saved regardless of edp_samples_path, so this artifact always exists
+    # even in precomputed-EDPSamples mode (where it otherwise wouldn't get
+    # built/saved as a side effect of anything below).
     cfg = cfg if cfg.iri_sample_inputs_output_path is not None else replace(
         cfg, iri_sample_inputs_output_path=out / f"{cfg.label}_iri_sample_inputs",
     )
-    sampling_parameters = iri_selection.sampling_parameters_for_cycle(cfg)
-    _savefig(output.plot_iri_input_distributions(sampling_parameters),
-             out / f"{cfg.label}_iri_input_distributions.png")
+    iri_selection.load_or_build_iri_sample_inputs(cfg)
 
-    # -- Step 4: EDPSamples + per-style parameterization + plots ----------
+    # -- Step 4 (moved ahead of step 3): EDPSamples ------------------------
+    # edp_samples.sampling_parameters below is step 3's input for the
+    # distribution plot -- moved here (rather than calling
+    # iri_selection.sampling_parameters_for_cycle a second, independent
+    # time, as this used to) so the plot always reflects the *actual*
+    # ensemble in use. That separate call was a real bug found 2026-09-29:
+    # in precomputed-edp_samples_path mode it silently redrew a fresh,
+    # unrelated (and, with iri_spread_kwargs left at its default {}, fully
+    # degenerate/zero-spread) sample never used for anything but the plot,
+    # completely disconnected from the real (non-degenerate) driving
+    # indices of the ensemble actually loaded and assimilated -- and even
+    # in the fresh-build case it was a *second*, differently-seeded random
+    # draw from the one that actually built the ensemble, not the literal
+    # values used. Reading the real values back off edp_samples itself
+    # fixes both.
     cfg = cfg if cfg.edp_samples_output_path is not None else replace(
         cfg, edp_samples_output_path=out / f"{cfg.label}_edp_samples.nc",
     )
     edp_samples = ensemble_init.load_or_build_edp_samples(cfg)
+
+    # -- Step 3: input-distribution plot, from the real ensemble's own
+    #    sampling_parameters (see note above) -----------------------------
+    _savefig(output.plot_iri_input_distributions(edp_samples.sampling_parameters),
+             out / f"{cfg.label}_iri_input_distributions.png")
 
     _savefig(edp_samples.plot_geolocation(), out / f"{cfg.label}_horizontal_grid.png")
 
