@@ -319,27 +319,35 @@ def write_IRI2020_namelist(DateTime: str,
             f.write(f'longitude({idx+1})  = {geolocation[idx,0]}\n')
 
         for idx in range(nSample):
-            if np.isnan(sampling_parameters["hour"][idx]):
+            # pd.isna, not np.isnan: quantileSamples/randomSamples represent
+            # "no spread requested for this index" as a column of literal
+            # Python `None` (not np.nan) whenever every draw for that index
+            # is unconstrained -- pandas only coerces such a column to
+            # float64/NaN if at least one row in it is numeric, so an
+            # index left with zero spread stays object-dtype `None`, and
+            # np.isnan(None) raises TypeError instead of the intended
+            # "use fill_value" fallback.
+            if pd.isna(sampling_parameters["hour"][idx]):
                 f.write(f'phy_inputs(1,{idx+1})  = {fill_value}\n')
             else:
                 f.write(f'phy_inputs(1,{idx+1})  = {sampling_parameters["hour"][idx]}\n')
                 
-            if np.isnan(sampling_parameters["f107"][idx]):
+            if pd.isna(sampling_parameters["f107"][idx]):
                 f.write(f'phy_inputs(2,{idx+1})  = {fill_value}\n')
             else:
                 f.write(f'phy_inputs(2,{idx+1})  = {sampling_parameters["f107"][idx]}\n')
                 
-            if np.isnan(sampling_parameters["ap"][idx]):
+            if pd.isna(sampling_parameters["ap"][idx]):
                 f.write(f'phy_inputs(3,{idx+1})  = {fill_value}\n')
             else:                    
                 f.write(f'phy_inputs(3,{idx+1})  = {sampling_parameters["ap"][idx]}\n')
                 
-            if np.isnan(sampling_parameters["ig12"][idx]):
+            if pd.isna(sampling_parameters["ig12"][idx]):
                 f.write(f'phy_inputs(4,{idx+1})  = {fill_value}\n')
             else:
                 f.write(f'phy_inputs(4,{idx+1})  = {sampling_parameters["ig12"][idx]}\n')
                 
-            if np.isnan(sampling_parameters["rz12"][idx]):
+            if pd.isna(sampling_parameters["rz12"][idx]):
                 f.write(f'phy_inputs(5,{idx+1})  = {fill_value}\n')
             else:
                 f.write(f'phy_inputs(5,{idx+1})  = {sampling_parameters["rz12"][idx]}\n')
@@ -1360,7 +1368,17 @@ class EDPSamples(xr.Dataset):
             attrs = sampling_parameters.attrs
             attrs["sample_param_attrs"]=list(sampling_parameters.attrs.keys())
             
-        sample_param_value=sampling_parameters.to_numpy()
+        # dtype=float64, not the bare .to_numpy(): IRI2020 driving-index
+        # columns are a real number or None (never a string) by
+        # quantileSamples/randomSamples's own convention, but a real
+        # apf107/ig_rz source can mix int-valued (e.g. ap) and float-valued
+        # columns, which pandas can only losslessly represent as a
+        # dtype=object 2-D array -- fine in memory, but xarray's netCDF
+        # writer (saveNetCDF) cannot infer a serializable dtype for an
+        # object array holding mixed native int/float instances and raises.
+        # float64 also turns any None (no spread requested for that index)
+        # into np.nan, matching write_IRI2020_namelist's own pd.isna check.
+        sample_param_value=sampling_parameters.to_numpy(dtype=np.float64)
         sample_Param_name=sampling_parameters.columns
         n_sample = sampling_parameters.shape[0]
         
@@ -1706,6 +1724,58 @@ class EDPSamples(xr.Dataset):
         """
         self.to_netcdf(path, **kwargs)
 
+    def select_map_projection(self):
+        """
+        Pick the map projection this dataset's grid should use for any
+        horizontal plot: north/south polar stereographic when
+        ``geo_type=="Polar"`` or the grid's *mean* latitude exceeds 60
+        degrees (either hemisphere) -- Plate Carree badly stretches
+        shape/area that close to a pole -- Plate Carree (recentred on the
+        grid's own circular-mean longitude) otherwise.
+
+        Single source of truth for this decision -- called by
+        :meth:`_horizontal_map_axes` (used by :meth:`plot_geolocation`/
+        :meth:`plot_horizontal_field`), and meant to also be called
+        directly by any *external* caller that needs to fix a projection
+        before an axes exists (e.g. a multi-panel figure built via
+        ``plt.subplots(..., subplot_kw={"projection": ...})``, where every
+        panel shares one projection set up front) -- calling this instead
+        of separately hardcoding/re-deriving the choice is what keeps such
+        callers from silently drifting out of sync with this method (a
+        real bug, caught 2026-09-28).
+
+        Returns
+        -------
+        proj : cartopy.crs.Projection
+        is_polar : bool
+        is_north_polar : bool or None
+            ``None`` when ``is_polar`` is ``False`` (not applicable).
+        center_lon : float
+            The Plate Carree recentring longitude; ``0.0`` when
+            ``is_polar`` is ``True`` (not applicable there).
+        """
+        _POLAR_AUTO_LATITUDE_DEG = 60.0
+
+        geo_type = self.attrs["geo_type"]
+        lon = self.geolocation[:, 0]
+        lat = self.geolocation[:, 1]
+
+        is_polar = geo_type == "Polar" or (
+            geo_type != "Global" and lat.size > 0 and abs(float(np.mean(lat))) > _POLAR_AUTO_LATITUDE_DEG
+        )
+        if is_polar:
+            is_north_polar = (self.attrs["minLat"] > 0) if geo_type == "Polar" else bool(np.mean(lat) > 0)
+            proj = ccrs.NorthPolarStereo() if is_north_polar else ccrs.SouthPolarStereo()
+            return proj, True, is_north_polar, 0.0
+
+        # Circular mean handles antimeridian wraparound correctly; a plain
+        # lon.mean() would not (e.g. [-179, 179] averages to 0, the wrong
+        # side of the world, instead of +/-180).
+        center_lon = float(np.degrees(np.arctan2(
+            np.mean(np.sin(np.radians(lon))), np.mean(np.cos(np.radians(lon))))))
+        proj = ccrs.PlateCarree(central_longitude=center_lon)
+        return proj, False, None, center_lon
+
     def _horizontal_map_axes(self, ax=None, figsize=(8, 6)):
         """
         Build (or reuse) a cartopy ``GeoAxes`` with a projection, land/ocean/
@@ -1714,32 +1784,46 @@ class EDPSamples(xr.Dataset):
         :meth:`plot_horizontal_field` so both get the same map treatment.
 
         ``"Polar"`` gets a north/south polar stereographic projection
-        (matching its pole); everything else gets Plate Carree, framed
-        tightly around the actual grid extent (with a minimum pad so a
-        single-vertex ``"Point"`` dataset doesn't collapse to a zero-size
-        view) except ``"Global"``, which shows the whole world.
+        (matching its pole). Any *other* geo_type whose grid's *mean*
+        latitude sits beyond ``_POLAR_AUTO_LATITUDE_DEG`` (default 60
+        degrees, either hemisphere) also automatically switches to polar
+        stereographic -- Plate Carree badly stretches shape/area that
+        close to a pole (longitude lines that actually converge get drawn
+        as parallel), which is misleading for a region like a
+        high-latitude ``"Regional"`` grid even though it was never
+        explicitly built as ``"Polar"``. Mean rather than every point
+        exceeding the threshold, since a real high-latitude regional cap
+        (e.g. centred at 70N with an 18-degree radius) can dip its
+        southern edge well below the threshold while still being, on the
+        whole, a polar-region grid that Plate Carree would badly distort.
+        Everything else gets Plate Carree, framed tightly around the
+        actual grid extent (with a minimum pad so a single-vertex
+        ``"Point"`` dataset doesn't collapse to a zero-size view) except
+        ``"Global"``, which shows the whole world (never auto-switched,
+        by definition not confined to one pole).
 
         The Plate Carree case is recentred on the grid's own circular-mean
         longitude (via ``central_longitude``) rather than fixed at 0, so a
         region straddling the antimeridian (e.g. ``"Regional"`` centred near
         lon=-178) is framed correctly instead of naive min/max longitude
         bounds spuriously spanning nearly the whole globe.
+
+        The actual projection/polar decision lives in
+        :meth:`select_map_projection` -- called from here, but also
+        exposed for any caller that needs to know the projection *before*
+        an axes exists (e.g. building a multi-panel figure via
+        ``plt.subplots(..., subplot_kw={"projection": ...})``, where every
+        panel is fixed to one projection up front) -- a single source of
+        truth so such callers can't silently drift out of sync with this
+        method's own choice (a real bug, caught 2026-09-28: an
+        ``Assimilation_Cycle`` plotting function had its own separately
+        hardcoded ``ccrs.PlateCarree()`` for exactly this reason, so its
+        multi-panel figures never picked up the auto-polar switch below).
         """
+        proj, use_polar_projection, is_north_polar, center_lon = self.select_map_projection()
         geo_type = self.attrs["geo_type"]
         lon = self.geolocation[:, 0]
         lat = self.geolocation[:, 1]
-
-        is_north_polar = geo_type == "Polar" and self.attrs["minLat"] > 0
-        if geo_type == "Polar":
-            proj = ccrs.NorthPolarStereo() if is_north_polar else ccrs.SouthPolarStereo()
-            center_lon = 0.0
-        else:
-            # Circular mean handles antimeridian wraparound correctly;
-            # a plain lon.mean() would not (e.g. [-179, 179] averages to 0,
-            # the wrong side of the world, instead of +/-180).
-            center_lon = float(np.degrees(np.arctan2(
-                np.mean(np.sin(np.radians(lon))), np.mean(np.cos(np.radians(lon))))))
-            proj = ccrs.PlateCarree(central_longitude=center_lon)
 
         if ax is None:
             fig = plt.figure(figsize=figsize)
@@ -1755,8 +1839,8 @@ class EDPSamples(xr.Dataset):
 
         if geo_type == "Global":
             ax.set_global()
-        elif geo_type == "Polar":
-            min_lat_abs = abs(self.attrs["minLat"])
+        elif use_polar_projection:
+            min_lat_abs = abs(self.attrs["minLat"]) if geo_type == "Polar" else float(np.abs(lat).min())
             pad = 5.0
             if is_north_polar:
                 ax.set_extent([-180, 180, min_lat_abs - pad, 90], ccrs.PlateCarree())
@@ -2078,27 +2162,30 @@ class EDPSamples(xr.Dataset):
         Parameters
         ----------
         podTc2_data : dict
-            Dictionary containing 'LEO' and 'GNSS' ECEF coordinate arrays.
+            Dictionary containing 'rec_ecef_km' (receiver) and 'gnss_ecef_km'
+            (transmitter) ECEF coordinate arrays -- the schema
+            ``observation_preparation.schema.ObservationEntry.to_operator_dict()``
+            produces.
         num_segments : int, default 1000
             Number of segments to divide each ray into for integration.
-            
+
         Returns
         -------
         H : np.ndarray
-            Observation matrix of shape (n_rays, n_state_vars), where 
+            Observation matrix of shape (n_rays, n_state_vars), where
             n_state_vars = n_height * n_geo.
         """
         from scipy.spatial import cKDTree
         import pyproj
-        
+
         altitude = self.altitude
         geolocation = self.geolocation
         n_height = len(altitude)
         n_geo = geolocation.shape[0]
         n_state_vars = n_height * n_geo
-        
-        LEO = podTc2_data['LEO']
-        GNSS = podTc2_data['GNSS']
+
+        LEO = podTc2_data['rec_ecef_km']
+        GNSS = podTc2_data['gnss_ecef_km']
         n_rays = LEO.shape[1]
         
         # Initialize the H matrix (n_observations x n_state_variables)

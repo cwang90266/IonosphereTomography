@@ -14,3 +14,7 @@ build/
 *.pkl
 *.zip
 Data/
+__pycache__/
+*.pyc
+~$*
+_stale_locks/

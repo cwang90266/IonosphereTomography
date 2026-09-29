@@ -687,7 +687,13 @@ class TestLineOfSightTEC:
     def _radial_ray(lat, lon, alt_top_km=1000.0):
         gnss = (M._geodetic_to_ecef(lat, lon, 0.0) / 1000.0).reshape(3, 1)
         leo = (M._geodetic_to_ecef(lat, lon, alt_top_km * 1000.0) / 1000.0).reshape(3, 1)
-        return {"LEO": leo, "GNSS": gnss}
+        # Both key spellings on purpose: forward_model_mesh_tec still reads
+        # the legacy 'LEO'/'GNSS' (its only callers -- TEC_model,
+        # Austin_Demo_Code -- are outside the observation_preparation
+        # rename's scope), while get_observation_operator now reads the
+        # renamed 'rec_ecef_km'/'gnss_ecef_km' (plan Section 8a). This test
+        # exercises both methods against the same geometry.
+        return {"LEO": leo, "GNSS": gnss, "rec_ecef_km": leo, "gnss_ecef_km": gnss}
 
     def _make_point(self):
         sp = _make_sampling_parameters(1)
@@ -857,6 +863,75 @@ class TestPlotGeolocationSmoke:
         ds = self._build(geo_type, **kwargs)
         ds.plot_geolocation()   # regression: Global previously had no case (silent no-op, not a crash either -- but this now actually draws)
         plt.close("all")
+
+
+class TestAutoPolarProjection:
+    """A non-"Polar" geo_type grid sitting entirely beyond +/-60 degrees
+    latitude should automatically get a polar stereographic projection
+    instead of Plate Carree -- Plate Carree badly stretches shape/area
+    that close to a pole (2026-09-28 user report/request, real Tromso
+    region at 69.6N looked "mercator-like" and distorted)."""
+
+    def _build(self, geo_type, **kwargs):
+        n_alt = 4
+        altitude = np.linspace(100.0, 400.0, n_alt)
+        sp = _make_sampling_parameters(2)
+        return EDPSamples(DateTime="2026-01-01", geo_type=geo_type,
+                           altitude=altitude, sampling_parameters=sp, **kwargs)
+
+    def test_high_latitude_regional_grid_uses_north_polar_stereo(self):
+        """This is the real project's actual production grid (Tromso,
+        Lat=69.6/radius=18deg) -- its southern edge dips to ~52N, well
+        below the 60-degree threshold, so this specifically checks the
+        mean-latitude criterion (not "every point above threshold")
+        correctly catches it -- an "all points" criterion would have
+        missed the exact grid that prompted this feature."""
+        import cartopy.crs as ccrs
+        ds = self._build("Regional", Lat=69.6, Lon=19.2, radius=18.0, dLat=2.5)
+        lat = ds.geolocation[:, 1]
+        assert lat.min() < 60.0 < np.mean(lat)   # sanity: mean is polar-ish, edge is not
+        ax = ds.plot_geolocation()
+        assert isinstance(ax.projection, ccrs.NorthPolarStereo)
+
+    def test_high_southern_latitude_regional_grid_uses_south_polar_stereo(self):
+        import cartopy.crs as ccrs
+        ds = self._build("Regional", Lat=-75.0, Lon=19.2, radius=10.0, dLat=2.5)
+        assert np.mean(ds.geolocation[:, 1]) < -60.0
+        ax = ds.plot_geolocation()
+        assert isinstance(ax.projection, ccrs.SouthPolarStereo)
+
+    def test_low_latitude_regional_grid_stays_plate_carree(self):
+        import cartopy.crs as ccrs
+        ds = self._build("Regional", Lat=32.0, Lon=-10.0, radius=10.0, dLat=2.5)
+        ax = ds.plot_geolocation()
+        assert isinstance(ax.projection, ccrs.PlateCarree)
+        assert not isinstance(ax.projection, (ccrs.NorthPolarStereo, ccrs.SouthPolarStereo))
+
+    def test_grid_straddling_the_threshold_stays_plate_carree(self):
+        """Not *entirely* beyond the threshold -- part of the grid is at
+        normal latitudes, so Plate Carree (which handles that fine) stays
+        the right choice; only an all-high-latitude grid should switch."""
+        import cartopy.crs as ccrs
+        ds = self._build("Rectangle", minLon=-10, maxLon=10, dLon=5, minLat=40, maxLat=75, dLat=5)
+        ax = ds.plot_geolocation()
+        assert isinstance(ax.projection, ccrs.PlateCarree)
+
+    def test_polar_geo_type_unaffected_by_the_new_threshold_logic(self):
+        """geo_type="Polar" already always used polar stereographic --
+        confirm the new auto-detect branch didn't change that path."""
+        import cartopy.crs as ccrs
+        ds = self._build("Polar", minLat=80.0, dLat=5.0)
+        ax = ds.plot_geolocation()
+        assert isinstance(ax.projection, ccrs.NorthPolarStereo)
+
+    def test_global_geo_type_never_auto_switches(self):
+        """Global spans the whole world by definition -- even though
+        this fixture's equal-spaced sampling includes high-latitude
+        points, it must never be treated as "entirely polar"."""
+        import cartopy.crs as ccrs
+        ds = self._build("Global", equal_spaced=True, dLat=45.0)
+        ax = ds.plot_geolocation()
+        assert isinstance(ax.projection, ccrs.PlateCarree)
 
 
 class TestPlotHorizontalField:

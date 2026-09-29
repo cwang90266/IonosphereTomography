@@ -60,25 +60,59 @@ class GeneralEnKFDriver:
         if self.config is None:
             self.config = AnalysisConfig.default_for_style(self.style)
 
+    def build_ensemble(self, edp_samples) -> tuple[EnsembleState, object]:
+        """
+        Wire a real ``EDPSamples`` draw into an ``EnsembleState`` (5.2),
+        for the configured ``style`` -- the part of a cycle that happens
+        once, independent of any particular batch of observations
+        (``Assimilation_Cycle_Integration_Plan.md`` Section 4.5: a
+        multi-batch cycle needs one ensemble built once, but a fresh
+        observation operator per batch).
+
+        Returns
+        -------
+        ensemble : EnsembleState
+        parameterization : Parameterization.EDP_Parameterization
+            Needed by ``build_observation_operator`` for each batch.
+        """
+        from Parameterization import Parameterized_EDPSamples   # shared infra, per 5.0
+
+        pes = Parameterized_EDPSamples(edp_samples, style=self.style, hyper_params=self.hyper_params)
+        ensemble = EnsembleState.from_parameterized_edp_samples(pes)
+        return ensemble, pes.Parameterization
+
+    def build_observation_operator(
+        self, edp_samples, parameterization, param_shape: tuple[int, ...],
+        podTc2_data: dict, num_segments: int = 1000,
+    ) -> GenericObservationOperator:
+        """
+        Build a ``GenericObservationOperator`` (5.4) for one batch of ray
+        geometry, against an already-built ensemble's ``parameterization``/
+        ``param_shape`` (from ``build_ensemble``).
+        """
+        return GenericObservationOperator.from_edp_samples(
+            edp_samples,
+            parameterization,
+            param_shape=param_shape,
+            podTc2_data=podTc2_data,
+            num_segments=num_segments,
+        )
+
     def build_ensemble_and_operator(
         self, edp_samples, podTc2_data: dict, num_segments: int = 1000
     ) -> tuple[EnsembleState, GenericObservationOperator]:
         """
         Wire a real ``EDPSamples`` draw + ray geometry into an
         ``EnsembleState`` (5.2) and a ``GenericObservationOperator`` (5.4),
-        for the configured ``style``.
+        for the configured ``style``, in one call. Convenience wrapper
+        around ``build_ensemble``/``build_observation_operator`` for the
+        common one-ensemble-one-batch case (e.g. a single-shot OSSE test);
+        a multi-batch cycle should call the two separately, building the
+        ensemble once and the operator per batch.
         """
-        from Parameterization import Parameterized_EDPSamples   # shared infra, per 5.0
-
-        pes = Parameterized_EDPSamples(edp_samples, style=self.style, hyper_params=self.hyper_params)
-        ensemble = EnsembleState.from_parameterized_edp_samples(pes)
-
-        obs_operator = GenericObservationOperator.from_edp_samples(
-            edp_samples,
-            pes.Parameterization,
-            param_shape=ensemble.param_shape,
-            podTc2_data=podTc2_data,
-            num_segments=num_segments,
+        ensemble, parameterization = self.build_ensemble(edp_samples)
+        obs_operator = self.build_observation_operator(
+            edp_samples, parameterization, ensemble.param_shape, podTc2_data, num_segments,
         )
         return ensemble, obs_operator
 

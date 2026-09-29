@@ -77,6 +77,19 @@ class AnalysisConfig:
     alpha_backtrack_factor: float = 0.5
     max_backtracks: int = 5
     convergence_tol: float = 1e-3
+    residual_rel_tol: float = 1e-2
+    """Convergence also declared when an accepted step's relative
+    residual improvement, ``(prev_residual - new_residual) / prev_residual``,
+    falls below this -- alongside (not instead of) ``convergence_tol``'s
+    relative-step-size test. Added after real-data investigation showed
+    the pure step-size test can stay unmet long after the residual has
+    genuinely flattened (e.g. two real ANCHOR batches whose last few
+    steps improved the residual by under 1% each, yet never crossed the
+    step-size threshold) -- a looser step-size tolerance doesn't fix this
+    since a large step can still produce a tiny residual change once
+    already close to a stationary point. Set to a very small/negative
+    value to effectively disable this check and keep only the step-size
+    criterion."""
     localization: np.ndarray | None = None
     inflation: float | np.ndarray | None = None
     perturbation: Perturbation | None = None
@@ -202,11 +215,29 @@ class AnalysisEngine:
                 K_i, _ = kalman_gain(S, Y_lin, R, localization=config.localization)
 
                 pseudo_residual = (y_obs - y_i_current) + W_hat @ (x_i_current - x_p)
+                # Undamped MAP/Gauss-Newton solution for this linearization
+                # (unchanged formula -- alpha=1 below reproduces exactly
+                # what the loop always did).
+                x_full_next = x_p + K_i @ pseudo_residual
 
+                # Backtracking damps the step FROM THE CURRENT ITERATE
+                # toward x_full_next, not from the fixed anchor x_p.
+                # Damping from x_p (the earlier form) made alpha<1 retreat
+                # toward the original anchor point instead of taking a
+                # smaller step near x_i_current -- once x_i_current had
+                # moved away from x_p over a few accepted iterations, every
+                # damped candidate landed back on the stale x_p-to-target
+                # line and was reliably worse than the current point, so
+                # backtracking could never find the small, genuinely
+                # useful steps living near x_i_current. Confirmed via a
+                # real, non-converging batch (RO+IGS, density_10ex): only
+                # alpha=1.0 ever improved the residual, and every smaller
+                # alpha converged toward the *first* iteration's residual
+                # (i.e. toward x_p), not the current one.
                 alpha = config.alpha0
                 accepted = False
                 for _ in range(config.max_backtracks + 1):
-                    x_candidate = x_p + alpha * (K_i @ pseudo_residual)
+                    x_candidate = x_i_current + alpha * (x_full_next - x_i_current)
                     y_candidate = obs_operator.forward_single(x_candidate)
                     if _residual_norm(y_obs, y_candidate) <= diag.residual_norm_history[-1]:
                         accepted = True
@@ -238,11 +269,16 @@ class AnalysisEngine:
 
                 step_size = np.linalg.norm(x_candidate - x_i_current)
                 scale = max(np.linalg.norm(x_i_current), 1e-12)
+                prev_residual = diag.residual_norm_history[-1]
                 x_i_current, y_i_current = x_candidate, y_candidate
                 diag.residual_norm_history.append(_residual_norm(y_obs, y_i_current))
                 diag.n_iterations = it + 1
 
-                if step_size / scale < config.convergence_tol:
+                residual_rel_improvement = (
+                    (prev_residual - diag.residual_norm_history[-1]) / prev_residual
+                    if prev_residual > 0 else 0.0
+                )
+                if step_size / scale < config.convergence_tol or residual_rel_improvement < config.residual_rel_tol:
                     diag.converged = True
                     break
 
