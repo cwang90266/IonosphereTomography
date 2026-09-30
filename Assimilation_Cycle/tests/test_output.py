@@ -441,6 +441,101 @@ class TestEdpProfileComparisonPlot:
         assert "2.00" in ax.get_title() or "lon" not in ax.get_title()  # picked ray idx 1 -> lon=2.0
 
 
+class TestTecEdpProfileComparisonPlot:
+    """Combined two-panel TEC+EDP plot (2026-09-29 user request #1 --
+    replaces saving plot_tec_profile_comparison/plot_edp_profile_comparison
+    as two separate files)."""
+
+    def test_produces_one_figure_with_two_populated_panels(self):
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh(altitude, placeholder_value=1e11)
+        n_height, n_geo, _ = edp.edps.shape
+        rng = np.random.default_rng(6)
+        forecast = rng.uniform(1e10, 1e12, size=(n_height, n_geo, 20))
+        analysis = forecast * 0.95
+
+        entry = _radial_ray_entry(edp, 3.0, 2.0, alt_top_km=500.0, label="ro_combined")
+        y_forecast = np.array([1.0])
+        y_analysis = np.array([1.1])
+        y_measured = np.array([1.2])
+
+        fig = output.plot_tec_edp_profile_comparison(
+            entry, y_forecast, y_analysis, y_measured, edp, forecast, analysis, lat=3.0, lon=2.0,
+        )
+        assert len(fig.axes) == 2
+        ax_tec, ax_edp = fig.axes
+        assert len(ax_tec.lines) == 3   # forecast/analysis/measured
+        assert len(ax_edp.lines) == 2   # forecast mean/analysis mean (no abel set here)
+        assert entry.label in fig.get_suptitle()
+
+    def test_edp_panel_gets_placeholder_when_no_window_ray(self):
+        """No ray in the default 250-350km window (all tangent altitudes
+        far outside it) -- the EDP panel should show a placeholder, not
+        raise or leave the whole figure unproduced."""
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh(altitude, placeholder_value=1e11)
+        n_height, n_geo, _ = edp.edps.shape
+        forecast = np.full((n_height, n_geo, 5), 1e11)
+        analysis = forecast.copy()
+
+        entry = _radial_ray_entry(edp, 3.0, 2.0, alt_top_km=500.0, tangent_alt_km=800.0, label="ro_nowin")
+        y_forecast = np.array([1.0])
+        y_analysis = np.array([1.1])
+        y_measured = np.array([1.2])
+
+        fig = output.plot_tec_edp_profile_comparison(
+            entry, y_forecast, y_analysis, y_measured, edp, forecast, analysis,
+        )
+        ax_tec, ax_edp = fig.axes
+        assert len(ax_tec.lines) == 3   # TEC panel unaffected by the EDP failure
+        assert len(ax_edp.lines) == 0
+        assert "no ray" in ax_edp.texts[0].get_text()
+
+
+class TestCrossStyleTecEdpComparisonPlot:
+    """All-styles-in-one-figure comparison (2026-09-29 user request #2)."""
+
+    def _entry(self):
+        return _radial_ray_entry(
+            _make_rectangle_with_mesh(np.linspace(100.0, 500.0, 5), placeholder_value=1e11),
+            3.0, 2.0, alt_top_km=500.0, label="ro_cross",
+        )
+
+    def test_overlays_every_style_with_stable_colors(self):
+        entry = self._entry()
+        rng = np.random.default_rng(7)
+        tec_by_style = {
+            "ANCHOR": (np.array([1.0]), np.array([1.1]), np.array([1.2])),
+            "PCA_3D_10ex": (np.array([1.3]), np.array([1.4]), np.array([1.2])),
+        }
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp_by_style = {
+            "ANCHOR": (rng.uniform(1e10, 1e12, size=(5, 10)), rng.uniform(1e10, 1e12, size=(5, 10))),
+            "PCA_3D_10ex": (rng.uniform(1e10, 1e12, size=(5, 10)), rng.uniform(1e10, 1e12, size=(5, 10))),
+        }
+
+        fig = output.plot_cross_style_tec_edp_comparison(entry, tec_by_style, edp_by_style, altitude)
+        ax_tec, ax_edp = fig.axes
+        assert len(ax_tec.lines) == 5   # 2 styles x (forecast+analysis) + 1 measured
+        assert len(ax_edp.lines) == 4   # 2 styles x (forecast+analysis)
+
+        # same style -> same color across both panels
+        anchor_tec_color = ax_tec.lines[0].get_color()
+        anchor_edp_color = ax_edp.lines[0].get_color()
+        assert anchor_tec_color == anchor_edp_color
+
+    def test_missing_style_shown_as_placeholder_not_dropped_silently(self):
+        entry = self._entry()
+        altitude = np.linspace(100.0, 500.0, 5)
+        tec_by_style = {"ANCHOR": (np.array([1.0]), np.array([1.1]), np.array([1.2]))}
+        edp_by_style = {"ANCHOR": None}   # no ray in window for this style
+
+        fig = output.plot_cross_style_tec_edp_comparison(entry, tec_by_style, edp_by_style, altitude)
+        ax_tec, ax_edp = fig.axes
+        assert len(ax_edp.lines) == 0
+        assert "ANCHOR" in ax_edp.get_title()
+
+
 class TestStyleComparisonSummaryPlot:
     def test_runs_with_multiple_styles(self):
         result_a = _toy_cycle_result(n_batches=2)

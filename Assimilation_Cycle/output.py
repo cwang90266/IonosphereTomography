@@ -351,6 +351,56 @@ def _interpolate_field_at_latlon(edp_samples, field: np.ndarray, lat: float, lon
     return w[0] * field[:, verts[0], ...] + w[1] * field[:, verts[1], ...] + w[2] * field[:, verts[2], ...]
 
 
+def resolve_edp_query_point_and_profiles(
+    edp_samples, entry, decoded_forecast: np.ndarray, decoded_analysis: np.ndarray,
+    *, lat: float | None = None, lon: float | None = None,
+    tangent_alt_window: tuple[float, float] = (250.0, 350.0),
+):
+    """Shared by :func:`plot_edp_profile_comparison` and the cross-style
+    comparison plots (``package_run.py`` needs the same lat/lon-derivation
+    and horizontal-interpolation logic to collect one style's profile at
+    a time, before any of them are plotted): resolves the query
+    ``(lat, lon)`` (derived from ``entry`` if not given -- see
+    :func:`plot_edp_profile_comparison`'s docstring for the derivation
+    rule) and returns ``(lat, lon, forecast_profile, analysis_profile)``,
+    where the profiles are ``(n_height, n_members)`` -- the raw
+    interpolated ensemble, not yet reduced to mean/std, so a caller
+    comparing multiple styles can combine them however it needs to.
+
+    Raises ``ValueError`` under the same conditions
+    ``plot_edp_profile_comparison`` always has (no ``tangent_alt_km``, or
+    no ray in ``tangent_alt_window``, when ``lat``/``lon`` aren't given
+    explicitly).
+    """
+    if lat is None or lon is None:
+        if entry.tangent_alt_km is None:
+            raise ValueError("resolve_edp_query_point_and_profiles: entry has no tangent_alt_km; pass lat/lon explicitly.")
+        window_mask = (
+            (np.asarray(entry.tangent_alt_km) >= tangent_alt_window[0])
+            & (np.asarray(entry.tangent_alt_km) <= tangent_alt_window[1])
+        )
+        if not window_mask.any():
+            raise ValueError(
+                f"resolve_edp_query_point_and_profiles: no rays with tangent_alt_km in "
+                f"{tangent_alt_window} for entry {entry.label!r}; pass lat/lon explicitly."
+            )
+        candidate_idx = np.where(window_mask)[0]
+        best = candidate_idx[np.argmax(np.asarray(entry.tec)[candidate_idx])]
+
+        from edp_samples import EDPSamples as _E, _ecef_to_geodetic
+        tangent_xyz, _, _ = _E.rayTangent(
+            np.asarray(entry.rec_ecef_km)[:, best:best + 1],
+            np.asarray(entry.gnss_ecef_km)[:, best:best + 1],
+            units="km",
+        )
+        lat_arr, lon_arr, _ = _ecef_to_geodetic(tangent_xyz.T * 1000.0)
+        lat, lon = float(lat_arr[0]), float(lon_arr[0])
+
+    forecast_profile = _interpolate_field_at_latlon(edp_samples, decoded_forecast, lat, lon)
+    analysis_profile = _interpolate_field_at_latlon(edp_samples, decoded_analysis, lat, lon)
+    return lat, lon, forecast_profile, analysis_profile
+
+
 def plot_edp_profile_comparison(
     edp_samples, entry, decoded_forecast: np.ndarray, decoded_analysis: np.ndarray,
     *, lat: float | None = None, lon: float | None = None,
@@ -368,32 +418,10 @@ def plot_edp_profile_comparison(
 
     ``decoded_forecast``/``decoded_analysis`` : ``(n_height, n_geo, n_members)``.
     """
-    if lat is None or lon is None:
-        if entry.tangent_alt_km is None:
-            raise ValueError("plot_edp_profile_comparison: entry has no tangent_alt_km; pass lat/lon explicitly.")
-        window_mask = (
-            (np.asarray(entry.tangent_alt_km) >= tangent_alt_window[0])
-            & (np.asarray(entry.tangent_alt_km) <= tangent_alt_window[1])
-        )
-        if not window_mask.any():
-            raise ValueError(
-                f"plot_edp_profile_comparison: no rays with tangent_alt_km in "
-                f"{tangent_alt_window} for entry {entry.label!r}; pass lat/lon explicitly."
-            )
-        candidate_idx = np.where(window_mask)[0]
-        best = candidate_idx[np.argmax(np.asarray(entry.tec)[candidate_idx])]
-
-        from edp_samples import EDPSamples as _E, _ecef_to_geodetic
-        tangent_xyz, _, _ = _E.rayTangent(
-            np.asarray(entry.rec_ecef_km)[:, best:best + 1],
-            np.asarray(entry.gnss_ecef_km)[:, best:best + 1],
-            units="km",
-        )
-        lat_arr, lon_arr, _ = _ecef_to_geodetic(tangent_xyz.T * 1000.0)
-        lat, lon = float(lat_arr[0]), float(lon_arr[0])
-
-    forecast_profile = _interpolate_field_at_latlon(edp_samples, decoded_forecast, lat, lon)
-    analysis_profile = _interpolate_field_at_latlon(edp_samples, decoded_analysis, lat, lon)
+    lat, lon, forecast_profile, analysis_profile = resolve_edp_query_point_and_profiles(
+        edp_samples, entry, decoded_forecast, decoded_analysis,
+        lat=lat, lon=lon, tangent_alt_window=tangent_alt_window,
+    )
     f_mean, f_std = forecast_profile.mean(axis=-1), forecast_profile.std(axis=-1)
     a_mean, a_std = analysis_profile.mean(axis=-1), analysis_profile.std(axis=-1)
 
@@ -414,6 +442,137 @@ def plot_edp_profile_comparison(
     ax.set_title(f"EDP profile at ({lat:.2f}, {lon:.2f})" + (f" -- {entry.label}" if entry.label else ""))
     ax.legend(loc="best", fontsize=8)
     return ax
+
+
+def plot_tec_edp_profile_comparison(
+    entry, y_forecast: np.ndarray, y_analysis: np.ndarray, y_measured: np.ndarray,
+    edp_samples, decoded_forecast: np.ndarray, decoded_analysis: np.ndarray,
+    *, lat: float | None = None, lon: float | None = None,
+    tangent_alt_window: tuple[float, float] = (250.0, 350.0),
+    figsize=(12, 6),
+):
+    """One two-panel figure per RO (2026-09-29 user request, replaces
+    separately saving :func:`plot_tec_profile_comparison` and
+    :func:`plot_edp_profile_comparison`): TEC comparison (left panel) and
+    EDP comparison (right panel) for the same occultation, same style.
+    Arguments are exactly the union of both functions' own (see their
+    docstrings). If no ray falls in ``tangent_alt_window`` (the EDP
+    panel's own possible failure mode), the EDP panel gets a placeholder
+    message instead of failing the whole figure -- the TEC panel is
+    always independently plottable."""
+    fig, (ax_tec, ax_edp) = plt.subplots(1, 2, figsize=figsize)
+
+    # Both plot_*_profile_comparison functions bake the entry label into
+    # their own per-axes title (sensible for standalone use); strip that
+    # redundant suffix here since the figure-level suptitle below already
+    # carries it -- otherwise the two titles visually collide with the
+    # suptitle (found visually reviewing the first version of this plot).
+    plot_tec_profile_comparison(entry, y_forecast, y_analysis, y_measured, ax=ax_tec)
+    ax_tec.set_title(ax_tec.get_title().split(":")[0])
+    try:
+        plot_edp_profile_comparison(
+            edp_samples, entry, decoded_forecast, decoded_analysis,
+            lat=lat, lon=lon, tangent_alt_window=tangent_alt_window, ax=ax_edp,
+        )
+        ax_edp.set_title(ax_edp.get_title().split(" -- ")[0])
+    except ValueError:
+        ax_edp.text(0.5, 0.5, f"no ray with tangent_alt_km in {tangent_alt_window}",
+                     ha="center", va="center", transform=ax_edp.transAxes)
+        ax_edp.set_title("EDP profile")
+
+    fig.suptitle(entry.label or entry.obs_type)
+    fig.tight_layout()
+    return fig
+
+
+_STYLE_COLORS = {}
+
+
+def _color_for_style(style: str) -> str:
+    """Stable color per style across a run (cross-style comparison plots
+    need the same style to always get the same color across every RO's
+    figure, not whatever matplotlib's cycler happens to be on)."""
+    if style not in _STYLE_COLORS:
+        _STYLE_COLORS[style] = f"C{len(_STYLE_COLORS) % 10}"
+    return _STYLE_COLORS[style]
+
+
+def plot_cross_style_tec_edp_comparison(
+    entry, tec_by_style: dict, edp_by_style: dict, altitude: np.ndarray, figsize=(12, 6),
+):
+    """One two-panel figure per RO (2026-09-29 user request), comparing
+    *every* style at once rather than one style's own forecast/analysis --
+    complements (does not replace) :func:`plot_tec_edp_profile_comparison`'s
+    per-style plots. Same style always gets the same color across every
+    RO's figure (:func:`_color_for_style`); forecast is solid, analysis is
+    dashed, so the encoding stays legible even with several styles
+    overlaid in one panel.
+
+    Parameters
+    ----------
+    entry : ObservationEntry
+        Used for ``tangent_alt_km`` (TEC panel y-axis) and ``abel``/
+        ``label`` (EDP panel overlay/title).
+    tec_by_style : dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]
+        style -> ``(y_forecast, y_analysis, y_measured)``, each already
+        sliced to this entry's rays. ``y_measured`` is plotted once (from
+        whichever style is listed first -- it's the same real data
+        regardless of style).
+    edp_by_style : dict[str, tuple[np.ndarray, np.ndarray] | None]
+        style -> ``(forecast_profile, analysis_profile)`` (each
+        ``(n_height, n_members)``, mean/std taken here) from
+        :func:`resolve_edp_query_point_and_profiles`, or ``None`` for a
+        style that had no ray in the EDP query window -- plotted as a
+        per-style placeholder note rather than dropped silently.
+    altitude : np.ndarray, shape (n_height,)
+    """
+    fig, (ax_tec, ax_edp) = plt.subplots(1, 2, figsize=figsize)
+
+    order = np.argsort(entry.tangent_alt_km) if entry.tangent_alt_km is not None else None
+    y_measured = None
+    for style, (y_forecast, y_analysis, y_meas) in tec_by_style.items():
+        color = _color_for_style(style)
+        if y_measured is None:
+            y_measured = y_meas
+        alt = np.asarray(entry.tangent_alt_km)[order] if order is not None else np.arange(len(y_forecast))
+        ax_tec.plot(np.asarray(y_forecast)[order] if order is not None else y_forecast, alt,
+                    color=color, linestyle="-", marker="o", markersize=2, label=f"{style} forecast")
+        ax_tec.plot(np.asarray(y_analysis)[order] if order is not None else y_analysis, alt,
+                    color=color, linestyle="--", marker="o", markersize=2, label=f"{style} analysis")
+    if y_measured is not None:
+        alt = np.asarray(entry.tangent_alt_km)[order] if order is not None else np.arange(len(y_measured))
+        ax_tec.plot(np.asarray(y_measured)[order] if order is not None else y_measured, alt,
+                    color="k", linestyle="-", marker="o", markersize=3, label="measured", zorder=5)
+    ax_tec.set_xlabel("TEC (TECU)")
+    ax_tec.set_ylabel("Tangent altitude (km)")
+    ax_tec.set_title("TEC profile (all styles)")
+    ax_tec.legend(loc="best", fontsize=7)
+
+    missing_styles = []
+    for style, profiles in edp_by_style.items():
+        color = _color_for_style(style)
+        if profiles is None:
+            missing_styles.append(style)
+            continue
+        forecast_profile, analysis_profile = profiles
+        f_mean = forecast_profile.mean(axis=-1)
+        a_mean = analysis_profile.mean(axis=-1)
+        ax_edp.plot(f_mean, altitude, color=color, linestyle="-", label=f"{style} forecast")
+        ax_edp.plot(a_mean, altitude, color=color, linestyle="--", label=f"{style} analysis")
+    if entry.abel and "Ne" in entry.abel and "alt_km" in entry.abel:
+        ax_edp.plot(entry.abel["Ne"], entry.abel["alt_km"], color="k", linestyle=":", label="Abel-retrieved")
+    ax_edp.set_xlabel("Electron density (m$^{-3}$)")
+    ax_edp.set_ylabel("Altitude (km)")
+    title = "EDP profile (all styles)"
+    if missing_styles:
+        title += f"\n(no window ray: {', '.join(missing_styles)})"
+    ax_edp.set_title(title)
+    if any(p is not None for p in edp_by_style.values()):
+        ax_edp.legend(loc="best", fontsize=7)
+
+    fig.suptitle(entry.label or entry.obs_type)
+    fig.tight_layout()
+    return fig
 
 
 def plot_style_comparison_summary(results_by_style: dict, fig=None, figsize=(11, 8)):

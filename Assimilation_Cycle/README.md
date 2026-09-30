@@ -252,6 +252,9 @@ off) but neither has a validated case for turning on yet.
 | `diagonal_boost_vertical_scale_km` | 30.0 | Gaussian smoothing length (km) along altitude for the injected noise field |
 | `diagonal_boost_horizontal_scale_km` | 200.0 | Gaussian smoothing length (km, great-circle) over the horizontal point cloud for the injected noise field |
 | `diagonal_boost_rng_seed` | `None` | seeds the noise draw -- set and hold fixed for any comparison across boost settings, same standing lesson as `AnalysisConfig.rng` (§14) |
+| `diagonal_boost_taper_start_km` | 400.0 | altitude below which the boost applies at full `diagonal_boost_amplitude` |
+| `diagonal_boost_taper_end_km` | 700.0 | altitude at/above which the boost is held at `diagonal_boost_amplitude x diagonal_boost_taper_floor` (linear ramp between start/end) |
+| `diagonal_boost_taper_floor` | 0.1 | boost amplitude fraction retained above `diagonal_boost_taper_end_km` |
 
 User-proposed (2026-09-27), motivated by real occultations (e.g.
 `podTc2_...E34.00...`) showing large forecast *and* analysis residuals in
@@ -331,6 +334,29 @@ still looked fine, but at 1.2-2.0 that same split blew up catastrophically
 single split. Amplitude~0.5 gives essentially the same average
 improvement (~6.6 vs 0.8's ~7.0 mean held-out RMSE across splits, both
 down from baseline's ~17.1) while sitting further from where things break.
+
+**Altitude taper (2026-09-29), motivated by a real-data finding.** After
+`iri_spread_kwargs` was widened to physically-real driving-index windows
+(next section), the user noticed analysis EDPs in a fresh full-resolution
+run became visibly wavy at high altitude, without any corresponding
+improvement in TEC residual. Root cause: TEC is a line integral dominated
+by the F2-peak region (~250-350km, already this project's reference
+window for EDP-profile plots) -- a density perturbation well above that
+has very little effect on TEC, so the EnKF has almost no observational
+leverage to correct or constrain whatever the boost injects up there,
+while topside density is also more sensitive to the now-wider
+driving-index spread. `apply_diagonal_boost` now scales `amplitude` by an
+altitude-dependent taper: full strength at/below
+`diagonal_boost_taper_start_km`, linearly down to
+`diagonal_boost_taper_floor x amplitude` by `diagonal_boost_taper_end_km`,
+held at that floor above. Defaults (400km/700km/0.1) confirmed with the
+user. Pass `diagonal_boost_taper_floor=0.0` for no boosting at all above
+`diagonal_boost_taper_end_km`, or `diagonal_boost_taper_start_km` beyond
+the grid's own max altitude for effectively no taper (full amplitude
+everywhere, the old behavior). Not yet re-validated against real data
+(only unit-tested on synthetic fixtures so far) -- the next full
+end-to-end run should confirm the high-altitude waviness is actually
+reduced without hurting TEC residual.
 
 ### Batch size and assimilation order (nonlinear styles only)
 
@@ -450,8 +476,8 @@ foo_{style}_ensembles/ensemble_batch_NNNN.nc   # step 6, one per batch per style
 foo_{style}/rmse_reduction.png, rank_histogram.png, effective_rank.png   # step 6
 foo_{style}/igs_tec_scatter.png        # step 6, one per style -- 2-panel scatter, forecast/analysis TEC vs. measured TEC, IGS rays only, pooled across all batches
 foo_{style}_analysis_mean_density_{alt}km.png   # step 6, one per style, same 5 altitudes as the step-4 forecast plots -- the optimal (final analysis) EDP field's spatial distribution, directly comparable to the step-4 prior/forecast mean-density plots at the same altitude
-foo_{style}/tec_profiles/batchNNNN_{ro_label}.png   # step 7, one per RO per batch
-foo_{style}/edp_profiles/batchNNNN_{ro_label}.png   # step 8, one per RO per batch (skipped if no ray fell in the 250-350km window)
+foo_{style}/profiles/batchNNNN_{ro_label}.png   # steps 7-8, one per RO per batch per style -- two-panel figure, TEC comparison (left) + EDP comparison (right); EDP panel shows a placeholder message instead of the figure failing if no ray fell in the 250-350km window
+foo_cross_style_profiles/batchNNNN_{ro_label}.png   # one per RO per batch, all styles overlaid in each of the two panels (same color per style across every RO's figure, solid=forecast/dashed=analysis) -- for comparing styles directly, not per-style output
 foo_style_comparison.png               # step 9
 ```
 

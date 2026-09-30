@@ -2312,3 +2312,135 @@ event date: 7 distinct `hour` values, 58 distinct `f107` values, 25
 distinct `ap` values (0-300, physically plausible up to a severe-storm
 level), 24 distinct `ig12`/`rz12` values each -- a dramatic, confirmed
 improvement over the old default's 2-6 distinct values per index.
+
+## 23. Combined TEC/EDP profile plots, per-style and cross-style (2026-09-29)
+
+User requested two changes to the per-RO TEC/EDP artifacts: (1) combine
+the separately-saved TEC and EDP plots into one two-panel figure per RO
+per style, replacing the two files; (2) additionally generate a
+cross-style two-panel figure per RO, overlaying all three styles in each
+panel, for direct style-to-style comparison.
+
+**Implementation.** Refactored `plot_edp_profile_comparison`'s lat/lon-
+derivation + horizontal-interpolation logic out into a new public
+`resolve_edp_query_point_and_profiles` (returns the raw `(n_height,
+n_members)` profiles, not yet reduced to mean/std) -- needed so
+`package_run.py` can collect one style's profile at a time for the
+cross-style plot without duplicating that geometry logic a second time;
+`plot_edp_profile_comparison` itself now calls this helper internally,
+identical behavior/signature, confirmed by the full existing test suite
+passing unchanged.
+
+New `output.plot_tec_edp_profile_comparison(...)`: builds the TEC panel
+via the existing `plot_tec_profile_comparison` and the EDP panel via
+`plot_edp_profile_comparison` (each already accepted an `ax=` parameter,
+so this composes them rather than reimplementing either) -- catches the
+EDP panel's `ValueError` (no ray in the 250-350km window) and shows a
+placeholder message there instead of failing the whole figure, since the
+TEC panel is always independently plottable. Found and fixed a real
+cosmetic bug while visually reviewing the first version: both sub-
+functions bake the entry label into their own per-axes title (sensible
+standalone), which visually collided with the new figure-level
+`suptitle` carrying the same label a second time -- stripped the
+redundant suffix from each panel's title after calling the sub-function,
+confirmed clean via a second visual check.
+
+New `output.plot_cross_style_tec_edp_comparison(entry, tec_by_style,
+edp_by_style, altitude)`: same two-panel layout, but every style overlaid
+in each panel -- a stable color per style across every RO's figure
+(`_color_for_style`, a small module-level registry so the same style
+never gets a different color in a different figure), solid line for
+forecast, dashed for analysis, so the encoding stays legible with
+multiple styles in one panel. A style with no ray in the EDP window gets
+named in the panel's own subtitle rather than silently dropped.
+
+`package_run.py` wiring: `_on_batch` now calls
+`plot_tec_edp_profile_comparison` once per RO per style (saved under
+`{label}_{style}/profiles/`, replacing the old separate `tec_profiles/`/
+`edp_profiles/` folders), and additionally collects each style's TEC
+arrays + resolved EDP profiles into a `cross_style_data` dict keyed by
+`(batch_index, entry.label)` (not just entry label, so an entry
+appearing in more than one batch across a run still gets its own
+figure). After the per-style loop finishes, one
+`plot_cross_style_tec_edp_comparison` call per collected entry saves to
+the new `{label}_cross_style_profiles/` folder.
+
+**Verified:** 4 new tests (`test_output.py`) -- combined per-style plot
+produces 2 populated panels titled without duplication, EDP-window
+failure shows a placeholder without dropping the TEC panel; cross-style
+plot overlays every style with a color stable across both panels, a
+missing style is named rather than silently dropped. Full suite: 371
+passed (up from 367 -- 4 new, 0 broken; the refactored
+`resolve_edp_query_point_and_profiles`/`plot_edp_profile_comparison`
+pair kept every existing test passing unchanged). Real smoke run with
+all 3 default styles (not just one, to genuinely exercise the cross-
+style overlay) confirmed both new artifact types render correctly
+end-to-end -- visually reviewed both, including the title-collision fix.
+
+## 24. Altitude taper on diagonal-boost amplitude (2026-09-29)
+
+**Problem.** After §22 widened `iri_spread_kwargs` to real physical
+driving-index windows, the user reviewed a fresh full-resolution run
+(`step21_fresh_iri_single_batch_boosted/`, still using the old flat-
+amplitude boost from §17) and noticed the analysis EDP became visibly
+wavy at high altitude, without any corresponding improvement in TEC
+residual. Their hypothesis: the constant-fraction (0.5) diagonal boost
+(§17) is "overdone" at high altitude, and a taper on the boost amplitude
+by altitude might eliminate the unnecessary oscillation.
+
+**Diagnosis.** TEC is a line integral dominated by the F2-peak region
+(~250-350km, already this project's reference window for EDP-profile
+plots) -- a density perturbation well above that has very little effect
+on TEC, so the EnKF has almost no observational leverage to correct or
+constrain whatever the boost injects up there. Topside density is also
+more sensitive to the now-wider driving-index spread (§22), plausibly
+making the injected spread itself larger at high altitude. Both point at
+the same fix: scale the boost amplitude down with altitude rather than
+applying it uniformly everywhere.
+
+**Design choice, confirmed with the user:** taper above the F2 peak
+(not, e.g., a taper centered on the peak, or one keyed to a per-column
+computed peak altitude) -- full boost amplitude at/below
+`taper_start_km`, linearly down to `taper_floor x amplitude` by
+`taper_end_km`, held at that floor above (not zero, since some spread
+above the peak is still physically plausible and the floor keeps the
+mechanism smooth rather than a hard cutoff). Defaults confirmed:
+`taper_start_km=400.0`, `taper_end_km=700.0`, `taper_floor=0.1`.
+
+**Implementation** (`diagonal_boost.py`): new `_altitude_taper(altitude,
+start_km, end_km, floor)` helper, returning a per-height multiplier
+(`1.0` at/below `start_km`, `floor` at/above `end_km`, linear ramp
+between); `apply_diagonal_boost` gains `taper_start_km`/`taper_end_km`/
+`taper_floor` parameters (defaults as above) and multiplies `amplitude`
+by this per-height array before scaling the smoothed noise field --
+`effective_amplitude = amplitude * taper`, broadcast over the height
+axis only, applied identically in linear and log-space modes. Three new
+`CycleConfig` fields (`diagonal_boost_taper_start_km`/`_end_km`/`_floor`,
+same defaults) with `__post_init__` validation (`end_km > start_km`,
+`floor` in `[0, 1]`), wired through `ensemble_init.py`'s
+`apply_diagonal_boost` call. Setting `taper_start_km` far beyond the
+grid's max altitude (e.g. together with a correspondingly large
+`taper_end_km`, since `_altitude_taper` itself requires `end_km >
+start_km`) reproduces the old flat-amplitude behavior exactly.
+
+**Verified:** hardened two pre-existing exact-formula tests
+(`test_increases_per_point_variance_by_expected_amount`,
+`test_increases_log_space_variance_by_expected_amount`) to explicitly
+disable tapering, after noticing they passed even with the new default
+taper active purely by coincidence (generous `rtol=0.15` tolerance +
+modest test amplitude) -- not genuine verification of the core
+mechanism in isolation from the new one. Added a dedicated
+`TestAltitudeTaper` class (6 tests: below-start full amplitude,
+at/above-end floor amplitude, monotonic ramp through the transition,
+floor=0 means no boost above `taper_end_km`, the confirmed 400/700/0.1
+default matches by direct computation, `end_km <= start_km` rejected)
+plus two new `CycleConfig` validation tests
+(`test_taper_end_not_after_start_rejected`,
+`test_taper_floor_out_of_range_rejected`) and an extended defaults check.
+Full suite: 379 passed (up from 371). Not yet re-verified against real
+data -- the user's original observation was from a real run using the
+old flat-amplitude boost; the taper itself has only been unit-tested on
+synthetic fixtures so far. A follow-up real run (ideally reusing
+`step21`'s setup) is needed to confirm the high-altitude EDP waviness is
+actually reduced without hurting TEC residual, before treating this as
+fully validated.

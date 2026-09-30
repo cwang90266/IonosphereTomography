@@ -60,6 +60,9 @@ def load_or_build_edp_samples(cfg: CycleConfig):
             horizontal_scale_km=cfg.diagonal_boost_horizontal_scale_km,
             rng=rng,
             log_space=cfg.diagonal_boost_log_space,
+            taper_start_km=cfg.diagonal_boost_taper_start_km,
+            taper_end_km=cfg.diagonal_boost_taper_end_km,
+            taper_floor=cfg.diagonal_boost_taper_floor,
         )
 
     if cfg.edp_samples_output_path is not None:

@@ -285,6 +285,23 @@ class CycleConfig:
     production run, but any *comparison* across boost settings needs this
     set and held fixed, the same standing lesson as
     ``AnalysisConfig.rng`` elsewhere in this project."""
+    diagonal_boost_taper_start_km: float = 400.0
+    diagonal_boost_taper_end_km: float = 700.0
+    diagonal_boost_taper_floor: float = 0.1
+    """Altitude taper on `diagonal_boost_amplitude` (confirmed with the
+    user 2026-09-29, after a real-data finding: `diagonal_boost_amplitude`
+    is a flat fraction of each point's own std, but TEC is a line
+    integral dominated by the F2-peak region (~250-350km) -- a
+    perturbation well above that has almost no effect on TEC, so the
+    EnKF has little power to constrain whatever the boost injects there.
+    With `iri_spread_kwargs` widened (Section 22), this showed up as
+    visibly wavy analysis EDPs at high altitude with no corresponding
+    TEC-residual improvement. Full amplitude at/below
+    `diagonal_boost_taper_start_km`, linearly down to
+    `diagonal_boost_amplitude * diagonal_boost_taper_floor` by
+    `diagonal_boost_taper_end_km`, held at that floor above -- see
+    `diagonal_boost.py`'s module docstring for the full reasoning. Only
+    matters when `diagonal_boost_amplitude` is set."""
 
     # --- Output (Section 4.7/4.14) ---
     output_dir: str | Path | None = None
@@ -305,6 +322,10 @@ class CycleConfig:
             raise ValueError("diagonal_boost_vertical_scale_km must be > 0")
         if self.diagonal_boost_horizontal_scale_km <= 0:
             raise ValueError("diagonal_boost_horizontal_scale_km must be > 0")
+        if self.diagonal_boost_taper_end_km <= self.diagonal_boost_taper_start_km:
+            raise ValueError("diagonal_boost_taper_end_km must be > diagonal_boost_taper_start_km")
+        if not 0.0 <= self.diagonal_boost_taper_floor <= 1.0:
+            raise ValueError("diagonal_boost_taper_floor must be in [0, 1]")
 
     @property
     def resolved_grid_radius_deg(self) -> float:

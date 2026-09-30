@@ -189,6 +189,14 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     # -- Steps 6-8: per-style assimilation, RMSE/rank plots, per-RO -------
     #    TEC/EDP comparison plots (via the on_batch callback -- decodes
     #    and plots one batch's forecast/analysis density at a time). -----
+    # cross_style_data collects, per (batch_index, entry.label), enough to
+    # build a same-RO comparison across every style once the per-style
+    # loop below finishes -- keyed by batch_index too (not just entry
+    # label) since an entry could in principle appear in different
+    # batches across runs, and each occurrence should get its own
+    # cross-style figure rather than conflating them.
+    cross_style_data: dict[tuple[int, str], dict[str, Any]] = {}
+
     results_by_style: dict[str, tuple[CycleResult, int, float]] = {}
     for style, pes in parameterizations.items():
         ensemble_prior = EnsembleState.from_parameterized_edp_samples(pes)
@@ -200,27 +208,34 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         style_dir = out / f"{cfg.label}_{style}"
 
         def _on_batch(batch, obs_operator, ensemble_forecast, ensemble_analysis, outcome,
-                      _style_dir=style_dir):
+                      _style_dir=style_dir, _style=style):
             ro_here = [(e, s) for e, s in batch.entry_ray_ranges if e.obs_type == "RO"]
             if not ro_here:
                 return
             decoded_forecast = obs_operator.decode(ensemble_forecast.to_param_shape())
             decoded_analysis = obs_operator.decode(ensemble_analysis.to_param_shape())
             for entry, ray_slice in ro_here:
+                y_forecast = outcome.y_forecast[ray_slice]
+                y_analysis = outcome.y_analysis[ray_slice]
+                y_measured = outcome.y_obs_used[ray_slice]
                 _savefig(
-                    output.plot_tec_profile_comparison(
-                        entry, outcome.y_forecast[ray_slice], outcome.y_analysis[ray_slice],
-                        outcome.y_obs_used[ray_slice],
+                    output.plot_tec_edp_profile_comparison(
+                        entry, y_forecast, y_analysis, y_measured,
+                        edp_samples, decoded_forecast, decoded_analysis,
                     ),
-                    _style_dir / "tec_profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png",
+                    _style_dir / "profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png",
                 )
+
+                key = (batch.batch_index, entry.label)
+                slot = cross_style_data.setdefault(key, {"entry": entry, "tec": {}, "edp": {}})
+                slot["tec"][_style] = (y_forecast, y_analysis, y_measured)
                 try:
-                    edp_ax = output.plot_edp_profile_comparison(
+                    _, _, forecast_profile, analysis_profile = output.resolve_edp_query_point_and_profiles(
                         edp_samples, entry, decoded_forecast, decoded_analysis,
                     )
+                    slot["edp"][_style] = (forecast_profile, analysis_profile)
                 except ValueError:
-                    continue  # no ray in the default 250-350km window for this entry
-                _savefig(edp_ax, _style_dir / "edp_profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png")
+                    slot["edp"][_style] = None   # no ray in the default 250-350km window for this entry/style
 
         t0 = time.time()
         result = run_cycle(style_cfg, edp_samples, pes.Parameterization, batches, ensemble_prior,
@@ -256,6 +271,18 @@ def run_package(cfg: CycleConfig) -> PackageResult:
             )
 
         results_by_style[style] = (result, ensemble_prior.n_state, wall_time_s)
+
+    # -- Cross-style per-RO TEC/EDP comparison (2026-09-29 user request) --
+    # One two-panel figure per RO, all styles overlaid in each panel --
+    # complements (not part of) the per-style profiles/ saved above.
+    altitude = np.asarray(edp_samples.altitude)
+    for (batch_index, entry_label), slot in cross_style_data.items():
+        _savefig(
+            output.plot_cross_style_tec_edp_comparison(
+                slot["entry"], slot["tec"], slot["edp"], altitude,
+            ),
+            out / f"{cfg.label}_cross_style_profiles" / f"batch{batch_index:04d}_{entry_label}.png",
+        )
 
     # -- Step 9: cross-style comparison ------------------------------------
     _savefig(output.plot_style_comparison_summary(results_by_style),

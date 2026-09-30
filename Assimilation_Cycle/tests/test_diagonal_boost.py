@@ -84,9 +84,13 @@ class TestStatistics:
         np.testing.assert_allclose(mean_after, mean_before, rtol=1e-2)
 
     def test_increases_per_point_variance_by_expected_amount(self):
+        # Explicit taper_start_km disables the altitude taper (default
+        # on since 2026-09-29) -- this test is about the core
+        # amplitude-scaling mechanism, verified taper-free; TestAltitudeTaper
+        # below verifies the taper itself precisely.
         edp = _make_synthetic_edp_samples(n_members=3000)
         amplitude = 0.4
-        boosted = apply_diagonal_boost(edp, amplitude, rng=np.random.default_rng(2))
+        boosted = apply_diagonal_boost(edp, amplitude, rng=np.random.default_rng(2), taper_start_km=1e6, taper_end_km=2e6)
         std_before = edp.edps.std(axis=2)
         std_after = boosted.edps.std(axis=2)
         expected = np.sqrt(std_before ** 2 + (amplitude * std_before) ** 2)
@@ -136,6 +140,88 @@ class TestDecorrelation:
         corr_short = np.corrcoef(boosted_short.edps[h, 0, :], boosted_short.edps[h, 1, :])[0, 1]
         corr_long = np.corrcoef(boosted_long.edps[h, 0, :], boosted_long.edps[h, 1, :])[0, 1]
         assert corr_long > corr_short
+
+
+class TestAltitudeTaper:
+    """Added 2026-09-29: user noticed analysis EDPs got visibly wavy at
+    high altitude (with iri_spread_kwargs widened, Section 22) without a
+    corresponding TEC-residual improvement -- TEC has little sensitivity
+    to density that high, so the EnKF can't meaningfully constrain
+    whatever a flat-amplitude boost injects there. These tests verify the
+    altitude taper precisely, not just "runs without error" -- the
+    existing fixture's altitude grid is 100-600km (6 points at 100km
+    steps), so custom (not default) taper_start/end_km below are chosen
+    to land squarely within that range: below start (full amplitude), in
+    the linear transition, and at/above end (floor)."""
+
+    def test_below_taper_start_gets_full_amplitude(self):
+        edp = _make_synthetic_edp_samples(n_members=3000)
+        amplitude = 0.4
+        boosted = apply_diagonal_boost(
+            edp, amplitude, rng=np.random.default_rng(2),
+            taper_start_km=200.0, taper_end_km=400.0, taper_floor=0.1,
+        )
+        std_before = edp.edps.std(axis=2)
+        std_after = boosted.edps.std(axis=2)
+        expected_full = np.sqrt(std_before ** 2 + (amplitude * std_before) ** 2)
+        # altitude[0]=100km, altitude[1]=200km -- both at/below taper_start_km
+        np.testing.assert_allclose(std_after[:2], expected_full[:2], rtol=0.15)
+
+    def test_at_and_above_taper_end_gets_floor_amplitude(self):
+        edp = _make_synthetic_edp_samples(n_members=3000)
+        amplitude = 0.4
+        floor = 0.1
+        boosted = apply_diagonal_boost(
+            edp, amplitude, rng=np.random.default_rng(2),
+            taper_start_km=200.0, taper_end_km=400.0, taper_floor=floor,
+        )
+        std_before = edp.edps.std(axis=2)
+        std_after = boosted.edps.std(axis=2)
+        effective = amplitude * floor
+        expected_floor = np.sqrt(std_before ** 2 + (effective * std_before) ** 2)
+        # altitude[3]=400km (==end), [4]=500km, [5]=600km -- all at/above taper_end_km
+        np.testing.assert_allclose(std_after[3:], expected_floor[3:], rtol=0.2)
+
+    def test_amplitude_decreases_monotonically_through_the_transition(self):
+        """Injected variance (relative to the untapered baseline) should
+        be highest at the lowest altitude and lowest at the highest --
+        checked via the actual std increase, not by inspecting internals."""
+        edp = _make_synthetic_edp_samples(n_members=3000)
+        boosted = apply_diagonal_boost(
+            edp, amplitude=0.6, rng=np.random.default_rng(3),
+            taper_start_km=100.0, taper_end_km=600.0, taper_floor=0.05,
+        )
+        std_before = edp.edps.std(axis=2)
+        std_after = boosted.edps.std(axis=2)
+        added_variance = std_after.mean(axis=1) ** 2 - std_before.mean(axis=1) ** 2
+        assert np.all(np.diff(added_variance) <= 1e-6)   # non-increasing with altitude
+
+    def test_taper_floor_zero_means_no_boost_above_taper_end(self):
+        edp = _make_synthetic_edp_samples(n_members=3000)
+        boosted = apply_diagonal_boost(
+            edp, amplitude=0.6, rng=np.random.default_rng(3),
+            taper_start_km=200.0, taper_end_km=400.0, taper_floor=0.0,
+        )
+        std_before = edp.edps.std(axis=2)
+        std_after = boosted.edps.std(axis=2)
+        # altitude[3:] (400/500/600km) should be essentially unperturbed
+        np.testing.assert_allclose(std_after[3:], std_before[3:], rtol=0.05)
+
+    def test_default_taper_matches_confirmed_400_700_01(self):
+        edp = _make_synthetic_edp_samples(n_members=3000)
+        amplitude = 0.4
+        boosted_default = apply_diagonal_boost(edp, amplitude, rng=np.random.default_rng(2))
+        boosted_explicit = apply_diagonal_boost(
+            edp, amplitude, rng=np.random.default_rng(2),
+            taper_start_km=400.0, taper_end_km=700.0, taper_floor=0.1,
+        )
+        np.testing.assert_array_equal(boosted_default.edps, boosted_explicit.edps)
+
+    def test_end_km_must_exceed_start_km(self):
+        edp = _make_synthetic_edp_samples()
+        with pytest.raises(ValueError, match="taper"):
+            apply_diagonal_boost(edp, 0.3, rng=np.random.default_rng(1),
+                                  taper_start_km=500.0, taper_end_km=400.0)
 
 
 class TestPhysicalValidity:
@@ -198,9 +284,11 @@ class TestLogSpace:
         np.testing.assert_allclose(log_mean_after, log_mean_before, rtol=1e-2)
 
     def test_increases_log_space_variance_by_expected_amount(self):
+        # taper_start_km=1e6 disables the altitude taper -- see the note
+        # on the linear-space equivalent test above.
         edp = _make_synthetic_edp_samples(n_members=3000)
         amplitude = 0.4
-        boosted = apply_diagonal_boost(edp, amplitude, rng=np.random.default_rng(2), log_space=True)
+        boosted = apply_diagonal_boost(edp, amplitude, rng=np.random.default_rng(2), log_space=True, taper_start_km=1e6, taper_end_km=2e6)
         log_std_before = np.log10(edp.edps).std(axis=2)
         log_std_after = np.log10(boosted.edps).std(axis=2)
         expected = np.sqrt(log_std_before ** 2 + (amplitude * log_std_before) ** 2)

@@ -55,10 +55,23 @@ class TestDiagonalBoostValidation:
         assert cfg.diagonal_boost_log_space is False
         assert cfg.diagonal_boost_vertical_scale_km == 30.0
         assert cfg.diagonal_boost_horizontal_scale_km == 200.0
+        assert cfg.diagonal_boost_taper_start_km == 400.0
+        assert cfg.diagonal_boost_taper_end_km == 700.0
+        assert cfg.diagonal_boost_taper_floor == 0.1
 
     def test_negative_amplitude_rejected(self):
         with pytest.raises(ValueError, match="diagonal_boost_amplitude"):
             _make_cfg(diagonal_boost_amplitude=-0.1)
+
+    def test_taper_end_not_after_start_rejected(self):
+        with pytest.raises(ValueError, match="diagonal_boost_taper_end_km"):
+            _make_cfg(diagonal_boost_taper_start_km=700.0, diagonal_boost_taper_end_km=400.0)
+
+    def test_taper_floor_out_of_range_rejected(self):
+        with pytest.raises(ValueError, match="diagonal_boost_taper_floor"):
+            _make_cfg(diagonal_boost_taper_floor=1.5)
+        with pytest.raises(ValueError, match="diagonal_boost_taper_floor"):
+            _make_cfg(diagonal_boost_taper_floor=-0.1)
 
     def test_zero_amplitude_allowed_as_explicit_noop(self):
         cfg = _make_cfg(diagonal_boost_amplitude=0.0)
