@@ -924,6 +924,39 @@ class TestAutoPolarProjection:
         ax = ds.plot_geolocation()
         assert isinstance(ax.projection, ccrs.NorthPolarStereo)
 
+    def test_auto_switched_regional_grid_extent_is_tightly_bounded(self):
+        """Real bug (2026-09-30 user report): the polar branch framed
+        EVERY polar-projection grid (auto-switched or not) on the full
+        -180..180 longitude range, correct only for a true circumpolar
+        "Polar" cap (genPolarArea always spans all longitudes). A small
+        auto-switched "Regional" grid like Tromso isn't circumpolar, so
+        that framing left the actual modeling area occupying only a
+        small corner of the plot. The extent must now tightly bound the
+        grid's own points instead -- checked by comparing the axes'
+        extent (in its own native projected coordinates) against the
+        points' own projected bounding box, not against some fixed
+        hemisphere-sized threshold."""
+        import cartopy.crs as ccrs
+        ds = self._build("Regional", Lat=69.6, Lon=19.2, radius=18.0, dLat=2.5)
+        ax = ds.plot_geolocation()
+        lon, lat = ds.geolocation[:, 0], ds.geolocation[:, 1]
+        xy = ax.projection.transform_points(ccrs.PlateCarree(), lon, lat)[:, :2]
+        x, y = xy[:, 0], xy[:, 1]
+        x0, x1, y0, y1 = ax.get_extent(ax.projection)
+        assert x1 - x0 < 3 * (x.max() - x.min())
+        assert y1 - y0 < 3 * (y.max() - y.min())
+
+    def test_true_polar_cap_still_uses_full_longitude_framing(self):
+        """A genuinely circumpolar "Polar" cap spans all longitudes by
+        construction (genPolarArea) -- unlike the auto-switched case
+        above, framing it on minLat alone (no longitude bound) is
+        correct and must be unchanged by the auto-switch fix."""
+        import cartopy.crs as ccrs
+        ds = self._build("Polar", minLat=80.0, dLat=5.0)
+        ax = ds.plot_geolocation()
+        x0, x1, _, _ = ax.get_extent(ccrs.PlateCarree())
+        assert x1 - x0 > 300.0   # still the (near-)full longitude range
+
     def test_global_geo_type_never_auto_switches(self):
         """Global spans the whole world by definition -- even though
         this fixture's equal-spaced sampling includes high-latitude

@@ -1839,13 +1839,32 @@ class EDPSamples(xr.Dataset):
 
         if geo_type == "Global":
             ax.set_global()
-        elif use_polar_projection:
-            min_lat_abs = abs(self.attrs["minLat"]) if geo_type == "Polar" else float(np.abs(lat).min())
+        elif use_polar_projection and geo_type == "Polar":
+            # A true "Polar" cap (genPolarArea) always spans the full 360
+            # degrees of longitude around the pole by construction, so
+            # framing on minLat alone (no longitude bound needed) is
+            # correct here.
+            min_lat_abs = abs(self.attrs["minLat"])
             pad = 5.0
             if is_north_polar:
                 ax.set_extent([-180, 180, min_lat_abs - pad, 90], ccrs.PlateCarree())
             else:
                 ax.set_extent([-180, 180, -90, -min_lat_abs + pad], ccrs.PlateCarree())
+        elif use_polar_projection:
+            # Auto-switched (e.g. a high-latitude "Regional" grid, caught
+            # 2026-09-30 from a user report): unlike a true "Polar" cap,
+            # this grid is a small localized region, not circumpolar --
+            # framing it on the full longitude range above leaves the
+            # actual modeling area occupying only a small corner of the
+            # plot. Frame tightly around the points' own projected (x, y)
+            # bounding box instead, same tight-fit principle as the Plate
+            # Carree branch below (padded in projected meters, not
+            # degrees, since that's this branch's native unit).
+            xy = proj.transform_points(ccrs.PlateCarree(), lon, lat)[:, :2]
+            x, y = xy[:, 0], xy[:, 1]
+            pad_x = max(50_000.0, 0.1 * (x.max() - x.min()))
+            pad_y = max(50_000.0, 0.1 * (y.max() - y.min()))
+            ax.set_extent([x.min() - pad_x, x.max() + pad_x, y.min() - pad_y, y.max() + pad_y], proj)
         else:
             # Express longitudes relative to center_lon (wrapped to
             # [-180, 180)) before taking min/max, and set the extent in
