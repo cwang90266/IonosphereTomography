@@ -9,7 +9,7 @@ median profile figures are written for every interval that produces a valid
 median profile.
 
 example command:
-python batch_tromso_ne_median.py "/home/pin/Desktop/tomography_project/Data/ISR_Data/TRO/" --output-dir "/home/pin/Desktop/IonosphereTomography-pin_dev/ISR_PCA/figure/"
+python batch_tromso_ne_median.py "/home/pin/Desktop/tomography_project/Data/ISR_Data/TRO/" --interval-minutes 10 --uncertainty-interval-minutes 10 --output-dir "/home/pin/Desktop/IonosphereTomography-pin_dev/ISR_PCA/figure/10min/TRO/"
 """
 
 from __future__ import annotations
@@ -362,6 +362,7 @@ def plot_uncertainty_panel(
     edges: list[datetime],
     uncertainty_max: float,
     output: Path,
+    median_interval_minutes: int,
 ) -> None:
     local_edges = [edge.astimezone(TROMSO_TIMEZONE) for edge in edges]
     figure, axis = plt.subplots(figsize=(13, 7), constrained_layout=True)
@@ -385,7 +386,8 @@ def plot_uncertainty_panel(
     axis.set_xlabel("Local time (LT)")
     axis.set_ylabel("Geodetic altitude (km)")
     axis.set_title(
-        "Tromsø UHF ISR one-minute relative deviation from 4-minute median"
+        "Tromsø UHF ISR one-minute relative deviation from "
+        f"{median_interval_minutes}-minute median"
         + "\n"
         + f"LT: {local_edges[0]:%Y-%m-%d %H:%M:%S} to "
         + f"{local_edges[-1]:%Y-%m-%d %H:%M:%S}"
@@ -460,7 +462,8 @@ def plot_interval_profile(
     axis.set_ylabel("Geodetic altitude (km)")
     axis.set_title(
         "Tromsø UHF ISR: raw and median $N_e$ profile\n"
-        f"LT: {local_start:%Y-%m-%d %H:%M:%S} to {local_end:%H:%M:%S}"
+        f"LT: {local_start:%Y-%m-%d %H:%M:%S} to {local_end:%H:%M:%S}\n"
+        f"Raw profiles plotted: {raw_count}"
     )
     axis.grid(True, which="both", alpha=0.28)
     axis.legend(loc="best")
@@ -485,7 +488,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--date",
         help="UTC day as YYYY-MM-DD; default is the date of the first timestamp",
     )
-    parser.add_argument("--interval-minutes", type=int, default=4)
+    parser.add_argument(
+        "--interval-minutes",
+        type=int,
+        default=4,
+        help="Median interval for the median pcolor/profile plots (default: 4)",
+    )
+    parser.add_argument(
+        "--uncertainty-interval-minutes",
+        type=int,
+        default=10,
+        help="Median interval used only for the relative-deviation plot (default: 10)",
+    )
     parser.add_argument(
         "--spacing-table",
         type=parse_spacing_table,
@@ -497,8 +511,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-profiles-per-bin",
         type=int,
-        default=4,
-        help="Use at most this many profiles, chosen nearest the interval center",
+        default=None,
+        help=(
+            "Maximum profiles used per median interval, chosen nearest the "
+            "interval center; default is the interval length in minutes"
+        ),
     )
     parser.add_argument("--min-samples", type=int, default=6)
     parser.add_argument("--ne-floor", type=float, default=1e7)
@@ -518,6 +535,11 @@ def build_parser() -> argparse.ArgumentParser:
 def validate_args(args: argparse.Namespace) -> None:
     if args.interval_minutes <= 0 or 1440 % args.interval_minutes:
         raise ValueError("--interval-minutes must divide evenly into 1440")
+    if (
+        args.uncertainty_interval_minutes <= 0
+        or 1440 % args.uncertainty_interval_minutes
+    ):
+        raise ValueError("--uncertainty-interval-minutes must divide evenly into 1440")
     if args.adjacent_points < 0:
         raise ValueError("--adjacent-points cannot be negative")
     if args.min_profiles_per_bin < 1 or args.min_samples < 1:
@@ -567,7 +589,9 @@ def process_file(args: argparse.Namespace, netcdf_file: Path, output_dir: Path) 
             args.ne_ceiling,
         )
         if not np.any(np.isfinite(median_ne)):
-            raise ValueError("No valid 4-minute median profiles were produced")
+            raise ValueError(
+                f"No valid {args.interval_minutes}-minute median profiles were produced"
+            )
         raw_ne, _ = build_one_minute_raw_grid(
             timestamps,
             altitude,
@@ -578,15 +602,34 @@ def process_file(args: argparse.Namespace, netcdf_file: Path, output_dir: Path) 
             args.ne_floor,
             args.ne_ceiling,
         )
+        uncertainty_edges = time_edges(
+            day_start, day_end, float(args.uncertainty_interval_minutes)
+        )
+        uncertainty_median_ne, _, _ = process_median_bins(
+            timestamps,
+            altitude,
+            electron_density,
+            uncertainty_edges,
+            targets,
+            args.adjacent_points,
+            args.min_profiles_per_bin,
+            args.max_profiles_per_bin,
+            args.min_samples,
+            args.ne_floor,
+            args.ne_ceiling,
+        )
         uncertainty = calculate_uncertainty(
-            raw_ne, median_ne, args.interval_minutes
+            raw_ne, uncertainty_median_ne, args.uncertainty_interval_minutes
         )
 
         day_text = f"{day_start:%Y%m%d_000000}_1440min"
-        median_output = output_dir / f"tromso_ne_median_pcolor_{day_text}.png"
+        median_output = output_dir / (
+            f"tromso_ne_median_pcolor_{args.interval_minutes}min_{day_text}.png"
+        )
         raw_output = output_dir / f"tromso_ne_raw_profile_{day_text}.png"
-        uncertainty_output = (
-            output_dir / f"tromso_ne_uncertainty_{day_text}.png"
+        uncertainty_output = output_dir / (
+            "tromso_ne_uncertainty_"
+            f"{args.uncertainty_interval_minutes}min_{day_text}.png"
         )
         plot_density_panel(
             median_ne,
@@ -614,10 +657,12 @@ def process_file(args: argparse.Namespace, netcdf_file: Path, output_dir: Path) 
             minute_edges,
             args.uncertainty_max,
             uncertainty_output,
+            args.uncertainty_interval_minutes,
         )
 
         profile_directory = (
-            output_dir / f"TRO_medianprf_{day_start:%Y-%m-%d}"
+            output_dir
+            / f"TRO_medianprf_{day_start:%Y-%m-%d}_{args.interval_minutes}min"
         )
         profile_count = 0
         if not args.skip_profile_plots:
@@ -674,6 +719,8 @@ def process_file(args: argparse.Namespace, netcdf_file: Path, output_dir: Path) 
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.max_profiles_per_bin is None:
+        args.max_profiles_per_bin = args.interval_minutes
     validate_args(args)
 
     if args.input_path.is_file():
