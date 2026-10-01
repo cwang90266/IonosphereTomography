@@ -259,6 +259,17 @@ def run_package(cfg: CycleConfig) -> PackageResult:
             edp_samples, pes.Parameterization, ensemble_prior.param_shape, batches[0].podTc2_data,
         )
         analysis_mean_density = decode_op.decode(result.final_ensemble.to_param_shape()).mean(axis=2)
+
+        # Forecast (prior) mean density, decoded through this SAME style's
+        # decode_op -- not the raw IRI ensemble mean already shown in Step
+        # 4's mean_density_*.png. Using the same decode path on both sides
+        # of the difference below isolates what assimilation actually
+        # changed; comparing against the raw (un-encoded) mean would also
+        # pick up each style's own encode/decode reconstruction error as
+        # spurious "difference" (confirmed with the user 2026-10-01).
+        forecast_mean_density = decode_op.decode(ensemble_prior.to_param_shape()).mean(axis=2)
+        diff_density = analysis_mean_density - forecast_mean_density
+
         for target_alt in (100, 200, 300, 400, 500):
             alt_idx = int(np.argmin(np.abs(edp_samples.altitude - target_alt)))
             actual_alt = float(edp_samples.altitude[alt_idx])
@@ -268,6 +279,15 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                     scalar_label=f"analysis mean Ne (m$^{{-3}}$) [{actual_alt:.0f} km]",
                 ),
                 style_dir / f"{cfg.label}_{style}_analysis_mean_density_{int(actual_alt)}km.png",
+            )
+            abs_max = float(np.abs(diff_density[alt_idx, :]).max()) or 1.0
+            _savefig(
+                output.plot_horizontal(
+                    edp_samples, diff_density[alt_idx, :], target_alt=actual_alt,
+                    scalar_label=f"analysis - forecast mean Ne (m$^{{-3}}$) [{actual_alt:.0f} km]",
+                    cmap="RdBu_r", vmin=-abs_max, vmax=abs_max,
+                ),
+                style_dir / f"{cfg.label}_{style}_analysis_minus_forecast_density_{int(actual_alt)}km.png",
             )
 
         results_by_style[style] = (result, ensemble_prior.n_state, wall_time_s)

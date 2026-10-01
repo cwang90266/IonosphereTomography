@@ -1027,3 +1027,39 @@ class TestPlotHorizontalField:
         colorbar_axes = ax.figure.axes[-1]   # the horizontal colorbar is appended last
         assert colorbar_axes.get_xlabel() == "My Custom Label"
         plt.close("all")
+
+    def test_vmin_vmax_forwarded_for_mesh_tripcolor(self):
+        """Needed for a signed difference field (e.g. analysis - forecast
+        density) plotted with a diverging colormap -- without explicit
+        vmin/vmax, matplotlib auto-scales to the data's own min/max, which
+        generally isn't symmetric around zero and so doesn't map "no
+        change" to the colormap's center."""
+        import matplotlib.pyplot as plt
+        ds = self._build("Rectangle", minLon=-10, maxLon=10, dLon=5, minLat=0, maxLat=10, dLat=5)
+        values = np.linspace(-5.0, 5.0, ds.geolocation.shape[0])
+        ax = ds.plot_horizontal_field(scalar=values, vmin=-10.0, vmax=10.0, cmap="RdBu_r")
+        mappable = ax.collections[-1]   # the tripcolor PolyCollection, added last
+        assert mappable.get_clim() == (-10.0, 10.0)
+        plt.close("all")
+
+    def test_vmin_vmax_forwarded_for_scatter_fallback(self):
+        import matplotlib.pyplot as plt
+        ds = self._build("Point", Lon=0.0, Lat=0.0)   # no mesh -> scatter fallback
+        values = np.linspace(-5.0, 5.0, ds.geolocation.shape[0])
+        ax = ds.plot_horizontal_field(scalar=values, vmin=-3.0, vmax=3.0)
+        mappable = ax.collections[-1]
+        assert mappable.get_clim() == (-3.0, 3.0)
+        plt.close("all")
+
+    def test_vmin_vmax_default_to_auto_scaling(self):
+        """Omitting vmin/vmax must keep the existing auto-scaled
+        behavior -- a real regression risk since both now default to
+        ``None`` and are forwarded unconditionally."""
+        import matplotlib.pyplot as plt
+        ds = self._build("Rectangle", minLon=-10, maxLon=10, dLon=5, minLat=0, maxLat=10, dLat=5)
+        values = np.linspace(-5.0, 5.0, ds.geolocation.shape[0])
+        ax = ds.plot_horizontal_field(scalar=values)
+        mappable = ax.collections[-1]
+        clim = mappable.get_clim()
+        assert clim != (None, None)   # matplotlib resolved it to the data's own range
+        plt.close("all")

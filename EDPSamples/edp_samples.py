@@ -1899,7 +1899,8 @@ class EDPSamples(xr.Dataset):
         return ax
 
     def plot_horizontal_field(self, scalar='Ne', target_alt=None, sample_idx=0,
-                              ax=None, figsize=(8, 6), cmap='viridis', scalar_label=None):
+                              ax=None, figsize=(8, 6), cmap='viridis', scalar_label=None,
+                              vmin=None, vmax=None):
         """
         Plot a scalar field defined on the horizontal grid (one value per
         geolocation vertex) over the same land/ocean/coastline backdrop as
@@ -1922,6 +1923,13 @@ class EDPSamples(xr.Dataset):
         cmap : str, default 'viridis'
         scalar_label : str, optional
             Colorbar label; a sensible default is generated when omitted.
+        vmin, vmax : float, optional
+            Explicit color-scale limits (passed through to the underlying
+            ``tripcolor``/``scatter`` call) -- e.g. a symmetric
+            ``vmin=-M, vmax=M`` with a diverging ``cmap`` for a signed
+            difference field, so zero maps to the colormap's center
+            instead of an unconstrained auto-scaled range. Default
+            (``None``) is matplotlib's usual data-driven auto-scaling.
 
         Returns
         -------
@@ -1970,12 +1978,13 @@ class EDPSamples(xr.Dataset):
         if mesh is not None and len(mesh) > 0:
             plot_obj = ax.tripcolor(lon, lat, mesh, values, transform=ccrs.Geodetic(),
                                     cmap=cmap, shading='flat', edgecolors='face',
-                                    alpha=0.9, zorder=3)
+                                    alpha=0.9, zorder=3, vmin=vmin, vmax=vmax)
             ax.triplot(lon, lat, mesh, transform=ccrs.Geodetic(),
                       color='black', linewidth=0.2, alpha=0.3, zorder=4)
         else:
             plot_obj = ax.scatter(lon, lat, c=values, transform=ccrs.Geodetic(),
-                                  cmap=cmap, s=40, zorder=5, edgecolor='k', linewidth=0.3)
+                                  cmap=cmap, s=40, zorder=5, edgecolor='k', linewidth=0.3,
+                                  vmin=vmin, vmax=vmax)
 
         cbar = ax.figure.colorbar(plot_obj, ax=ax, orientation='horizontal', shrink=0.7, pad=0.08)
         cbar.set_label(scalar_label)
