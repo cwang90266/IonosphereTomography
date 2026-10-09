@@ -135,3 +135,60 @@ class TestRunCycleEndToEnd:
             assert np.isfinite(outcome.rmse_reduction.rmse_analysis)
             assert outcome.rank_histogram.sum() == 4
             assert outcome.effective_rank_analysis["rank"] >= 1
+
+
+@pytest.mark.skipif(not _has_iri2020, reason="no compiled IRI2020 driver in this environment")
+class TestAnalysisRngSeedWiring:
+    """``CycleConfig.analysis_rng_seed`` -> ``run_cycle`` ->
+    ``driver.config.rng`` (the stochastic perturbed-obs noise inside
+    ``assimilate_one_cycle``/``analyze()``): a real, previously-
+    undocumented gotcha confirmed twice in this project's own history
+    (Assimilation_Cycle_Integration_Plan.md Section 13/14) is that this is
+    a *different* generator from ``run_batch_loop``'s own ``rng`` (OSSE
+    noise/rank-histogram tie-breaking only) and defaults to a fresh,
+    unseeded one every call -- so any comparison across styles/seeds
+    needs it explicitly fixed, or results aren't actually comparable."""
+
+    def _shared_upstream(self):
+        """Build the (unseedable) IRI2020 ensemble + real ray geometry
+        exactly once, reused across both seeded runs below -- isolates
+        the thing actually being tested (``analysis_rng_seed``'s effect
+        on the EnKF's own stochastic noise) from
+        ``IRI_Sample_Inputs.randomSamples``'s own lack of seed control
+        (see the module-level ``TestRunCycleEndToEnd``'s comment)."""
+        cfg = _make_cfg()
+        ensemble, edp_samples, parameterization = ensemble_init.build(cfg)
+
+        from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
+        driver = GeneralEnKFDriver(style=cfg.style, hyper_params=cfg.hyper_params)
+
+        raw_batches = _vertical_ray_batches(edp_samples, n_batches=2, rays_per_batch=4)
+        x_true = ensemble.X[:, 0].copy()
+        from Ensemble_Kalman_Engine import EnsembleState
+        forecast_ensemble = EnsembleState(X=ensemble.X[:, 1:], param_shape=ensemble.param_shape)
+
+        batches = []
+        for i, (podTc2_data, n_rays) in enumerate(raw_batches):
+            obs_op = driver.build_observation_operator(
+                edp_samples, parameterization, ensemble.param_shape, podTc2_data,
+            )
+            y_obs = obs_op.forward_single(x_true)
+            batches.append(CycleBatch(
+                podTc2_data=podTc2_data, y_obs=y_obs, R=(cfg.obs_sigma ** 2) * np.eye(n_rays),
+                batch_index=i,
+            ))
+        return edp_samples, parameterization, batches, forecast_ensemble
+
+    def test_same_seed_reproduces_bit_identical_analysis(self):
+        edp_samples, parameterization, batches, forecast_ensemble = self._shared_upstream()
+        r1 = run_cycle(_make_cfg(analysis_rng_seed=42), edp_samples, parameterization, batches, forecast_ensemble)
+        r2 = run_cycle(_make_cfg(analysis_rng_seed=42), edp_samples, parameterization, batches, forecast_ensemble)
+        np.testing.assert_array_equal(r1.final_ensemble.X, r2.final_ensemble.X)
+        for o1, o2 in zip(r1.batch_outcomes, r2.batch_outcomes):
+            np.testing.assert_array_equal(o1.y_analysis, o2.y_analysis)
+
+    def test_different_seeds_give_different_analysis(self):
+        edp_samples, parameterization, batches, forecast_ensemble = self._shared_upstream()
+        r1 = run_cycle(_make_cfg(analysis_rng_seed=42), edp_samples, parameterization, batches, forecast_ensemble)
+        r2 = run_cycle(_make_cfg(analysis_rng_seed=43), edp_samples, parameterization, batches, forecast_ensemble)
+        assert not np.array_equal(r1.final_ensemble.X, r2.final_ensemble.X)

@@ -24,6 +24,7 @@ from .cycle_config import CycleConfig
 from .cycle_driver import CycleResult, run_cycle
 from . import ensemble_init
 from . import observation_stream
+from .isr_pca_basis import resolve_hyper_params_for_style
 
 
 def run_style_sweep(
@@ -67,7 +68,7 @@ def run_style_sweep(
 
     results: dict[str, CycleResult] = {}
     for style in styles:
-        hyper_params = hyper_params_by_style.get(style, cfg.hyper_params)
+        hyper_params = resolve_hyper_params_for_style(cfg, style, hyper_params_by_style.get(style, cfg.hyper_params))
         style_cfg = replace(cfg, style=style, hyper_params=hyper_params)
 
         pes = Parameterized_EDPSamples(edp_samples, style=style, hyper_params=hyper_params)

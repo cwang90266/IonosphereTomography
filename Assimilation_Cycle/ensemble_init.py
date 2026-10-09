@@ -22,6 +22,7 @@ from Ensemble_Kalman_Engine import EnsembleState
 from .cycle_config import CycleConfig
 from .diagonal_boost import apply_diagonal_boost
 from .iri_selection import sampling_parameters_for_cycle
+from .isr_pca_basis import resolve_hyper_params_for_style
 
 
 def load_or_build_edp_samples(cfg: CycleConfig):
@@ -88,7 +89,8 @@ def load_or_build_parameterized_edp_samples(cfg: CycleConfig, edp_samples=None):
     if edp_samples is None:
         edp_samples = load_or_build_edp_samples(cfg)
 
-    pes = Parameterized_EDPSamples(edp_samples, style=cfg.style, hyper_params=cfg.hyper_params)
+    hyper_params = resolve_hyper_params_for_style(cfg, cfg.style, cfg.hyper_params)
+    pes = Parameterized_EDPSamples(edp_samples, style=cfg.style, hyper_params=hyper_params)
 
     if cfg.parameterized_edp_samples_output_path is not None:
         Path(cfg.parameterized_edp_samples_output_path).parent.mkdir(parents=True, exist_ok=True)

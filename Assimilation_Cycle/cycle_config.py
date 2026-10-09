@@ -36,7 +36,16 @@ def default_altitude_grid() -> np.ndarray:
 
 
 def default_styles() -> list[str]:
-    return ["ANCHOR", "PCA_3D_10ex", "PCA_1D_10ex"]
+    """Confirmed with the user 2026-10-06 (ISR_Integration_Plan.md Section
+    4.1.3): adds 'PCA_1D_10ex_ISR' as a fourth default alongside the three
+    established styles, not a replacement for any of them. Running this
+    default set end to end requires ``CycleConfig.isr_pca_basis_path`` to
+    be set (or an explicit 'PCA' in ``hyper_params_by_style['PCA_1D_10ex_ISR']``)
+    -- 'PCA_1D_10ex_ISR' never fits a basis from the ensemble it's given
+    (see ``Parameterization.Parameterized_EDPSamples``), so a bare default
+    ``CycleConfig`` with no ISR basis configured will raise when this style
+    is reached, by design (fail loudly, not silently skip)."""
+    return ["ANCHOR", "PCA_3D_10ex", "PCA_1D_10ex", "PCA_1D_10ex_ISR"]
 
 
 def default_hyper_params_by_style() -> dict:
@@ -227,6 +236,22 @@ class CycleConfig:
     osse_mode: bool = False
     osse_rng_seed: int | None = None
 
+    analysis_rng_seed: int | None = None
+    """Seeds ``GeneralEnKFDriver``'s ``AnalysisConfig.rng`` (via
+    ``cycle_driver.run_cycle``) -- the generator actually used for the
+    stochastic perturbed-obs noise inside ``assimilate_one_cycle``/
+    ``analyze()``. ``None`` (default): unchanged behavior, a fresh
+    unseeded generator every call. **A real, previously-undocumented
+    gotcha confirmed twice in this project's history** (see
+    `Assimilation_Cycle_Integration_Plan.md` Section 13/14): this is a
+    *different* generator from ``run_batch_loop``'s own ``rng`` parameter
+    (which only covers OSSE noise synthesis and rank-histogram
+    tie-breaking) -- any comparison across nonlinear-EnKF runs (different
+    styles, different hyperparameters, different seeds) needs this one
+    explicitly set and held fixed across the compared conditions, or the
+    comparison is not valid (an unseeded run is a different random draw
+    every time, confounded with whatever is actually being compared)."""
+
     # --- Inter-batch covariance inflation (opt-in; Section 8.3's
     # "persistence, no inflation" default is unchanged unless this is set) ---
     inter_batch_inflation_factor: float | None = None
@@ -274,11 +299,32 @@ class CycleConfig:
     """Gaussian smoothing length (km) applied to the raw noise field along
     the altitude coordinate before it's added -- only used when
     ``diagonal_boost_amplitude`` is set."""
-    diagonal_boost_horizontal_scale_km: float = 200.0
+    diagonal_boost_horizontal_scale_km: float = 500.0
     """Gaussian smoothing length (km, great-circle) applied to the raw
     noise field over the horizontal point cloud before it's added -- only
     used when ``diagonal_boost_amplitude`` is set. Works directly on the
-    unstructured/mesh-based horizontal grid (no regular-grid assumption)."""
+    unstructured/mesh-based horizontal grid (no regular-grid assumption).
+
+    **Changed from 200 to 500 (2026-10-07/08), a real reversal finding**:
+    a full-scale real-data run (ISR_Integration_Plan.md's evaluation,
+    amplitude=0.5/log_space=True/h=200) looked like a clean win against
+    held-out RO+IGS TEC (the only metric this value was originally tuned
+    against) but was a 1-3 order-of-magnitude *regression* against real
+    ISR ground-truth density in the ~95-440km band (E-region through
+    F2-peak/lower-topside) -- for every parameterization style tested,
+    including the previously most-validated one. A follow-up real
+    3-parameter sweep (amplitude x this x `diagonal_boost_vertical_scale_km`,
+    scored directly against real ISR) found the damage is driven by this
+    parameter, not amplitude: at `h=500`, every amplitude in 0.1-0.5
+    improves *both* the TEC fit and the real ISR match simultaneously
+    (best found: amplitude=0.1, vertical=30, horizontal=500 -- ISR RMSE
+    *below* the no-boost baseline). Interpretation: a wider horizontal
+    correlation length makes the injected perturbation look like a
+    genuine broad-scale density anomaly rather than small-scale,
+    geographically-incoherent noise the filter can exploit to fit TEC via
+    locally-implausible vertical-shape distortions. `amplitude` itself is
+    still `None` (off) by default -- only this smoothing-scale default
+    changed, since boosting remains opt-in."""
     diagonal_boost_rng_seed: int | None = None
     """Seeds the random field draw for reproducible comparisons. `None`
     (default): a fresh unseeded generator every call -- fine for a single
@@ -302,6 +348,48 @@ class CycleConfig:
     `diagonal_boost_taper_end_km`, held at that floor above -- see
     `diagonal_boost.py`'s module docstring for the full reasoning. Only
     matters when `diagonal_boost_amplitude` is set."""
+
+    # --- ISR comparison (ISR_Integration_Plan.md Section 4.3) ---
+    isr_file_path: str | Path | None = None
+    """Path to a preprocessed ISR netCDF (e.g. ``TROISR2025_nonan.nc``'s
+    schema: ``altitude``/``Ne``/``time_utc`` data variables,
+    ``station_name``/``station_latitude``/``station_longitude`` global
+    attrs -- see ``isr_comparison.load_isr_dataset``). ``None`` (default):
+    no ISR comparison is run. Station-agnostic by construction -- any ISR
+    station's file with this schema works, nothing here is Tromso-specific.
+    Note this is the *raw* (or ISR-adaptive-filtered) ISR file, not the
+    IRI2020-topside-extended one -- the comparison tooling interpolates
+    the model profile down onto the ISR instrument's own native altitude
+    gates rather than the other way around, so it has no need for (and no
+    dependency on) the topside extension used by the ISR-PCA
+    parameterization style."""
+    isr_pca_basis_path: str | Path | None = None
+    """Path to a precomputed :class:`isr_pca_basis.IsrPcaBasis` netCDF
+    (``isr_pca_basis.save_isr_pca_basis``'s output) -- supplies
+    ``hyper_params['PCA']``/``['PCA_mean']`` for the ``'PCA_1D_10ex_ISR'``
+    style wherever it's resolved (``ensemble_init.py``, ``package_run.py``,
+    ``style_sweep.py``, via ``isr_pca_basis.resolve_hyper_params_for_style``),
+    unless ``hyper_params``/``hyper_params_by_style`` already supplies
+    ``'PCA'`` explicitly (that takes priority). ``None`` (default): no
+    effect on any other style; using ``'PCA_1D_10ex_ISR'`` without this set
+    and without an explicit ``'PCA'`` raises (see ``default_styles``).
+
+    **Real pitfall, found while smoke-testing this wiring**: the basis
+    (``isr_pca_basis.build_isr_pca_basis``) must be built on the *same*
+    altitude grid the cycle's actual ``EDPSamples`` ends up using --
+    ``cfg.altitude_grid`` only when building fresh; a precomputed
+    ``edp_samples_path`` file's *own* altitude grid otherwise, which can
+    silently differ (e.g. a coarse test grid saved earlier). A mismatch
+    raises deep inside ``Parameterization.EDP2PCA_1D`` ("density and PCA
+    dimensions are inconsistent") -- the same class of gotcha as this
+    project's documented 17-vs-82-level and ``radius_km``-vs-
+    ``grid_radius_deg`` mismatches (see ``Assimilation_Cycle/README.md``)."""
+    isr_range_percentile: float = 0.0
+    """Passed through to ``isr_comparison``'s cycle-wide-range plots:
+    ``0.0`` (default) shades the literal min-max range of ISR profiles
+    over the cycle's window; a value in ``(0, 50)`` shades the
+    ``[p, 100-p]`` percentile band instead (less sensitive to a single
+    outlier scan, at the cost of no longer being a literal bound)."""
 
     # --- Output (Section 4.7/4.14) ---
     output_dir: str | Path | None = None

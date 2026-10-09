@@ -54,7 +54,7 @@ class TestDiagonalBoostValidation:
         assert cfg.diagonal_boost_amplitude is None
         assert cfg.diagonal_boost_log_space is False
         assert cfg.diagonal_boost_vertical_scale_km == 30.0
-        assert cfg.diagonal_boost_horizontal_scale_km == 200.0
+        assert cfg.diagonal_boost_horizontal_scale_km == 500.0
         assert cfg.diagonal_boost_taper_start_km == 400.0
         assert cfg.diagonal_boost_taper_end_km == 700.0
         assert cfg.diagonal_boost_taper_floor == 0.1

@@ -10,15 +10,92 @@ defaults below, see `Assimilation_Cycle_Integration_Plan.md` in the
 repository root (particularly §11 for why `PCA_3D_10ex` is recommended
 and §12 for the full-scale timing numbers quoted here).
 
-## 1. One-time environment setup
+As of `ISR_Integration_Plan.md`, a run can also compare its analysis EDP
+directly against real incoherent-scatter-radar (ISR) ground truth, and a
+4th parameterization style (`PCA_1D_10ex_ISR`) can use a basis fit from
+real ISR profiles instead of the IRI2020 climatology. See Section 8
+(input data, including ISR), Section 9 (the ISR comparison/4th-style
+config and setup), and Section 10 (a complete end-to-end example with
+all 4 styles and ISR comparison) for everything specific to that.
 
-Two things must be true in whatever Python process runs this, every time
-(these folders are not installed packages, so nothing here works via a
-normal `pip install`):
+## 1. Installation and one-time environment setup
+
+### 1.1 Python dependencies
+
+Nothing under this repository is an installed package -- it only works
+by putting the right folders on `sys.path` (below), so there is no
+`pip install .` step. What *does* need to be present in whichever Python
+environment you run scripts with: `numpy`, `pandas`, `scipy`, `xarray`,
+`netCDF4`, `matplotlib`, `cartopy`, `pyproj`, `tqdm`. In this project's
+own environment these are all already installed under
+`/opt/anaconda3` (see below) -- on a new machine, `pip install numpy
+pandas scipy xarray netCDF4 matplotlib cartopy pyproj tqdm` (or the
+equivalent `conda install`) covers everything `Assimilation_Cycle` and
+the modules it imports actually use. `cartopy` in particular is
+frequently the fussiest to install from a bare `pip` (it needs the
+system PROJ/GEOS libraries) -- `conda`/`mamba` is the easier path if you
+have a choice.
+
+### 1.2 The IRI2020 Fortran driver
+
+Any step that runs IRI2020 itself (anything *not* loaded via a
+precomputed-file path, Section 3) needs a compiled executable,
+`iri2020_namelist_driver`, built from the Fortran sources under
+`iri2020_new/src/iri2020/src/` (`irifun.for`, `irisub.for`, and friends,
+plus the `iri2020_namelist_driver.f90` entry point). Build it once with:
+
+```bash
+cd iri2020_new/src/iri2020   # from the repo root
+make                          # configures a CMake build/ tree on first run, then builds
+```
+
+**Rebuild whenever any of the `.for`/`.f90` sources change** -- `make`
+only recompiles what it detects changed via normal file-timestamp
+dependency tracking, but if you're not sure a change was actually picked
+up, force a clean rebuild:
+
+```bash
+make clean && make
+```
+
+This is not a hypothetical caveat: a real bug in `irifun.for` was found
+and fixed mid-project (co-worker + Claude, 2026-10-09) after two people
+running what looked like the identical code got different results --
+the actual cause was one of them running against a *stale, pre-fix*
+compiled executable. After pulling in any Fortran source change, confirm
+the rebuild actually happened before trusting results against it:
+
+```bash
+ls -la iri2020_new/src/iri2020/iri2020_namelist_driver   # mtime should be newer than the .for/.f90 you just changed
+```
+
+A quick end-to-end smoke test (a handful of samples, one location) is
+cheap insurance before committing to a multi-hour real run against a
+freshly (re)built executable:
+
+```python
+import sys
+sys.path.insert(0, "IRI_Sample_Inputs"); sys.path.insert(0, "EDPSamples")
+from IRI_Sample_inputs import IRI_Sample_Inputs
+from edp_samples import EDPSamples
+import numpy as np
+
+sp = IRI_Sample_Inputs("2025-11-18T10:30:00").randomSamples(
+    hour_sample_range=1, f107_sample_range=2, ap_sample_range=1,
+    ig_sample_range=1, rz_sample_range=1, nSample=5)
+edp = EDPSamples(DateTime="2025-11-18T10:30:00", geo_type="Point",
+                  altitude=np.arange(100, 301, 50), sampling_parameters=sp,
+                  evaluate_iri=1, Lon=19.2, Lat=69.6)
+print(edp.edps.shape)   # (5, 1, 5); values should be physically sane (~1e9-1e12 m^-3)
+```
+
+### 1.3 Every run: two things must be true
+
+In whatever Python process runs this, every time:
 
 ```bash
 # 1. IRI2020 executable -- needed any time you're not loading a
-#    precomputed EDPSamples file (see Section 5).
+#    precomputed EDPSamples file (see Section 3's "Precomputed-file mode").
 source init_iri2020_env.sh   # from the repo root; sets IRI2020_PATH
 
 # 2. Use the project's own interpreter, not a bare `python3` -- the
@@ -189,9 +266,22 @@ check `rmse_reduction.png` before trusting a result.
 
 | field | default | meaning |
 |---|---|---|
-| `styles` | `["ANCHOR", "PCA_3D_10ex", "PCA_1D_10ex"]` | styles a **packaged run** (`run_package`) runs and cross-compares |
-| `hyper_params_by_style` | `{"PCA_3D_10ex": {"retaining_threshold": 0.9999}, "PCA_1D_10ex": {"retaining_threshold": 0.99999}}` | PCA styles' retained-variance threshold (`1 - removal_threshold`); `ANCHOR` needs none |
+| `styles` | `["ANCHOR", "PCA_3D_10ex", "PCA_1D_10ex", "PCA_1D_10ex_ISR"]` | styles a **packaged run** (`run_package`) runs and cross-compares -- 4 as of `ISR_Integration_Plan.md`, see below |
+| `hyper_params_by_style` | `{"PCA_3D_10ex": {"retaining_threshold": 0.9999}, "PCA_1D_10ex": {"retaining_threshold": 0.99999}}` | PCA styles' retained-variance threshold (`1 - removal_threshold`); `ANCHOR` needs none; `PCA_1D_10ex_ISR` needs none *here* either (its basis comes from `isr_pca_basis_path`, Section 9, not a threshold) |
 | `style` / `hyper_params` | `"density_10ex"` / `None` | single-style fields, used only by the lower-level `cycle_driver.run_cycle`/`style_sweep.run_style_sweep`, not by `run_package` |
+
+**`PCA_1D_10ex_ISR`** (added `ISR_Integration_Plan.md`) is mechanically
+identical to `PCA_1D_10ex` -- same log10-space PCA decode -- except its
+basis is fit from real ISR-measured profiles instead of this cycle's own
+IRI2020 ensemble, and it *never* fits a basis from the ensemble it's
+given (unlike every other PCA style, supplying only
+`retaining_threshold` for this style raises rather than silently
+fitting one). Requires `isr_pca_basis_path` (or an explicit `'PCA'` in
+its `hyper_params_by_style` entry) -- see Section 9 for how to build
+that basis file. Real full-scale results (`ISR_Integration_Plan.md`'s
+evaluation): best or tied-best of the 4 default styles against real
+RO+IGS TEC, second-best against real ISR ground truth, converges
+reliably (unlike `ANCHOR`).
 
 **Recommendation from real-data testing** (`Assimilation_Cycle_Integration_Plan.md`
 §11.4/§12.1): `PCA_3D_10ex` gave the best accuracy of every style tested,
@@ -203,6 +293,36 @@ point used across many prior projects, not because it's the recommended
 choice for new work. If you only care about the best result fastest, run
 with `styles=["PCA_3D_10ex"]` alone; keep `ANCHOR` in the list when you
 specifically want that comparison, and budget real time for it (Section 7).
+
+### ISR ground-truth comparison (optional, default off)
+
+| field | default | meaning |
+|---|---|---|
+| `isr_file_path` | `None` | path to a preprocessed ISR netCDF (station-agnostic -- station name/lat/lon are read from the file's own attrs, see Section 8.3). `None`: no ISR comparison is run, no other field below matters. |
+| `isr_pca_basis_path` | `None` | path to a precomputed `isr_pca_basis.IsrPcaBasis` netCDF (Section 9.2) -- required for the `PCA_1D_10ex_ISR` style; unused by every other style. |
+| `isr_range_percentile` | `0.0` | `0.0`: the ISR "range" plot shades the literal min-max of every ISR profile in the cycle's window; a value in `(0, 50)` shades the `[p, 100-p]` percentile band instead (less sensitive to one outlier scan). |
+
+Setting `isr_file_path` alone (no `isr_pca_basis_path`) is enough to get
+the full ISR comparison tooling (Section 9.1) for whichever styles you
+already run -- it has no dependency on the 4th style. See Section 9 for
+the full picture (both ISR use cases, the basis-build procedure, and a
+worked example).
+
+### Reproducibility across styles/conditions
+
+| field | default | meaning |
+|---|---|---|
+| `analysis_rng_seed` | `None` | seeds `GeneralEnKFDriver`'s `AnalysisConfig.rng` (via `cycle_driver.run_cycle`) -- the generator actually used for the stochastic perturbed-obs noise inside the analysis step. `None` (default): a fresh, unseeded generator every call. |
+
+**Set this explicitly whenever comparing two or more runs** (styles,
+boost settings, anything) -- a real, previously-undocumented gap this
+project's own history ran into twice before this field existed
+(`Assimilation_Cycle_Integration_Plan.md` §13/§14): without it, the
+stochastic analysis noise differs run to run and confounds whatever
+you're actually trying to compare. This is a *different* generator from
+`diagonal_boost_rng_seed` (controls the injected boost noise, not the
+analysis step) -- set both, independently, for a fully reproducible
+comparison.
 
 ### Batching and RO filtering
 
@@ -250,7 +370,7 @@ off) but neither has a validated case for turning on yet.
 |---|---|---|
 | `diagonal_boost_amplitude` | `None` | injected perturbation's per-point std, as a fraction of that point's own ensemble std (`None`/`0` = disabled, original ensemble used as-is) |
 | `diagonal_boost_vertical_scale_km` | 30.0 | Gaussian smoothing length (km) along altitude for the injected noise field |
-| `diagonal_boost_horizontal_scale_km` | 200.0 | Gaussian smoothing length (km, great-circle) over the horizontal point cloud for the injected noise field |
+| `diagonal_boost_horizontal_scale_km` | 500.0 (changed from 200.0, see below) | Gaussian smoothing length (km, great-circle) over the horizontal point cloud for the injected noise field |
 | `diagonal_boost_rng_seed` | `None` | seeds the noise draw -- set and hold fixed for any comparison across boost settings, same standing lesson as `AnalysisConfig.rng` (§14) |
 | `diagonal_boost_taper_start_km` | 400.0 | altitude below which the boost applies at full `diagonal_boost_amplitude` |
 | `diagonal_boost_taper_end_km` | 700.0 | altitude at/above which the boost is held at `diagonal_boost_amplitude x diagonal_boost_taper_floor` (linear ramp between start/end) |
@@ -357,6 +477,40 @@ everywhere, the old behavior). Not yet re-validated against real data
 (only unit-tested on synthetic fixtures so far) -- the next full
 end-to-end run should confirm the high-altitude waviness is actually
 reduced without hurting TEC residual.
+
+**Reversal, then correction (2026-10-07/08) -- the amplitude~0.5
+recommendation above was validated against the wrong thing.** Every
+sweep up to this point scored boosting only against held-out real RO+IGS
+TEC. Once this project built independent real-ISR-ground-truth
+comparison tooling (`isr_comparison.py`, see `ISR_Integration_Plan.md`)
+and ran a full-scale end-to-end comparison, amplitude=0.5 at the
+*original* `diagonal_boost_horizontal_scale_km=200` default turned out to
+be a 1-3 order-of-magnitude **regression** against the real ISR-measured
+density profile in the ~95-440km band (E-region through F2-peak/lower-
+topside) -- for every parameterization style tested, including
+`PCA_3D_10ex`. The TEC fit looked great because TEC is a vertically-
+integrated, shape-degenerate observable: boosting handed the filter extra
+spread directions with no independent information to constrain them, and
+it exploited that freedom to fit TEC almost exactly by distorting the
+vertical shape in ways TEC itself cannot detect -- only a direct density
+measurement (real ISR) exposed this. A follow-up real 3-parameter sweep
+(amplitude x `diagonal_boost_vertical_scale_km` x
+`diagonal_boost_horizontal_scale_km`, scored directly against real ISR)
+found the *horizontal* smoothing scale, not amplitude, was the actual
+cause: at `horizontal_scale_km=500` (now the default, changed from 200),
+every amplitude in 0.1-0.5 improves *both* the TEC fit and the real ISR
+match simultaneously (best found: amplitude=0.1/vertical=30/horizontal=500,
+ISR RMSE *below* the no-boost baseline). A wider horizontal correlation
+length makes the injected perturbation look like a genuine broad-scale
+density anomaly rather than small-scale, geographically-incoherent noise
+the filter can exploit. **Current recommendation**: use the new default
+`horizontal_scale_km=500` with amplitude in 0.1-0.5 (lower favors the ISR
+match, higher favors the TEC fit -- a real but mild tradeoff at this
+scale, unlike the catastrophic one at 200); `amplitude` itself is still
+`None` (off) by default. ANCHOR was excluded from this sweep (too
+expensive, and the same full-scale run found it does best *without*
+boosting anyway). Full tables in
+`Runs/Tomography_Test/Data_Assimilation_Cycle/ISR_PCA_Basis/evaluation/`.
 
 ### Batch size and assimilation order (nonlinear styles only)
 
@@ -481,6 +635,20 @@ foo_cross_style_profiles/batchNNNN_{ro_label}.png   # one per RO per batch, all 
 foo_style_comparison.png               # step 9
 ```
 
+**If `isr_file_path` is set** (Section 9), each of the following also
+appears, per style under `foo_isr_comparison/{style}/` and once more,
+all styles overlaid, under `foo_isr_comparison_cross_style/`:
+
+```
+{style}/nearest_point/batchNNNN.png    # Plot A -- that batch's forecast/analysis mean +/- std at the ISR site, overlaid with the single real ISR profile nearest that batch's midpoint
+{style}/range_comparison.png           # Plot B -- the real ISR range (shaded band) across the cycle's whole window, overlaid with every batch's analysis profile -- one per cycle, not per batch
+{style}/pooled_rmse.csv, pooled_rmse.png   # forecast/analysis RMSE vs. the matched nearest ISR profile, pooled across every batch, by native ISR altitude gate
+```
+
+The `_cross_style` versions are the same three artifact types with every
+style overlaid in one figure/table instead of one style's own -- directly
+comparable to the per-style ones, same filenames, one directory up.
+
 ## 5. Reusing this for a validation profile (future use, already supported)
 
 `output.plot_edp_profile_comparison` -- the function behind step 8's
@@ -504,6 +672,7 @@ All measured this session against the local Tromsø sample data
 | assimilation, `ANCHOR` | ~43s | **~128 minutes** |
 | assimilation, `PCA_3D_10ex` | ~20s | **~2 minutes** |
 | assimilation, `PCA_1D_10ex` | ~20s | ~4.5 minutes |
+| assimilation, `PCA_1D_10ex_ISR` | ~20s | ~2 minutes (similar to the other PCA styles -- its basis is precomputed, not fit per run) |
 
 Takeaways:
 - **IRI2020's ensemble build and RO/IGS preparation are the same cost
@@ -520,6 +689,23 @@ Takeaways:
   `n_ensemble` (10-50) and a coarse grid first (as above) to catch
   configuration mistakes (wrong `podtc_dir`, wrong `grid_radius_deg`,
   missing IGS local files) before committing to a multi-hour run.
+- **ISR comparison (`isr_file_path`) adds negligible time** -- reading
+  the preprocessed ISR file and the per-batch nearest-profile match are
+  both fast; it does not depend on `n_ensemble` or grid resolution the
+  way the steps above do.
+
+**Real full-scale pair timings** (both conditions, all 4 styles, single
+batch, real 2025-11-18 Tromsø RO+IGS data, `ISR_Integration_Plan.md`'s
+evaluation): a full `run_package` call across `ANCHOR`/`PCA_3D_10ex`/
+`PCA_1D_10ex`/`PCA_1D_10ex_ISR` took **~100 minutes** (no boost) or
+**~85 minutes** (boosted -- `ANCHOR`'s Chapman fit dominates either way;
+boosting does not meaningfully change its own cost). Running the
+no-boost **and** boosted conditions back to back, as a before/after
+comparison (Section 10's example), is realistically a **~3-3.5 hour**
+commitment at this scale -- plan accordingly, and strongly prefer
+precomputed-file mode (Section 3) for the shared base ensemble between
+the two conditions (the boosted run reuses the no-boost run's saved
+`edp_samples_path` rather than rebuilding IRI2020 a second time).
 
 **The table above uses `max_tec_per_batch=300` (13 batches), the
 `Final_Packaging.docx`-stated default -- but Section 3's batch-size
@@ -557,3 +743,276 @@ large enough to force one batch, not `300`.
   step-size test alone was too strict for real, large, noisy batches).
   Check the actual RMSE reduction (`{style}/rmse_reduction.png`) before
   assuming a non-converged batch produced a bad result.
+- **`ValueError: Parameterization style 'PCA_1D_10ex_ISR' always
+  requires a pre-fit 'PCA'...`** -- `isr_pca_basis_path` isn't set (or
+  the style's `hyper_params_by_style` entry doesn't carry an explicit
+  `'PCA'`). Unlike every other PCA style, this one never fits a basis
+  from the ensemble it's given -- see Section 9.2 to build the basis
+  file first.
+- **`ValueError: density and PCA dimensions are inconsistent` when using
+  `PCA_1D_10ex_ISR`** -- the ISR basis (Section 9.2) was built on a
+  different altitude grid than this cycle's actual `EDPSamples`. This
+  happens most often in precomputed-`edp_samples_path` mode: that file's
+  *own* altitude grid is what's actually used, silently overriding
+  `cfg.altitude_grid` if they differ (a real bug found exactly this way,
+  `ISR_Integration_Plan.md`). Rebuild the ISR basis on the grid the
+  cached `EDPSamples` file actually uses (read its `.altitude` directly
+  if unsure), not `cfg.altitude_grid`'s nominal default.
+- **IRI2020 results differ between two people/machines running what
+  looks like identical code** -- check whether `iri2020_namelist_driver`
+  was actually rebuilt after the last Fortran source change on both
+  sides (Section 1.2); a stale compiled executable silently running
+  against old physics is a real failure mode this project hit once.
+
+## 8. Input data: RO, IGS, and ISR
+
+Three independent real-data sources feed a cycle: RO and IGS (the
+observations actually assimilated) and, optionally, ISR (ground truth to
+validate against, Section 9 -- never assimilated itself).
+
+### 8.1 RO (radio occultation)
+
+`ro_kwargs["podtc_dir"]` points at a directory of `podTc2*.nc` files, one
+per occultation (POD-based TEC profile product). Real example from this
+project's own local data:
+
+```
+/Users/cwang/Documents/Consulting/PlanetIQ/Data/Tomography_data/RO_Data/
+    podTc2_GN04.2025.322.10.15.0031.E34.01_0000.0001_nc
+    podTc2_GN04.2025.322.10.20.0027.E02.01_0000.0001_nc
+    ...
+```
+
+`prepare_ro_observations` (wrapped by `observation_stream.assemble`) scans
+every file in the directory, keeps the ones falling inside `start_time`/
+`end_time` and the ROI (`center_lat`/`center_lon`/`radius_km`,
+`ro_kwargs["roi_mode"]`), runs the Abel inversion on each, and discards
+occultations with too few valid rays (`min_valid_rays`). No network
+access or credentials are needed -- this is a directory of files you
+already have.
+
+### 8.2 IGS (ground-based GNSS TEC)
+
+`igs_kwargs` points at RINEX files for one or more ground stations,
+plus the broadcast navigation and DCB (differential code bias) files
+every station's processing needs. Real example:
+
+```
+/Users/cwang/Documents/Consulting/PlanetIQ/Data/Tomography_data/RINEX_Cache/
+    TRO100NOR_S_20253220000_01D_30S_MO.crx    # one per station (local_obs_by_station)
+    WUTH00NOR_R_20253220000_01D_30S_MO.crx
+    BRDC00IGS_R_20253220000_01D_MN.rnx        # shared navigation file (local_nav)
+    CAS0OPSRAP_20253220000_01D_01D_DCB.BIA    # shared DCB file (local_dcb)
+```
+
+No `.netrc`/CDDIS/Earthdata credentials are configured anywhere in this
+environment -- always pass `local_obs_by_station`/`local_nav`/`local_dcb`
+in `igs_kwargs` pointing at files you already have (the minimal example
+in Section 2 shows the exact keys). `prepare_igs_observations` has no way
+to request a time window from the underlying RINEX processing itself --
+it always processes each station's **entire day** before filtering down
+to `start_time`/`end_time` afterward (Section 3's "Observation sources"),
+which is why IGS takes minutes even for a one-hour cycle regardless of
+`n_ensemble`.
+
+### 8.3 ISR (incoherent scatter radar) -- optional, for ground-truth comparison and/or the 4th style
+
+A preprocessed ISR netCDF, **station-agnostic by schema** -- the file's
+own global attributes carry its identity, never hardcoded anywhere in
+this code:
+
+| attr/variable | meaning |
+|---|---|
+| `station_name`, `station_latitude`, `station_longitude` (global attrs) | which ISR site this file is from |
+| `altitude` (data var, dim `altitude_gate`) | native altitude gates, km (typically irregular spacing, denser at low altitude) |
+| `Ne` (data var, dims `altitude_gate` x `time`) | electron density, m^-3 |
+| `time_utc` (data var, dim `time`) | ISO timestamp strings |
+
+The real file used throughout `ISR_Integration_Plan.md`'s development
+and evaluation:
+
+```
+/Users/cwang/Documents/Consulting/PlanetIQ/Runs/Tomography_Test/Data_Assimilation_Cycle/TROISR2025_nonan.nc
+```
+(EISCAT Tromsø UHF ISR, year 2025, 4-minute cadence, 39 native altitude
+gates 82-647km, adaptively median-filtered with gaps already removed/
+filled -- see the file's own attrs for the exact filtering policy
+applied upstream of this project.) This **raw** file is all that's
+needed for direct ISR comparison (Section 9.1). Building the 4th style's
+basis (Section 9.2) needs one additional preprocessing step first, since
+the basis is defined on the full 90-900km production grid but native ISR
+gates only reach ~650km.
+
+## 9. ISR ground-truth comparison and the 4th parameterization style
+
+Two independent uses of ISR data, from `ISR_Integration_Plan.md`:
+
+1. **Direct comparison** (Section 9.1): interpolate the analysis/forecast
+   EDP to the ISR site and compare against the real measured profile --
+   validates the general RO+IGS retrieval approach against ground truth,
+   for any style, with no new parameterization needed.
+2. **A new style, `PCA_1D_10ex_ISR`** (Section 9.2): a PCA basis fit from
+   real ISR-measured profiles over an extended period, used the same way
+   `PCA_1D_10ex`'s IRI2020-fitted basis is, on the hypothesis that real
+   ISR data spans a wider range of EDP shapes than the climatology.
+
+### 9.1 Direct comparison (works with any style, no basis needed)
+
+Set `isr_file_path` (Section 3's "ISR ground-truth comparison" table) to
+the raw ISR file (Section 8.3) and run `run_package` as usual -- every
+style in `cfg.styles` automatically gets the full comparison tooling
+(Section 4's artifact list: per-batch nearest-point overlays, the
+cycle-wide range plot, pooled RMSE by altitude gate, each per-style and
+once more with all styles overlaid). No other setup is required; this
+has no dependency on Section 9.2 at all.
+
+### 9.2 Building the ISR-derived PCA basis (needed only for `PCA_1D_10ex_ISR`)
+
+Two steps, each run once per ISR station/region (not per cycle -- reuse
+the resulting basis file across runs the same way a precomputed
+`edp_samples_path` is reused):
+
+**Step 1 -- extend ISR profiles to the production altitude grid's full
+range.** Native ISR gates stop around 650km; the production grid goes to
+900km. `extend_isr_edp_with_iri2020.py` (repo root) fits each profile's
+`log10(Ne)` above 200km against the leading few modes of a real IRI2020
+library, then extends it to 900km with a smoothly-tapered join to the
+last real measurement:
+
+```bash
+source init_iri2020_env.sh
+/opt/anaconda3/bin/python3 extend_isr_edp_with_iri2020.py \
+    --isr-file /path/to/your_isr_file.nc \
+    --out /path/to/output_dir
+# -> /path/to/output_dir/your_isr_file_extended.nc
+```
+
+Station latitude/longitude/name are read from the input file's own attrs
+(Section 8.3) -- this works unmodified for any ISR station's file with
+that schema, not just Tromsø.
+
+**Step 2 -- fit the PCA basis** on the production altitude grid, from
+the extended file's full profile record:
+
+```python
+import sys
+sys.path.insert(0, "/path/to/IonosphereTomography")
+from Assimilation_Cycle import isr_pca_basis as ipb
+from Assimilation_Cycle.cycle_config import default_altitude_grid
+
+basis = ipb.build_isr_pca_basis(
+    "/path/to/output_dir/your_isr_file_extended.nc",
+    default_altitude_grid(),              # MUST match the grid your cycle actually uses -- see the troubleshooting entry in Section 7
+    retaining_threshold=1 - 1e-4,         # matches this project's PCA_3D_10ex convention
+)
+ipb.save_isr_pca_basis(basis, "/path/to/output_dir/isr_pca_basis.nc")
+print(basis.diagnostics.n_retained, "components retained of",
+      basis.diagnostics.n_profiles_used, "profiles used")
+```
+
+Real result from the Tromsø file above: 26 components retained from all
+8284 profiles (0 dropped) at `retaining_threshold=1-1e-4` -- a real,
+substantive basis, not a degenerate one.
+
+### 9.3 Using the style
+
+Point `isr_pca_basis_path` at the saved basis file and include
+`'PCA_1D_10ex_ISR'` in `cfg.styles` (it's in `default_styles()` already)
+-- `resolve_hyper_params_for_style` loads the basis automatically for
+that style only, with no effect on any other style:
+
+```python
+cfg = CycleConfig(
+    ...,
+    isr_file_path="/path/to/your_isr_file.nc",            # Section 9.1, the RAW file
+    isr_pca_basis_path="/path/to/output_dir/isr_pca_basis.nc",   # Section 9.2's output
+    # styles=default_styles() already includes 'PCA_1D_10ex_ISR'
+)
+```
+
+## 10. End-to-end example: all 4 styles with real ISR comparison
+
+Complete, runnable script mirroring the real full-scale runs
+`ISR_Integration_Plan.md` was evaluated against -- adjust the paths for
+your own region/data. Produces two complete artifact sets (no-boost and
+boosted), each with all 4 styles and full ISR comparison tooling, under
+`output_dir`.
+
+```python
+#!/usr/bin/env python3
+import sys
+from dataclasses import replace
+from pathlib import Path
+
+REPO = Path("/path/to/IonosphereTomography")
+for p in (REPO, REPO / "Parameterization", REPO / "EDPSamples", REPO / "IRI_Sample_Inputs"):
+    sys.path.insert(0, str(p))
+
+from Assimilation_Cycle.cycle_config import CycleConfig, default_styles, default_hyper_params_by_style
+from Assimilation_Cycle.package_run import run_package
+
+OUT = Path("/path/to/output_dir")
+
+cfg_base = CycleConfig(
+    # --- time window and region (Section 3) ---
+    start_time="2025-11-18T10:00:00", end_time="2025-11-18T11:00:00",
+    center_lat=69.6, center_lon=19.2,
+    radius_km=2000.0, grid_radius_deg=18.0,
+    max_tec_per_batch=100_000,   # single batch, recommended (Section 3)
+
+    # --- real RO/IGS input data (Section 8.1/8.2) ---
+    obs_sources="both",
+    ro_kwargs=dict(podtc_dir="/path/to/RO_Data", roi_mode="tangent_point"),
+    igs_kwargs=dict(
+        stations=["TRO1", "WUTH"], cache_dir="/path/to/RINEX_Cache",
+        local_obs_by_station={
+            "TRO1": "/path/to/RINEX_Cache/TRO100NOR_S_..._MO.crx",
+            "WUTH": "/path/to/RINEX_Cache/WUTH00NOR_R_..._MO.crx",
+        },
+        local_nav="/path/to/RINEX_Cache/BRDC00IGS_R_..._MN.rnx",
+        local_dcb="/path/to/RINEX_Cache/CAS0OPSRAP_..._DCB.BIA",
+    ),
+    obs_sigma=3.0,   # this project's tuned value for real TEC data at this scale (Section 3)
+
+    # --- real ISR input data (Section 8.3/9) ---
+    isr_file_path="/path/to/your_isr_file.nc",
+    isr_pca_basis_path="/path/to/isr_pca_basis.nc",   # Section 9.2 -- build once, reuse
+
+    # --- all 4 default styles, production scale (Section 3) ---
+    n_ensemble=2000,
+    styles=default_styles(),
+    hyper_params_by_style=default_hyper_params_by_style(),
+    analysis_rng_seed=777,   # reproducible across the two conditions below (Section 3)
+)
+
+# Run 1: no boost -- also builds and saves the real base ensemble.
+cfg_noboost = replace(cfg_base, output_dir=OUT / "no_boost", label="no_boost")
+result_noboost = run_package(cfg_noboost)
+
+# Run 2: boosted -- reuses Run 1's saved base ensemble (no second IRI2020
+# build) and applies diagonal boosting on top of it.
+base_edp_path = OUT / "no_boost" / "no_boost_edp_samples.nc"
+cfg_boosted = replace(
+    cfg_base, output_dir=OUT / "boosted", label="boosted",
+    edp_samples_path=base_edp_path,
+    diagonal_boost_amplitude=0.5, diagonal_boost_log_space=True,
+    diagonal_boost_rng_seed=888,
+    # diagonal_boost_horizontal_scale_km left unset -> picks up the
+    # current default (500km, see Section 3) automatically.
+)
+result_boosted = run_package(cfg_boosted)
+
+for label, result in (("no_boost", result_noboost), ("boosted", result_boosted)):
+    print(f"=== {label} ===")
+    for style, (cycle_result, n_state, wall_time) in result.results_by_style.items():
+        outcome = cycle_result.batch_outcomes[-1]
+        print(f"  {style}: n_state={n_state}, wall_time={wall_time:.1f}s, "
+              f"converged={outcome.diagnostics.converged}, "
+              f"RMSE analysis={outcome.rmse_reduction.rmse_analysis:.3f} TECU")
+```
+
+Run with `source init_iri2020_env.sh && /opt/anaconda3/bin/python3
+this_script.py` (Section 1). Expect ~100 minutes for the no-boost run
+and ~85 minutes for the boosted run at this scale (Section 6) -- do a
+smoke test at small `n_ensemble` first if this is your first run against
+new data or a new region.

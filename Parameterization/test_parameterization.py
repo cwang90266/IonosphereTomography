@@ -524,6 +524,31 @@ class TestParameterizedEDPSamples:
         assert pv1.shape == pv2.shape
         assert np.allclose(pv1, pv2, rtol=1e-5)
 
+    def test_anchor_netcdf_round_trip_reuses_param_vec_without_refitting(self, synthetic_edpsamples, tmp_path, monkeypatch):
+        """Regression for a real bug: from_xarray/fromNetCDF used to call
+        the full constructor unconditionally, which for 'ANCHOR' re-fits
+        the entire per-profile Chapman model from scratch even though the
+        file already has param_vec saved -- a confirmed real cost
+        (doubled full-scale ANCHOR runtime in a sibling bug,
+        reconstruction_error()'s now-fixed version of the same mistake).
+        Fixed via Parameterized_EDPSamples.__init__'s new param_vec=
+        passthrough; this test confirms the fit function is never called
+        during the round trip, not just that the numbers happen to match."""
+        pe = P.Parameterized_EDPSamples(synthetic_edpsamples, style="ANCHOR")
+        path = tmp_path / "anchor.nc"
+        pe.saveNetCDF(str(path))
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("_fit_iri_params_ensemble should not be called when loading "
+                                  "a Parameterized_EDPSamples that already has a saved param_vec")
+        monkeypatch.setattr(P, "_fit_iri_params_ensemble", _boom)
+
+        pe2 = P.Parameterized_EDPSamples.fromNetCDF(str(path))
+        assert pe2.style == "ANCHOR"
+        pv1 = pe.EDPSamples["param_vec"].to_numpy()
+        pv2 = pe2.EDPSamples["param_vec"].to_numpy()
+        np.testing.assert_array_equal(pv1, pv2)
+
     def test_reuses_prefit_pca_basis_without_recomputing(self, synthetic_edpsamples):
         pe1 = P.Parameterized_EDPSamples(synthetic_edpsamples, style="PCA_1D",
                                           hyper_params={"retaining_threshold": 0.999})
@@ -540,6 +565,72 @@ class TestParameterizedEDPSamples:
     def test_pca_style_without_threshold_or_pca_raises(self, synthetic_edpsamples):
         with pytest.raises(ValueError):
             P.Parameterized_EDPSamples(synthetic_edpsamples, style="PCA_1D", hyper_params={})
+
+
+# ===========================================================================
+# PCA_1D_10ex_ISR (ISR_Integration_Plan.md Section 4.1.2): mechanically
+# identical to PCA_1D_10ex, except it always requires a pre-fit PCA/PCA_mean
+# and never fits a basis from the ensemble it's given -- kept out of
+# ALL_STYLES/PCA_STYLES above since those parametrized tests assume every
+# PCA style accepts a bare 'retaining_threshold', which this one
+# deliberately rejects.
+# ===========================================================================
+
+class TestPCA1D10exISRStyle:
+    def test_matches_pca_1d_10ex_given_the_same_basis(self, synthetic_edpsamples):
+        """Not a new parameterization -- same math, different basis
+        provenance. Given literally the same PCA/mean, PCA_1D_10ex_ISR
+        must reproduce PCA_1D_10ex's param_vec/density exactly."""
+        baseline = P.Parameterized_EDPSamples(
+            synthetic_edpsamples, style="PCA_1D_10ex", hyper_params={"retaining_threshold": 0.999},
+        )
+        pca = baseline.Parameterization.hyper_params["PCA"]
+        mean = baseline.Parameterization.hyper_params["PCA_mean"]
+
+        isr_style = P.Parameterized_EDPSamples(
+            synthetic_edpsamples, style="PCA_1D_10ex_ISR", hyper_params={"PCA": pca, "PCA_mean": mean},
+        )
+        pv_baseline = baseline.EDPSamples["param_vec"].to_numpy()
+        pv_isr = isr_style.EDPSamples["param_vec"].to_numpy()
+        assert np.allclose(pv_baseline, pv_isr, rtol=1e-10)
+
+        density_baseline = baseline.Parameterization.get_density(pv_baseline)
+        density_isr = isr_style.Parameterization.get_density(pv_isr)
+        assert np.allclose(density_baseline, density_isr, rtol=1e-10)
+
+    def test_param_vec_dims_match_pca_1d_10ex(self, synthetic_edpsamples):
+        baseline = P.Parameterized_EDPSamples(
+            synthetic_edpsamples, style="PCA_1D_10ex", hyper_params={"retaining_threshold": 0.999},
+        )
+        pca = baseline.Parameterization.hyper_params["PCA"]
+        isr_style = P.Parameterized_EDPSamples(
+            synthetic_edpsamples, style="PCA_1D_10ex_ISR", hyper_params={"PCA": pca},
+        )
+        assert isr_style.EDPSamples["param_vec"].shape == baseline.EDPSamples["param_vec"].shape
+
+    def test_rejects_retaining_threshold_alone(self, synthetic_edpsamples):
+        """The defining behavioral difference from every other PCA_* style:
+        a bare 'retaining_threshold' (no 'PCA') is accepted by
+        PCA_1D_10ex/PCA_3D_10ex (fits a basis from this dataset's own
+        ensemble) but must be rejected here -- this style exists
+        specifically so an ISR-derived basis is never silently replaced by
+        one fit from the IRI2020 ensemble it's handed."""
+        with pytest.raises(ValueError, match="pre-fit 'PCA'"):
+            P.Parameterized_EDPSamples(
+                synthetic_edpsamples, style="PCA_1D_10ex_ISR", hyper_params={"retaining_threshold": 0.999},
+            )
+
+    def test_rejects_empty_hyper_params(self, synthetic_edpsamples):
+        with pytest.raises(ValueError):
+            P.Parameterized_EDPSamples(synthetic_edpsamples, style="PCA_1D_10ex_ISR", hyper_params={})
+
+    def test_bare_edp_parameterization_also_requires_pca(self, rng):
+        with pytest.raises(ValueError):
+            P.EDP_Parameterization(style="PCA_1D_10ex_ISR", hyper_params={})
+
+    def test_wrong_ndim_pca_raises(self, rng):
+        with pytest.raises(ValueError):
+            P.EDP_Parameterization(style="PCA_1D_10ex_ISR", hyper_params={"PCA": rng.normal(size=(5, 3, 2))})
 
 
 # ===========================================================================
