@@ -4,7 +4,7 @@ Tests for output.py (plan Section 4.7/4.14).
 
 Metrics-plot tests build a CycleResult from toy operators (no EDPSamples
 needed). save_decoded_field_netcdf/plot_horizontal need a real EDPSamples
-object -- exercised against the existing TestCode/EDPSam_Point.nc fixture
+object -- exercised against the existing Default_Data/EDPSam_Point.nc fixture
 (geo_type='Point', the simplest case, no IRI2020 run needed to load it).
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from Assimilation_Cycle import output
 from Assimilation_Cycle.cycle_driver import CycleBatch, run_batch_loop
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_EDP_FIXTURE = _REPO_ROOT / "TestCode" / "EDPSam_Point.nc"
+_EDP_FIXTURE = _REPO_ROOT / "Default_Data" / "EDPSam_Point.nc"
 
 
 @dataclass

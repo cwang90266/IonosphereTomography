@@ -6,9 +6,9 @@ into one or more parameterizations, assimilates the observations in
 batches, and produces every plot/netCDF artifact `Final_Packaging.docx`
 specifies. This document is about *running* it on your own data/region;
 for the design history and the real-data findings that shaped the
-defaults below, see `Assimilation_Cycle_Integration_Plan.md` in the
-repository root (particularly §11 for why `PCA_3D_10ex` is recommended
-and §12 for the full-scale timing numbers quoted here).
+defaults below, see `Documentation/Assimilation_Cycle_Integration_Plan.md`
+(particularly §11 for why `PCA_3D_10ex` is recommended and §12 for the
+full-scale timing numbers quoted here).
 
 As of `ISR_Integration_Plan.md`, a run can also compare its analysis EDP
 directly against real incoherent-scatter-radar (ISR) ground truth, and a
@@ -80,7 +80,7 @@ from IRI_Sample_inputs import IRI_Sample_Inputs
 from edp_samples import EDPSamples
 import numpy as np
 
-sp = IRI_Sample_Inputs("2025-11-18T10:30:00").randomSamples(
+sp = IRI_Sample_Inputs("2025-11-18T10:30:00", data_dir="/tmp/iri_smoke_test").randomSamples(
     hour_sample_range=1, f107_sample_range=2, ap_sample_range=1,
     ig_sample_range=1, rz_sample_range=1, nSample=5)
 edp = EDPSamples(DateTime="2025-11-18T10:30:00", geo_type="Point",
@@ -89,6 +89,17 @@ edp = EDPSamples(DateTime="2025-11-18T10:30:00", geo_type="Point",
 print(edp.edps.shape)   # (5, 1, 5); values should be physically sane (~1e9-1e12 m^-3)
 ```
 
+`IRI_Sample_Inputs`'s `data_dir` argument (above) keeps its fetched-artifact
+cache files (`apf107.dat`/`ig_rz.dat`) under that directory instead of the
+source tree -- source and execution artifacts are kept separate throughout
+this project. `run_package`/`run_cycle` already pass `cfg.output_dir`
+through as `data_dir` automatically (`iri_selection.py`); only a bare,
+`CycleConfig`-free call like this smoke test needs it set explicitly.
+Omitting it falls back to the current working directory, seeded from a
+bundled reference copy under `Default_Data/` on first use (the
+original upstream mirror these files were fetched from is dead; fetches
+now go to `irimodel.org/indices/` instead, see `IRI_Sample_inputs.py`).
+
 ### 1.3 Every run: two things must be true
 
 In whatever Python process runs this, every time:
@@ -96,7 +107,7 @@ In whatever Python process runs this, every time:
 ```bash
 # 1. IRI2020 executable -- needed any time you're not loading a
 #    precomputed EDPSamples file (see Section 3's "Precomputed-file mode").
-source init_iri2020_env.sh   # from the repo root; sets IRI2020_PATH
+source Driver_Scripts/init_iri2020_env.sh   # from the repo root; sets IRI2020_PATH
 
 # 2. Use the project's own interpreter, not a bare `python3` -- the
 #    system Python has none of numpy/scipy/xarray/cartopy/etc.
@@ -874,14 +885,14 @@ the resulting basis file across runs the same way a precomputed
 
 **Step 1 -- extend ISR profiles to the production altitude grid's full
 range.** Native ISR gates stop around 650km; the production grid goes to
-900km. `extend_isr_edp_with_iri2020.py` (repo root) fits each profile's
+900km. `Driver_Scripts/extend_isr_edp_with_iri2020.py` fits each profile's
 `log10(Ne)` above 200km against the leading few modes of a real IRI2020
 library, then extends it to 900km with a smoothly-tapered join to the
 last real measurement:
 
 ```bash
-source init_iri2020_env.sh
-/opt/anaconda3/bin/python3 extend_isr_edp_with_iri2020.py \
+source Driver_Scripts/init_iri2020_env.sh
+/opt/anaconda3/bin/python3 Driver_Scripts/extend_isr_edp_with_iri2020.py \
     --isr-file /path/to/your_isr_file.nc \
     --out /path/to/output_dir
 # -> /path/to/output_dir/your_isr_file_extended.nc
@@ -1011,7 +1022,7 @@ for label, result in (("no_boost", result_noboost), ("boosted", result_boosted))
               f"RMSE analysis={outcome.rmse_reduction.rmse_analysis:.3f} TECU")
 ```
 
-Run with `source init_iri2020_env.sh && /opt/anaconda3/bin/python3
+Run with `source Driver_Scripts/init_iri2020_env.sh && /opt/anaconda3/bin/python3
 this_script.py` (Section 1). Expect ~100 minutes for the no-boost run
 and ~85 minutes for the boosted run at this scale (Section 6) -- do a
 smoke test at small `n_ensemble` first if this is your first run against

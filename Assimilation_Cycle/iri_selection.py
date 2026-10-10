@@ -44,7 +44,15 @@ def load_or_build_iri_sample_inputs(cfg: CycleConfig):
     if cfg.iri_sample_inputs_path is not None:
         return IRI_Sample_Inputs.fromPickle(_strip_pkl_suffix(cfg.iri_sample_inputs_path))
 
-    iri = IRI_Sample_Inputs(cfg.center_time_str)
+    # apf107.dat/ig_rz.dat are fetched-artifact files (IRI_Sample_Inputs
+    # downloads/caches them, not source data shipped with the repo) --
+    # keep them under this cycle's own output directory rather than
+    # wherever the process's cwd happens to be (separating source from
+    # execution artifacts). Falls back to the original cwd-relative
+    # behavior when no output_dir is set (e.g. a bare cycle_driver.run_cycle/
+    # style_sweep call with no packaged-run output directory).
+    data_dir = str(cfg.output_dir) if cfg.output_dir is not None else None
+    iri = IRI_Sample_Inputs(cfg.center_time_str, data_dir=data_dir)
     if cfg.iri_sample_inputs_output_path is not None:
         Path(_strip_pkl_suffix(cfg.iri_sample_inputs_output_path)).parent.mkdir(parents=True, exist_ok=True)
         iri.save_to_file(_strip_pkl_suffix(cfg.iri_sample_inputs_output_path))

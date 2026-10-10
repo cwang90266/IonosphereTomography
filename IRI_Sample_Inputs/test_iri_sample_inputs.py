@@ -25,6 +25,7 @@ Run with:  /opt/anaconda3/bin/python3 -m pytest IRI_Sample_Inputs/ -q
 from __future__ import annotations
 
 import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -90,6 +91,67 @@ class TestGetApf107:
         monkeypatch.setattr(M.requests, "get", _fail)
         M.get_apf107()   # must not raise
 
+    def test_data_dir_reads_and_caches_outside_cwd(self, tmp_path, monkeypatch):
+        """``data_dir`` must control where the file is read/cached
+        independent of the process's cwd -- the whole point of the
+        parameter (separating this fetched artifact from wherever the
+        source tree happens to be)."""
+        cwd = tmp_path / "cwd"
+        data_dir = tmp_path / "run_output"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        data_dir.mkdir()
+        (data_dir / "apf107.dat").write_text(
+            _apf107_line(24, 6, 14, [0] * 8, 0, 0, 100.0, 100.0, 100.0) + "\n"
+        )
+
+        def _fail(*a, **k):
+            raise AssertionError("get_apf107 should not hit the network when data_dir has a local cache")
+        monkeypatch.setattr(M.requests, "get", _fail)
+
+        result = M.get_apf107(data_dir=str(data_dir))
+        assert result["yr"] == [2024]
+        assert not (cwd / "apf107.dat").exists()
+
+    def test_data_dir_seeded_from_bundled_reference_when_cache_missing(self, tmp_path, monkeypatch):
+        """The realistic case: a fresh data_dir with no cache of its own
+        yet. Even though the current upstream URL (irimodel.org) works,
+        the bundled reference copy shipped in Default_Data/ is still
+        checked first, used to seed a fresh data_dir before any network
+        attempt -- an older mirror this code used to point at went
+        permanently dead, so this fallback is kept regardless."""
+        data_dir = tmp_path / "does_not_exist_yet"
+        assert not data_dir.exists()
+
+        def _fail(*a, **k):
+            raise AssertionError("should not reach the network -- the bundled reference should satisfy this")
+        monkeypatch.setattr(M.requests, "get", _fail)
+
+        result = M.get_apf107(data_dir=str(data_dir))
+        assert (data_dir / "apf107.dat").exists()
+        assert len(result["yr"]) > 0   # the real bundled reference content, not a tiny fixture
+
+    def test_falls_back_to_network_when_no_cache_and_no_bundled_reference(self, tmp_path, monkeypatch):
+        """If both the per-run cache AND the bundled reference are
+        missing, the (currently non-functional, upstream-dead) network
+        path is still what gets attempted -- preserved for if/when the
+        upstream source is ever restored or repointed."""
+        data_dir = tmp_path / "does_not_exist_yet"
+        monkeypatch.setattr(M, "_bundled_reference_path", lambda filename: str(tmp_path / "no_such_reference_file"))
+
+        def _fake_get(url, timeout=30):
+            class _Resp:
+                text = _apf107_line(24, 6, 14, [0] * 8, 0, 0, 100.0, 100.0, 100.0) + "\n"
+                def raise_for_status(self): pass
+            return _Resp()
+        monkeypatch.setattr(M.requests, "get", _fake_get)
+        monkeypatch.setattr(M.urllib.request, "urlretrieve",
+                             lambda url, local_file: Path(local_file).write_text(_fake_get(url).text))
+
+        result = M.get_apf107(data_dir=str(data_dir))
+        assert (data_dir / "apf107.dat").exists()
+        assert result["yr"] == [2024]
+
 
 class TestGetIgRz:
     @staticmethod
@@ -118,6 +180,33 @@ class TestGetIgRz:
         (tmp_path / "ig_rz.dat").write_text("1,2024\n5,2024,7,2024\n80.0\n")
         with pytest.raises(ValueError):
             M.get_ig_rz()
+
+    def test_data_dir_reads_and_caches_outside_cwd(self, tmp_path, monkeypatch):
+        cwd = tmp_path / "cwd"
+        data_dir = tmp_path / "run_output"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        data_dir.mkdir()
+        self._write_fixture(data_dir, [80.0, 81.0, 82.0], [70.0, 71.0, 72.0])
+
+        def _fail(*a, **k):
+            raise AssertionError("get_ig_rz should not hit the network when data_dir has a local cache")
+        monkeypatch.setattr(M.requests, "get", _fail)
+
+        result = M.get_ig_rz(data_dir=str(data_dir))
+        assert result["ig"] == pytest.approx([80.0, 81.0, 82.0])
+        assert not (cwd / "ig_rz.dat").exists()
+
+    def test_data_dir_seeded_from_bundled_reference_when_cache_missing(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "does_not_exist_yet"
+
+        def _fail(*a, **k):
+            raise AssertionError("should not reach the network -- the bundled reference should satisfy this")
+        monkeypatch.setattr(M.requests, "get", _fail)
+
+        result = M.get_ig_rz(data_dir=str(data_dir))
+        assert (data_dir / "ig_rz.dat").exists()
+        assert len(result["ig"]) > 0   # the real bundled reference content, not a tiny fixture
 
 
 # ===========================================================================
@@ -160,10 +249,43 @@ def fixture_ig_rz() -> dict:
 def make_iri(monkeypatch, fixture_apf107, fixture_ig_rz):
     """Factory: build an IRI_Sample_Inputs via its real __init__, network-free."""
     def _make(date_str: str = "2024-06-15"):
-        monkeypatch.setattr(M, "get_apf107", lambda: fixture_apf107)
-        monkeypatch.setattr(M, "get_ig_rz", lambda: fixture_ig_rz)
+        monkeypatch.setattr(M, "get_apf107", lambda data_dir=None: fixture_apf107)
+        monkeypatch.setattr(M, "get_ig_rz", lambda data_dir=None: fixture_ig_rz)
         return M.IRI_Sample_Inputs(date_str)
     return _make
+
+
+class TestIriSampleInputsDataDir:
+    """Confirms __init__ actually threads data_dir through to both
+    get_apf107/get_ig_rz -- separate from TestGetApf107/TestGetIgRz's own
+    direct-call tests, since __init__ could in principle call either
+    function without passing it along even if the functions themselves
+    support it correctly."""
+
+    def test_init_passes_data_dir_through(self, monkeypatch, fixture_apf107, fixture_ig_rz):
+        seen = {}
+
+        def _get_apf107(data_dir=None):
+            seen["apf107"] = data_dir
+            return fixture_apf107
+
+        def _get_ig_rz(data_dir=None):
+            seen["ig_rz"] = data_dir
+            return fixture_ig_rz
+
+        monkeypatch.setattr(M, "get_apf107", _get_apf107)
+        monkeypatch.setattr(M, "get_ig_rz", _get_ig_rz)
+
+        M.IRI_Sample_Inputs("2024-06-15", data_dir="/some/run/output")
+        assert seen == {"apf107": "/some/run/output", "ig_rz": "/some/run/output"}
+
+    def test_init_default_data_dir_is_none(self, monkeypatch, fixture_apf107, fixture_ig_rz):
+        seen = {}
+        monkeypatch.setattr(M, "get_apf107", lambda data_dir=None: (seen.setdefault("apf107", data_dir), fixture_apf107)[1])
+        monkeypatch.setattr(M, "get_ig_rz", lambda data_dir=None: (seen.setdefault("ig_rz", data_dir), fixture_ig_rz)[1])
+
+        M.IRI_Sample_Inputs("2024-06-15")   # no data_dir given
+        assert seen == {"apf107": None, "ig_rz": None}
 
 
 class TestIRISampleInputsInit:
@@ -254,8 +376,8 @@ class TestQuantileSamples:
             "f107": [100.0, 100.0, 100.0],
             "f107_81": [100.0, 100.0, 100.0], "f107_365": [100.0, 100.0, 100.0],
         }
-        monkeypatch.setattr(M, "get_apf107", lambda: apf107)
-        monkeypatch.setattr(M, "get_ig_rz", lambda: fixture_ig_rz)
+        monkeypatch.setattr(M, "get_apf107", lambda data_dir=None: apf107)
+        monkeypatch.setattr(M, "get_ig_rz", lambda data_dir=None: fixture_ig_rz)
         ds = M.IRI_Sample_Inputs("2024-06-15")   # current_idx_f107 == 1
 
         result = ds.quantileSamples(ap_sample_range=1)   # slice[0:2] -> rows 0,1

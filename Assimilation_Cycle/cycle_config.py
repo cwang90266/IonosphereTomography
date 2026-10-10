@@ -383,7 +383,7 @@ class CycleConfig:
     raises deep inside ``Parameterization.EDP2PCA_1D`` ("density and PCA
     dimensions are inconsistent") -- the same class of gotcha as this
     project's documented 17-vs-82-level and ``radius_km``-vs-
-    ``grid_radius_deg`` mismatches (see ``Assimilation_Cycle/README.md``)."""
+    ``grid_radius_deg`` mismatches (see ``Documentation/Assimilation_Cycle_README.md``)."""
     isr_range_percentile: float = 0.0
     """Passed through to ``isr_comparison``'s cycle-wide-range plots:
     ``0.0`` (default) shades the literal min-max range of ISR profiles
