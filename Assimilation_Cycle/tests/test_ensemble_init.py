@@ -23,15 +23,19 @@ from Assimilation_Cycle import ensemble_init
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _IRI2020_DIR = _REPO_ROOT / "iri2020_new" / "src" / "iri2020"
 _IRI2020_EXE = _IRI2020_DIR / "iri2020_namelist_driver"
-_EDP_FIXTURE = _REPO_ROOT / "TestCode" / "EDPSam_Point.nc"
+_EDP_FIXTURE = _REPO_ROOT / "Default_Data" / "EDPSam_Point.nc"
 
 _has_iri2020 = _IRI2020_EXE.exists() and os.access(_IRI2020_EXE, os.X_OK)
 
 
 @pytest.fixture(autouse=True)
-def _iri2020_env(monkeypatch):
+def _iri2020_env(monkeypatch, tmp_path):
     if _has_iri2020:
         monkeypatch.setenv("IRI2020_PATH", str(_IRI2020_DIR))
+    # cfg.output_dir is unset in these tests, so get_apf107/get_ig_rz fall
+    # back to cwd-relative paths -- chdir to tmp_path so that fallback
+    # can't write apf107.dat/ig_rz.dat into the real repo root.
+    monkeypatch.chdir(tmp_path)
 
 
 def _make_cfg(**overrides) -> CycleConfig:

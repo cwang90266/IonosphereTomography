@@ -12,13 +12,13 @@ machine/build; see the printed timing estimate before it starts). Stage 2
 and does the (fast) parameterization evaluation, so this only needs to be
 rerun when the input ensemble or grid changes.
 
-Requires the compiled IRI2020 driver: `source init_iri2020_env.sh` from this
-directory before running this script (sets IRI2020_PATH).
+Requires the compiled IRI2020 driver: `source Driver_Scripts/init_iri2020_env.sh`
+from the repo root before running this script (sets IRI2020_PATH).
 
 Usage
 -----
-    source init_iri2020_env.sh
-    python3 end_to_end_regional_test_generate.py \\
+    source Driver_Scripts/init_iri2020_env.sh
+    python3 Driver_Scripts/end_to_end_regional_test_generate.py \\
         --epoch 2025-07-01 --nsample 2000 \\
         --lat 50 --lon -178 --radius 30 --dlat 2.5 \\
         --alt-min 60 --alt-max 900 --alt-step 10 \\
@@ -34,8 +34,9 @@ import time
 from pathlib import Path
 
 _THIS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_THIS_DIR / "IRI_Sample_Inputs"))
-sys.path.insert(0, str(_THIS_DIR / "EDPSamples"))
+_REPO_ROOT = _THIS_DIR.parent
+sys.path.insert(0, str(_REPO_ROOT / "IRI_Sample_Inputs"))
+sys.path.insert(0, str(_REPO_ROOT / "EDPSamples"))
 
 import numpy as np
 import matplotlib
@@ -80,7 +81,9 @@ def main():
     np.random.seed(args.seed)
 
     # -- Stage 1a: generate the driving-parameter ensemble ----------------
-    iri_in = IRI_Sample_Inputs(args.epoch)
+    # data_dir=args.out keeps the fetched apf107.dat/ig_rz.dat cache files
+    # under this run's own output directory, not the source tree.
+    iri_in = IRI_Sample_Inputs(args.epoch, data_dir=args.out)
     samples = iri_in.randomSamples(
         hour_sample_range=args.hour_range,
         f107_sample_range=args.f107_range,

@@ -4,7 +4,7 @@ End-to-end OSSE recovery check against *real* IRI-sampled data (plan
 Section 5.7's "per-style sanity cycle" + "OSSE-based recovery check",
 run for real rather than on a toy operator).
 
-Uses ``TestCode/EDPSam_Point.nc`` -- an existing, already-generated
+Uses ``Default_Data/EDPSam_Point.nc`` -- an existing, already-generated
 EDPSamples file (90 heights x 1 geo column x 2000 IRI-drawn samples) --
 so this needs no IRI model run, only the repo's existing test data.
 Ray geometry (``podTc2_data``) is synthesized as a handful of vertical
@@ -39,7 +39,7 @@ from Ensemble_Kalman_Engine.analysis_engine import AnalysisEngine, AnalysisConfi
 from Ensemble_Kalman_Engine.osse import generate_osse_observation, recovery_error
 from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
 
-_DATA_FILE = Path(__file__).resolve().parents[2] / "TestCode" / "EDPSam_Point.nc"
+_DATA_FILE = Path(__file__).resolve().parents[2] / "Default_Data" / "EDPSam_Point.nc"
 
 pytestmark = pytest.mark.skipif(
     not _DATA_FILE.exists(), reason=f"real test data not found: {_DATA_FILE}"

@@ -41,8 +41,8 @@ development history for the full table across N_PCA_MODES in {3,4,5,8,10,
 
 Usage
 -----
-    source init_iri2020_env.sh
-    /opt/anaconda3/bin/python3 extend_isr_edp_with_iri2020.py
+    source Driver_Scripts/init_iri2020_env.sh
+    /opt/anaconda3/bin/python3 Driver_Scripts/extend_isr_edp_with_iri2020.py
 """
 from __future__ import annotations
 
@@ -53,8 +53,9 @@ import time
 from pathlib import Path
 
 _THIS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_THIS_DIR / "IRI_Sample_Inputs"))
-sys.path.insert(0, str(_THIS_DIR / "EDPSamples"))
+_REPO_ROOT = _THIS_DIR.parent
+sys.path.insert(0, str(_REPO_ROOT / "IRI_Sample_Inputs"))
+sys.path.insert(0, str(_REPO_ROOT / "EDPSamples"))
 
 import numpy as np
 import pandas as pd
@@ -152,7 +153,9 @@ def build_iri_library(center_time: pd.Timestamp, altitude_grid: np.ndarray, args
     from the input ISR file's own attrs, not the module-level Tromso
     defaults, whenever the file provides them. Returns (log10(density)
     floored, shape (n_height, nsample); sampling_parameters)."""
-    iri_in = IRI_Sample_Inputs(center_time.isoformat())
+    # data_dir=args.out keeps the fetched apf107.dat/ig_rz.dat cache files
+    # under this script's own output directory, not the source tree.
+    iri_in = IRI_Sample_Inputs(center_time.isoformat(), data_dir=args.out)
     sampling_parameters = iri_in.randomSamples(
         hour_sample_range=args.hour_range,
         f107_sample_range=args.f107_range,

@@ -14,8 +14,45 @@ import numpy as np
 import pandas as pd
 from dateutil.parser import parse
 import pickle
+import os
+import shutil
 
-def get_apf107():
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_MODULE_DIR)
+_DEFAULT_DATA_DIR = os.path.join(_REPO_ROOT, "Default_Data")
+
+
+def _bundled_reference_path(filename: str) -> str:
+    """Path to the repository's bundled reference copy of ``filename``
+    (``apf107.dat``/``ig_rz.dat``, kept under ``Default_Data/`` alongside
+    this project's other default/fallback data) -- a separate, named
+    function so tests can monkeypatch it to force the network-fetch path
+    to actually run.
+
+    These files are nominally "fetched artifacts" (``get_apf107``/
+    ``get_ig_rz`` download them fresh from ``irimodel.org/indices/``), but
+    an older mirror (``chain-new.chain-project.net``) this code used to
+    point at went permanently dead (HTTP 404, confirmed directly), so a
+    bundled reference copy is kept as an offline fallback/fast seed that
+    doesn't depend on that upstream staying reachable. It is checked only
+    after a run's own ``data_dir`` cache; a fresh run still gets its own
+    materialized copy under its own output directory, not this one.
+    """
+    return os.path.join(_DEFAULT_DATA_DIR, filename)
+
+
+def _ensure_local_file(local_file: str, filename: str) -> None:
+    """If ``local_file`` doesn't exist yet, seed it from the bundled
+    reference copy (see ``_bundled_reference_path``) before falling back
+    to a network fetch -- called by both ``get_apf107``/``get_ig_rz``."""
+    if os.path.isfile(local_file):
+        return
+    reference = _bundled_reference_path(filename)
+    if os.path.isfile(reference) and os.path.abspath(reference) != os.path.abspath(local_file):
+        shutil.copy(reference, local_file)
+
+
+def get_apf107(data_dir: str | None = None):
     """
     Get updated data file apf107.dat
 
@@ -30,15 +67,22 @@ def get_apf107():
 
     Parameters
     ----------
-    None
+    data_dir : str, optional
+        Directory to read/cache ``apf107.dat`` in -- separates this
+        fetched-artifact file from the source tree (e.g. pass a cycle's
+        own output directory). ``None`` (default): the current working
+        directory, the original (pre-this-parameter) behavior.
 
     Returns apf107
     -------
 
     """
-    import os
-    local_file = "apf107.dat"
-    url = "https://chain-new.chain-project.net/echaim_downloads/apf107.dat"
+    local_file = os.path.join(data_dir, "apf107.dat") if data_dir else "apf107.dat"
+    url = "https://irimodel.org/indices/apf107.dat"
+
+    if data_dir:
+        os.makedirs(data_dir, exist_ok=True)
+    _ensure_local_file(local_file, "apf107.dat")
 
     if os.path.isfile(local_file):
         with open(local_file, "r") as fh:
@@ -82,13 +126,16 @@ def get_apf107():
 
     return apf107
 
-def get_ig_rz():
+def get_ig_rz(data_dir: str | None = None):
     """
     Get updated data file ig_rz.dat
 
     Parameters
     ----------
-    None
+    data_dir : str, optional
+        Directory to read/cache ``ig_rz.dat`` in -- same convention as
+        ``get_apf107``'s ``data_dir``. ``None`` (default): the current
+        working directory, the original behavior.
 
     Returns
     -------
@@ -96,13 +143,16 @@ def get_ig_rz():
         Dictionary containing parsed IG/Rz data.
     """
 
-    import os
     revision_date = []
     start_end_date = []
     ig = []
     rz = []
-    local_file = "ig_rz.dat"
-    url = "https://chain-new.chain-project.net/echaim_downloads/ig_rz.dat"
+    local_file = os.path.join(data_dir, "ig_rz.dat") if data_dir else "ig_rz.dat"
+    url = "https://irimodel.org/indices/ig_rz.dat"
+
+    if data_dir:
+        os.makedirs(data_dir, exist_ok=True)
+    _ensure_local_file(local_file, "ig_rz.dat")
 
     if os.path.isfile(local_file):
         with open(local_file, "r") as fh:
@@ -254,7 +304,15 @@ def show_iri_inputs(apf107,ig_rz):
     fig.show()
     
 class IRI_Sample_Inputs:
-    def __init__(self, DateTime_str: str):
+    def __init__(self, DateTime_str: str, data_dir: str | None = None):
+        """
+        ``data_dir``, if given, is where ``apf107.dat``/``ig_rz.dat`` are
+        read from/cached to (``get_apf107``/``get_ig_rz``) -- keeps these
+        fetched-artifact files out of the source tree, e.g. pass a
+        cycle's own output directory. ``None`` (default): current working
+        directory, the original behavior.
+        """
+        self._data_dir = data_dir
         DateTime_int = parse(DateTime_str)
         self.year = DateTime_int.year
         self.month = DateTime_int.month
@@ -274,8 +332,8 @@ class IRI_Sample_Inputs:
         else:
             self.second = 0
             
-        self.apf107 = get_apf107()
-        self.ig_rz = get_ig_rz()
+        self.apf107 = get_apf107(data_dir)
+        self.ig_rz = get_ig_rz(data_dir)
         
         # Identify the indice of the current time in the array apf107 and ig_rz
         datenum_f107 = [datetime.date(int(yy), int(mm), int(dd)) for yy, mm, dd in 

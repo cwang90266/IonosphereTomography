@@ -221,7 +221,7 @@ def get_IRI2020_EDP(DateTime: str,
             "'iri2020_namelist_driver' executable and its 'data/' "
             "subfolder. From the IonosphereTomography repository's main "
             "folder, run:\n"
-            "    source init_iri2020_env.sh\n"
+            "    source Driver_Scripts/init_iri2020_env.sh\n"
             "(bash/zsh; must be sourced, not executed, so the variable "
             "reaches your shell) or export IRI2020_PATH yourself."
         )

@@ -18,3 +18,9 @@ __pycache__/
 *.pyc
 ~$*
 _stale_locks/
+
+# Fetched-artifact cache files (IRI_Sample_Inputs.get_apf107/get_ig_rz) --
+# should live under a run's own output directory (data_dir=), never the
+# source tree; ignored here as a backstop for the cwd-relative fallback.
+/apf107.dat
+/ig_rz.dat

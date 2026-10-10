@@ -23,7 +23,7 @@ in POD/EOF analysis.
 
 Usage
 -----
-    python3 end_to_end_regional_test_analyze.py \\
+    python3 Driver_Scripts/end_to_end_regional_test_analyze.py \\
         --nc /path/to/regional_edps_2000samples.nc \\
         --out /Users/cwang/Documents/Consulting/PlanetIQ/Runs/Tomography_Test/Claude_Test \\
         --pca-linear-threshold 1e-3 --pca-log-threshold 1e-2 \\
@@ -36,8 +36,9 @@ import sys
 from pathlib import Path
 
 _THIS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_THIS_DIR / "EDPSamples"))
-sys.path.insert(0, str(_THIS_DIR / "Parameterization"))
+_REPO_ROOT = _THIS_DIR.parent
+sys.path.insert(0, str(_REPO_ROOT / "EDPSamples"))
+sys.path.insert(0, str(_REPO_ROOT / "Parameterization"))
 
 import numpy as np
 import matplotlib

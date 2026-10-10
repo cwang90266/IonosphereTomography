@@ -15,7 +15,7 @@ rest of this package stays importable without those (heavier,
 cartopy/xarray-dependent) modules on the path.
 
 Status: exercised end-to-end in ``tests/test_end_to_end_real_data.py``
-against a real, existing EDPSamples file (``TestCode/EDPSam_Point.nc``,
+against a real, existing EDPSamples file (``Default_Data/EDPSam_Point.nc``,
 IRI-drawn) with a synthesized (vertical-path) ray geometry -- real orbit
 ephemeris was not available in this session, so that geometry is a stand-in
 for genuine LEO/GNSS occultation paths, not a claim that RO-realistic
