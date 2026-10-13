@@ -256,12 +256,40 @@ def get_IRI2020_EDP(DateTime: str,
             f"{exe} {namelist_filename} {IRI_output_filename}"
         )
 
+        # result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=tmpdir)
+        # if result.returncode != 0 or not os.path.exists(out_path):
+        #     raise RuntimeError(
+        #         f"IRI2020 failed (rc={result.returncode}):\n"
+        #         f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+        #     )
+
+        # return read_IRI2020_binary_output(out_path)
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=tmpdir)
         if result.returncode != 0 or not os.path.exists(out_path):
             raise RuntimeError(
                 f"IRI2020 failed (rc={result.returncode}):\n"
                 f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
             )
+
+        # Temporary debugging copies for Mac/Linux IRI comparison
+        import shutil
+
+        debug_dir = os.path.expanduser(
+            "~/Desktop/IonosphereTomography-pin_dev/iri_debug"
+        )
+        os.makedirs(debug_dir, exist_ok=True)
+
+        shutil.copy2(
+            nml_path,
+            os.path.join(debug_dir, "IRI2020_input_namelist_linux.nml")
+        )
+
+        shutil.copy2(
+            out_path,
+            os.path.join(debug_dir, "IRI_output_linux.dat")
+        )
+
+        print("Saved IRI debug files to:", debug_dir)
 
         return read_IRI2020_binary_output(out_path)
     
@@ -1835,7 +1863,11 @@ class EDPSamples(xr.Dataset):
         ax.add_feature(cfeature.OCEAN, facecolor='lightblue', zorder=0)
         ax.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, zorder=1)
         ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5, zorder=1)
-        ax.gridlines(draw_labels=True, alpha=0.3)
+
+        # Avoid Cartopy/Shapely Gridliner failure on polar stereographic maps.
+        # High-latitude Regional grids may also auto-switch to polar projection.
+        if not use_polar_projection:
+            ax.gridlines(draw_labels=True, alpha=0.3)
 
         if geo_type == "Global":
             ax.set_global()

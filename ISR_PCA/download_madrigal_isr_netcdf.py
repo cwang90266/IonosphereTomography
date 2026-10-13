@@ -41,7 +41,7 @@ USER_FULLNAME = "Pin-Hsuan Cheng"
 USER_EMAIL = "pich8403@colorado.edu"
 USER_AFFILIATION = "PlanetiQ"
 
-BASE_DIR = Path("/home/pin/Desktop/tomography_project/Data/ISR_Data/")
+BASE_DIR = Path("/Users/User2/Desktop/PlanetiQ/ISR_PCA/data")
 
 # Number of attempts for each individual file.
 MAX_ATTEMPTS = 3
@@ -398,6 +398,8 @@ def main():
     BASE_DIR.mkdir(parents=True, exist_ok=True)
 
     failed_rows = []
+
+    # Change this list if you only want a subset, e.g. ["TRO", "SVL"]
     stations_to_run = ["TRO", "SVL", "MIL"]
 
     for station_key in stations_to_run:
