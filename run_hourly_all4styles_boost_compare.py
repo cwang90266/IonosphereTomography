@@ -182,6 +182,8 @@ DEFAULT_HYPER_PARAMS = {
     "PCA_1D_10ex": {"retaining_threshold": 0.99999},
 }
 
+BOOST_AMPLITUDE = 0.5
+
 RUN_CONDITIONS = [
     {
         "name": "no_boost",
@@ -192,8 +194,8 @@ RUN_CONDITIONS = [
     },
     {
         "name": "boosted",
-        "label": "Boost 0.5",
-        "diagonal_boost_amplitude": 0.5,
+        "label": f"Boost {BOOST_AMPLITUDE}",
+        "diagonal_boost_amplitude": BOOST_AMPLITUDE,
         "diagonal_boost_log_space": True,
         "diagonal_boost_rng_seed": 888,
     },
@@ -206,9 +208,22 @@ ROI_RADIUS_KM = 2000.0
 GRID_RADIUS_DEG = 18.0
 
 N_ENSEMBLE = 2000
-MAX_TEC_PER_BATCH = 100_000      
+MAX_TEC_PER_BATCH = 100_000
 OBS_SIGMA_TECU = 3.0
 ANALYSIS_RNG_SEED = 777
+
+# Diagonal covariance boost configuration.
+
+# Altitude taper:
+#   <= 400 km : 0.50
+#      500 km : 0.35
+#      600 km : 0.20
+#   >= 700 km : 0.05
+#
+# Between 400 and 700 km the effective amplitude decreases linearly.
+BOOST_TAPER_START_KM = 400.0
+BOOST_TAPER_END_KM = 700.0
+BOOST_TAPER_FLOOR = 0.1
 
 IRI_SPREAD_KWARGS = {
     "hour_sample_range": 3,
@@ -548,6 +563,9 @@ def make_run_cfg(
         diagonal_boost_amplitude=condition["diagonal_boost_amplitude"],
         diagonal_boost_log_space=condition["diagonal_boost_log_space"],
         diagonal_boost_rng_seed=condition["diagonal_boost_rng_seed"],
+        diagonal_boost_taper_start_km=BOOST_TAPER_START_KM,
+        diagonal_boost_taper_end_km=BOOST_TAPER_END_KM,
+        diagonal_boost_taper_floor=BOOST_TAPER_FLOOR,
         inter_batch_inflation_factor=None,
     )
 
@@ -1271,7 +1289,16 @@ def main():
                     print("IRI ensemble: fresh hourly IRI2020 build")
                 else:
                     print("IRI ensemble: reuse exact no-boost hourly ensemble")
-                    print("Boost: amplitude=0.5, log10-density space, seed=888")
+                    print(
+                        f"Boost: nominal amplitude={BOOST_AMPLITUDE}, "
+                        "log10-density space, seed=888; "
+                        f"altitude taper <={BOOST_TAPER_START_KM:.0f} km: "
+                        f"{BOOST_AMPLITUDE:.2f}, "
+                        f"500 km: {BOOST_AMPLITUDE * (1.0 - 0.9 * (500.0 - BOOST_TAPER_START_KM) / (BOOST_TAPER_END_KM - BOOST_TAPER_START_KM)):.2f}, "
+                        f"600 km: {BOOST_AMPLITUDE * (1.0 - 0.9 * (600.0 - BOOST_TAPER_START_KM) / (BOOST_TAPER_END_KM - BOOST_TAPER_START_KM)):.2f}, "
+                        f">={BOOST_TAPER_END_KM:.0f} km: "
+                        f"{BOOST_AMPLITUDE * BOOST_TAPER_FLOOR:.2f}"
+                    )
                     if base_edp_path is None:
                         raise RuntimeError(
                             "Boosted run requested before no-boost EDP path exists"
@@ -1462,12 +1489,16 @@ def main():
                     "boost_amplitude": condition[
                         "diagonal_boost_amplitude"
                     ],
+                    "boost_nominal_amplitude": BOOST_AMPLITUDE,
                     "boost_log_space": condition[
                         "diagonal_boost_log_space"
                     ],
                     "boost_rng_seed": condition[
                         "diagonal_boost_rng_seed"
                     ],
+                    "boost_taper_start_km": BOOST_TAPER_START_KM,
+                    "boost_taper_end_km": BOOST_TAPER_END_KM,
+                    "boost_taper_floor": BOOST_TAPER_FLOOR,
                     "message": "",
                 }
                 hour_summary_rows.append(condition_row)
