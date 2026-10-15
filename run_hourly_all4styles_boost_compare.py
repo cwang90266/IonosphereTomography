@@ -132,7 +132,7 @@ import pandas as pd
 # Repository / fixed project paths
 # =============================================================================
 
-REPO = Path("/home/pin/Desktop/IonosphereTomography-pin_dev")
+REPO = Path("/home/pin/Desktop/IonosphereTomography-pin_dev") # ===Edit here===
 
 for _p in (
     REPO,
@@ -151,8 +151,8 @@ from Assimilation_Cycle.isr_comparison import load_isr_dataset, nearest_isr_prof
 from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
 
 
-RO_ROOT = Path("/home/pin/Desktop/tomography_project/piq_data/podTc2")
-ISR_DIR = REPO / "ISR_PCA" / "PCA_data"
+RO_ROOT = Path("/home/pin/Desktop/tomography_project/piq_data/podTc2") # ===Edit here===
+ISR_DIR = Path("/home/pin/Desktop/ISR_PCA/PCA_data")  # ===Edit here===
 TRO_ISR_FILE = ISR_DIR / "TROISR2025_nonan.nc"
 SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
 
@@ -161,7 +161,7 @@ SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
 TRO_ISR_EXTENDED_FILE = ISR_DIR / "TROISR2025_nonan_extended.nc"
 TRO_ISR_PCA_BASIS_FILE = ISR_DIR / "TROISR2025_nonan_pca_basis.nc"
 
-OUTPUT_ROOT = REPO / "test_output_anchor_pca_multibatch"
+OUTPUT_ROOT = Path("/home/pin/Desktop/tomography_output/test_output_anchor_pca_multibatch") # ===Edit here===
 
 DEFAULT_STYLES = [
     "ANCHOR",
@@ -202,12 +202,12 @@ RUN_CONDITIONS = [
 # Keep the same Tromso-centered tomography region used in the current run_test.
 CENTER_LAT = 69.6
 CENTER_LON = 19.2
-ROI_RADIUS_KM = 2500.0
+ROI_RADIUS_KM = 2000.0
 GRID_RADIUS_DEG = 18.0
 
 N_ENSEMBLE = 2000
-MAX_TEC_PER_BATCH = 100_000       # intentionally one giant batch / final-result mode
-OBS_SIGMA_TECU = 1.0
+MAX_TEC_PER_BATCH = 100_000      
+OBS_SIGMA_TECU = 3.0
 ANALYSIS_RNG_SEED = 777
 
 IRI_SPREAD_KWARGS = {
