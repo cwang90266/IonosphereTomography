@@ -110,6 +110,9 @@ TRO file. An explicit --isr-pca-basis can still be supplied as an override.
 
 from __future__ import annotations
 
+# This hourly wrapper does not create/use an iri_debug directory. Current
+# EDPSamples IRI execution uses tempfile.TemporaryDirectory() for scratch files.
+
 import argparse
 import csv
 import gc
@@ -146,8 +149,13 @@ for _p in (
 from Assimilation_Cycle.cycle_config import CycleConfig, default_altitude_grid
 from Assimilation_Cycle.package_run import run_package
 from Assimilation_Cycle import ensemble_init, observation_stream, output
+from Assimilation_Cycle import cycle_driver as cycle_driver_module
+from Assimilation_Cycle import package_run as package_run_module
+from Assimilation_Cycle.diagonal_boost import apply_diagonal_boost
+from Parameterization import Parameterized_EDPSamples
 from Assimilation_Cycle import isr_pca_basis as ipb
 from Assimilation_Cycle.isr_comparison import load_isr_dataset, nearest_isr_profile
+from Ensemble_Kalman_Engine import EnsembleState
 from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
 
 
@@ -161,7 +169,7 @@ SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
 TRO_ISR_EXTENDED_FILE = ISR_DIR / "TROISR2025_nonan_extended.nc"
 TRO_ISR_PCA_BASIS_FILE = ISR_DIR / "TROISR2025_nonan_pca_basis.nc"
 
-OUTPUT_ROOT = Path("/home/pin/Desktop/tomography_output/test_output_anchor_pca_multibatch") # ===Edit here===
+OUTPUT_ROOT = Path("/home/pin/Desktop/tomography_output/") # ===Edit here===
 
 DEFAULT_STYLES = [
     "ANCHOR",
@@ -485,6 +493,95 @@ def build_hyper_params_by_style(styles: list[str], basis_path: Path | None) -> d
     return out
 
 
+
+class _NoArtifactRunContext:
+    """
+    Hourly-only runtime patching for run_package.
+
+    Suppresses these netCDF artifacts without editing package_run.py:
+      - *_edp_samples.nc
+      - *_parameterized.nc
+      - *_ensembles/ensemble_batch_*.nc
+
+    It also captures the exact in-memory Parameterized_EDPSamples objects so
+    downstream ISR validation can decode without reopening *_parameterized.nc.
+    """
+
+    def __init__(self, *, base_edp_samples=None):
+        self.base_edp_samples = base_edp_samples
+        self.parameterizations = {}
+
+        self._orig_load_or_build = None
+        self._orig_save_parameterized = None
+        self._orig_save_ensemble = None
+
+    def __enter__(self):
+        self._orig_load_or_build = ensemble_init.load_or_build_edp_samples
+        self._orig_save_parameterized = Parameterized_EDPSamples.saveNetCDF
+        self._orig_save_ensemble = cycle_driver_module.save_ensemble_netcdf
+
+        base_edp_samples = self.base_edp_samples
+        orig_load = self._orig_load_or_build
+        captured = self.parameterizations
+
+        def _load_or_build_no_edp_nc(cfg):
+            # Boosted condition: reuse the exact no-boost base ensemble in memory,
+            # then apply the configured boost exactly as ensemble_init normally does.
+            if base_edp_samples is not None:
+                amplitude = cfg.diagonal_boost_amplitude
+                if amplitude in (None, 0):
+                    return base_edp_samples
+
+                return apply_diagonal_boost(
+                    base_edp_samples,
+                    amplitude=amplitude,
+                    vertical_scale_km=cfg.diagonal_boost_vertical_scale_km,
+                    horizontal_scale_km=cfg.diagonal_boost_horizontal_scale_km,
+                    rng=np.random.default_rng(cfg.diagonal_boost_rng_seed),
+                    log_space=cfg.diagonal_boost_log_space,
+                    taper_start_km=cfg.diagonal_boost_taper_start_km,
+                    taper_end_km=cfg.diagonal_boost_taper_end_km,
+                    taper_floor=cfg.diagonal_boost_taper_floor,
+                )
+
+            # No-boost condition: build fresh hourly IRI as usual, but clear only
+            # the EDP output path so *_edp_samples.nc is never written.
+            return orig_load(replace(cfg, edp_samples_output_path=None))
+
+        def _capture_parameterized_no_nc(pes, path):
+            # Capture the exact object package_run just constructed, but do not
+            # write *_parameterized.nc.
+            style = getattr(pes, "style", None)
+            if style is None:
+                # Fallback: infer style from the path suffix.
+                name = Path(path).name
+                for candidate in DEFAULT_STYLES:
+                    if f"_{candidate}_parameterized.nc" in name:
+                        style = candidate
+                        break
+            if style is not None:
+                captured[str(style)] = pes
+            return None
+
+        def _skip_ensemble_nc(*args, **kwargs):
+            # No file and therefore no *_ensembles directory created by saver.
+            return None
+
+        # package_run_module.ensemble_init is the same module object, so patching
+        # ensemble_init here affects run_package's call too.
+        ensemble_init.load_or_build_edp_samples = _load_or_build_no_edp_nc
+        Parameterized_EDPSamples.saveNetCDF = _capture_parameterized_no_nc
+        cycle_driver_module.save_ensemble_netcdf = _skip_ensemble_nc
+
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        ensemble_init.load_or_build_edp_samples = self._orig_load_or_build
+        Parameterized_EDPSamples.saveNetCDF = self._orig_save_parameterized
+        cycle_driver_module.save_ensemble_netcdf = self._orig_save_ensemble
+        return False
+
+
 def make_precheck_cfg(
     start: datetime,
     end: datetime,
@@ -542,9 +639,9 @@ def make_run_cfg(
         grid_margin_km=0.0,
         n_ensemble=n_ensemble,
         iri_spread_kwargs=dict(IRI_SPREAD_KWARGS),
-        edp_samples_path=(
-            str(base_edp_samples_path) if base_edp_samples_path is not None else None
-        ),
+        # Hourly wrapper keeps the no-boost base EDP in memory; no EDP netCDF.
+        edp_samples_path=None,
+        edp_samples_output_path=None,
         styles=list(styles),
         hyper_params_by_style=hyper_params_by_style,
         isr_pca_basis_path=(
@@ -576,30 +673,19 @@ def decode_profiles_at_station(
     style: str,
     lat: float,
     lon: float,
+    parameterizations: dict,
 ):
     """
-    Reopen the parameterized file saved by run_package so we can decode the
-    returned final ensemble without re-fitting ANCHOR or re-fitting PCA.
-
-    Returns forecast_profile, analysis_profile with shape (n_height, n_members).
+    Decode using the exact in-memory parameterization captured during
+    run_package. No *_parameterized.nc file is written or reopened.
     """
-    parameterized_path = (
-        Path(cfg.output_dir) / f"{cfg.label}_{style}_parameterized.nc"
-    )
-    if not parameterized_path.exists():
-        raise FileNotFoundError(parameterized_path)
+    if style not in parameterizations:
+        raise KeyError(f"Missing captured in-memory parameterization for {style}")
 
+    pes = parameterizations[style]
     style_hyper = cfg.hyper_params_by_style.get(style)
-    cfg_reload = replace(
-        cfg,
-        style=style,
-        hyper_params=style_hyper,
-        parameterized_edp_samples_path=str(parameterized_path),
-        # Prevent any accidental fresh raw-EDP path from being preferred.
-        edp_samples_path=None,
-    )
-
-    ensemble_prior, edp_reload, parameterization = ensemble_init.build(cfg_reload)
+    ensemble_prior = EnsembleState.from_parameterized_edp_samples(pes)
+    edp_reload = result.edp_samples
 
     cycle_result = result.results_by_style[style][0]
     if not result.batches:
@@ -608,12 +694,11 @@ def decode_profiles_at_station(
     driver = GeneralEnKFDriver(style=style, hyper_params=style_hyper)
     obs_op = driver.build_observation_operator(
         edp_reload,
-        parameterization,
+        pes.Parameterization,
         ensemble_prior.param_shape,
         result.batches[0].podTc2_data,
     )
 
-    # Decode one ensemble at a time to keep peak memory lower.
     decoded_forecast = obs_op.decode(ensemble_prior.to_param_shape())
     forecast_profile = output._interpolate_field_at_latlon(
         edp_reload, decoded_forecast, lat, lon
@@ -1255,7 +1340,7 @@ def main():
             #      B) boosted : SAME saved IRI ensemble + boost
             #    Each package run contains all four styles.
             # -------------------------------------------------------------
-            base_edp_path = None
+            base_edp_samples = None
 
             for condition in RUN_CONDITIONS:
                 condition_name = condition["name"]
@@ -1279,7 +1364,6 @@ def main():
                     hyper_params_by_style,
                     isr_pca_basis_path,
                     condition,
-                    base_edp_samples_path=base_edp_path,
                 )
 
                 print("\n" + "-" * 96)
@@ -1299,13 +1383,20 @@ def main():
                         f">={BOOST_TAPER_END_KM:.0f} km: "
                         f"{BOOST_AMPLITUDE * BOOST_TAPER_FLOOR:.2f}"
                     )
-                    if base_edp_path is None:
+                    if base_edp_samples is None:
                         raise RuntimeError(
-                            "Boosted run requested before no-boost EDP path exists"
+                            "Boosted run requested before no-boost in-memory EDP exists"
                         )
 
                 condition_t0 = time.perf_counter()
-                result = run_package(cfg)
+                with _NoArtifactRunContext(
+                    base_edp_samples=(
+                        base_edp_samples if condition_name == "boosted" else None
+                    )
+                ) as no_artifacts:
+                    result = run_package(cfg)
+                    in_memory_parameterizations = dict(no_artifacts.parameterizations)
+
                 condition_elapsed = time.perf_counter() - condition_t0
 
                 n_ro_used = len(unique_ro_entries(result.batches))
@@ -1316,15 +1407,8 @@ def main():
                 )
 
                 if condition_name == "no_boost":
-                    base_edp_path = (
-                        condition_dir / f"{label}_edp_samples.nc"
-                    )
-                    if not base_edp_path.is_file():
-                        raise FileNotFoundError(
-                            "No-boost run finished but its base EDP ensemble "
-                            f"was not found: {base_edp_path}"
-                        )
-                    print("Base EDP saved for boosted A/B run:", base_edp_path)
+                    base_edp_samples = result.edp_samples
+                    print("Base EDP retained in memory for boosted A/B run")
 
                 # ---------------------------------------------------------
                 # 3. Extra TRO/SVL validation for each style in this
@@ -1338,10 +1422,12 @@ def main():
                     print("Creating TRO+SVL validation:", display)
 
                     alt_tro, f_tro, a_tro = decode_profiles_at_station(
-                        cfg, result, style, tro.station.lat, tro.station.lon
+                        cfg, result, style, tro.station.lat, tro.station.lon,
+                        in_memory_parameterizations,
                     )
                     alt_svl, f_svl, a_svl = decode_profiles_at_station(
-                        cfg, result, style, svl.station.lat, svl.station.lon
+                        cfg, result, style, svl.station.lat, svl.station.lon,
+                        in_memory_parameterizations,
                     )
 
                     if not np.array_equal(alt_tro, alt_svl):
@@ -1482,10 +1568,7 @@ def main():
                     "n_tec_rays": n_tec_used,
                     "elapsed_seconds": condition_elapsed,
                     "output_dir": str(condition_dir),
-                    "base_edp_samples_path": (
-                        str(base_edp_path)
-                        if base_edp_path is not None else ""
-                    ),
+                    "base_edp_samples_path": "",
                     "boost_amplitude": condition[
                         "diagonal_boost_amplitude"
                     ],
