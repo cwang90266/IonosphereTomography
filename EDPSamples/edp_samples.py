@@ -271,25 +271,25 @@ def get_IRI2020_EDP(DateTime: str,
                 f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
             )
 
-        # Temporary debugging copies for Mac/Linux IRI comparison
-        import shutil
+        # # Temporary debugging copies for Mac/Linux IRI comparison
+        # import shutil
 
-        debug_dir = os.path.expanduser(
-            "~/Desktop/IonosphereTomography-pin_dev/iri_debug"
-        )
-        os.makedirs(debug_dir, exist_ok=True)
+        # debug_dir = os.path.expanduser(
+        #     "~/Desktop/IonosphereTomography-pin_dev/iri_debug"
+        # )
+        # os.makedirs(debug_dir, exist_ok=True)
 
-        shutil.copy2(
-            nml_path,
-            os.path.join(debug_dir, "IRI2020_input_namelist_linux.nml")
-        )
+        # shutil.copy2(
+        #     nml_path,
+        #     os.path.join(debug_dir, "IRI2020_input_namelist_linux.nml")
+        # )
 
-        shutil.copy2(
-            out_path,
-            os.path.join(debug_dir, "IRI_output_linux.dat")
-        )
+        # shutil.copy2(
+        #     out_path,
+        #     os.path.join(debug_dir, "IRI_output_linux.dat")
+        # )
 
-        print("Saved IRI debug files to:", debug_dir)
+        # print("Saved IRI debug files to:", debug_dir)
 
         return read_IRI2020_binary_output(out_path)
     
@@ -1871,13 +1871,32 @@ class EDPSamples(xr.Dataset):
 
         if geo_type == "Global":
             ax.set_global()
-        elif use_polar_projection:
-            min_lat_abs = abs(self.attrs["minLat"]) if geo_type == "Polar" else float(np.abs(lat).min())
+        elif use_polar_projection and geo_type == "Polar":
+            # A true "Polar" cap (genPolarArea) always spans the full 360
+            # degrees of longitude around the pole by construction, so
+            # framing on minLat alone (no longitude bound needed) is
+            # correct here.
+            min_lat_abs = abs(self.attrs["minLat"])
             pad = 5.0
             if is_north_polar:
                 ax.set_extent([-180, 180, min_lat_abs - pad, 90], ccrs.PlateCarree())
             else:
                 ax.set_extent([-180, 180, -90, -min_lat_abs + pad], ccrs.PlateCarree())
+        elif use_polar_projection:
+            # Auto-switched (e.g. a high-latitude "Regional" grid, caught
+            # 2026-09-30 from a user report): unlike a true "Polar" cap,
+            # this grid is a small localized region, not circumpolar --
+            # framing it on the full longitude range above leaves the
+            # actual modeling area occupying only a small corner of the
+            # plot. Frame tightly around the points' own projected (x, y)
+            # bounding box instead, same tight-fit principle as the Plate
+            # Carree branch below (padded in projected meters, not
+            # degrees, since that's this branch's native unit).
+            xy = proj.transform_points(ccrs.PlateCarree(), lon, lat)[:, :2]
+            x, y = xy[:, 0], xy[:, 1]
+            pad_x = max(50_000.0, 0.1 * (x.max() - x.min()))
+            pad_y = max(50_000.0, 0.1 * (y.max() - y.min()))
+            ax.set_extent([x.min() - pad_x, x.max() + pad_x, y.min() - pad_y, y.max() + pad_y], proj)
         else:
             # Express longitudes relative to center_lon (wrapped to
             # [-180, 180)) before taking min/max, and set the extent in
@@ -1912,7 +1931,8 @@ class EDPSamples(xr.Dataset):
         return ax
 
     def plot_horizontal_field(self, scalar='Ne', target_alt=None, sample_idx=0,
-                              ax=None, figsize=(8, 6), cmap='viridis', scalar_label=None):
+                              ax=None, figsize=(8, 6), cmap='viridis', scalar_label=None,
+                              vmin=None, vmax=None):
         """
         Plot a scalar field defined on the horizontal grid (one value per
         geolocation vertex) over the same land/ocean/coastline backdrop as
@@ -1935,6 +1955,13 @@ class EDPSamples(xr.Dataset):
         cmap : str, default 'viridis'
         scalar_label : str, optional
             Colorbar label; a sensible default is generated when omitted.
+        vmin, vmax : float, optional
+            Explicit color-scale limits (passed through to the underlying
+            ``tripcolor``/``scatter`` call) -- e.g. a symmetric
+            ``vmin=-M, vmax=M`` with a diverging ``cmap`` for a signed
+            difference field, so zero maps to the colormap's center
+            instead of an unconstrained auto-scaled range. Default
+            (``None``) is matplotlib's usual data-driven auto-scaling.
 
         Returns
         -------
@@ -1983,12 +2010,13 @@ class EDPSamples(xr.Dataset):
         if mesh is not None and len(mesh) > 0:
             plot_obj = ax.tripcolor(lon, lat, mesh, values, transform=ccrs.Geodetic(),
                                     cmap=cmap, shading='flat', edgecolors='face',
-                                    alpha=0.9, zorder=3)
+                                    alpha=0.9, zorder=3, vmin=vmin, vmax=vmax)
             ax.triplot(lon, lat, mesh, transform=ccrs.Geodetic(),
                       color='black', linewidth=0.2, alpha=0.3, zorder=4)
         else:
             plot_obj = ax.scatter(lon, lat, c=values, transform=ccrs.Geodetic(),
-                                  cmap=cmap, s=40, zorder=5, edgecolor='k', linewidth=0.3)
+                                  cmap=cmap, s=40, zorder=5, edgecolor='k', linewidth=0.3,
+                                  vmin=vmin, vmax=vmax)
 
         cbar = ax.figure.colorbar(plot_obj, ax=ax, orientation='horizontal', shrink=0.7, pad=0.08)
         cbar.set_label(scalar_label)
