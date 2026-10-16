@@ -271,25 +271,25 @@ def get_IRI2020_EDP(DateTime: str,
                 f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
             )
 
-        # Temporary debugging copies for Mac/Linux IRI comparison
-        import shutil
+        # # Temporary debugging copies for Mac/Linux IRI comparison
+        # import shutil
 
-        debug_dir = os.path.expanduser(
-            "~/Desktop/IonosphereTomography-pin_dev/iri_debug"
-        )
-        os.makedirs(debug_dir, exist_ok=True)
+        # debug_dir = os.path.expanduser(
+        #     "~/Desktop/IonosphereTomography-pin_dev/iri_debug"
+        # )
+        # os.makedirs(debug_dir, exist_ok=True)
 
-        shutil.copy2(
-            nml_path,
-            os.path.join(debug_dir, "IRI2020_input_namelist_linux.nml")
-        )
+        # shutil.copy2(
+        #     nml_path,
+        #     os.path.join(debug_dir, "IRI2020_input_namelist_linux.nml")
+        # )
 
-        shutil.copy2(
-            out_path,
-            os.path.join(debug_dir, "IRI_output_linux.dat")
-        )
+        # shutil.copy2(
+        #     out_path,
+        #     os.path.join(debug_dir, "IRI_output_linux.dat")
+        # )
 
-        print("Saved IRI debug files to:", debug_dir)
+        # print("Saved IRI debug files to:", debug_dir)
 
         return read_IRI2020_binary_output(out_path)
     
