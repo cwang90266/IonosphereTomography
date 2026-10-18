@@ -66,7 +66,8 @@ def sampling_parameters_for_cycle(cfg: CycleConfig) -> pd.DataFrame:
     the cycle's driving indices, spread controlled by
     ``cfg.iri_spread_kwargs`` (``hour_sample_range``/``f107_sample_range``/
     ``ap_sample_range``/``ig_sample_range``/``rz_sample_range``, all
-    optional).
+    optional), reproducible across runs via ``cfg.iri_rng_seed`` (see its
+    docstring -- unseeded by default, like this draw always was before).
     """
     iri = load_or_build_iri_sample_inputs(cfg)
-    return iri.randomSamples(nSample=cfg.n_ensemble, **cfg.iri_spread_kwargs)
+    return iri.randomSamples(nSample=cfg.n_ensemble, seed=cfg.iri_rng_seed, **cfg.iri_spread_kwargs)

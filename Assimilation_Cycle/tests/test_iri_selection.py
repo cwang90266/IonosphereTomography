@@ -77,6 +77,26 @@ class TestSamplingParametersForCycle:
         assert df.attrs["f107_sample_range"] == 3
         assert df.attrs["sample_method"] == "randomSamples"
 
+    def test_iri_rng_seed_makes_draw_reproducible(self, no_network):
+        """2026-10-18: unseeded by default (same as always), but two
+        otherwise-identical cycles with the same iri_rng_seed must draw
+        the exact same ensemble -- confirmed missing for real by two
+        back-to-back production runs whose results differed solely
+        because of this draw."""
+        cfg = _make_cfg(n_ensemble=25, iri_spread_kwargs={"f107_sample_range": 3}, iri_rng_seed=99)
+        df1 = iri_selection.sampling_parameters_for_cycle(cfg)
+        df2 = iri_selection.sampling_parameters_for_cycle(cfg)
+        pd.testing.assert_frame_equal(
+            df1[["hour", "f107", "ap", "ig12", "rz12"]],
+            df2[["hour", "f107", "ap", "ig12", "rz12"]],
+        )
+        assert df1.attrs["seed"] == 99
+
+    def test_iri_rng_seed_none_stays_unseeded(self, no_network):
+        cfg = _make_cfg(n_ensemble=10)
+        df = iri_selection.sampling_parameters_for_cycle(cfg)
+        assert df.attrs["seed"] == "unseeded"
+
 
 class TestDataDirSeparation:
     """apf107.dat/ig_rz.dat are fetched-artifact files, not source data --

@@ -430,3 +430,34 @@ class TestRandomSamples:
         result = ds.randomSamples(nSample=7)
         assert result.attrs["nSample"] == 7
         assert result.attrs["sample_method"] == "randomSamples"
+
+    def test_same_seed_is_reproducible(self, make_iri):
+        """2026-10-18: randomSamples() used to draw from five separate
+        unseeded np.random.default_rng() calls, so even an otherwise
+        identical cycle re-run silently drew a different ensemble --
+        confirmed for real by two back-to-back production runs producing
+        materially different results. seed= must make the draw exactly
+        reproducible."""
+        ds = make_iri("2024-06-15")
+        kwargs = dict(f107_sample_range=3, ap_sample_range=2, ig_sample_range=1,
+                      rz_sample_range=1, nSample=25, seed=1234)
+        result1 = ds.randomSamples(**kwargs)
+        result2 = ds.randomSamples(**kwargs)
+        pd.testing.assert_frame_equal(
+            result1[["hour", "f107", "ap", "ig12", "rz12"]],
+            result2[["hour", "f107", "ap", "ig12", "rz12"]],
+        )
+
+    def test_different_seeds_differ(self, make_iri):
+        ds = make_iri("2024-06-15")
+        kwargs = dict(f107_sample_range=3, nSample=50)
+        result1 = ds.randomSamples(seed=1, **kwargs)
+        result2 = ds.randomSamples(seed=2, **kwargs)
+        assert not result1["f107"].equals(result2["f107"])
+
+    def test_attrs_records_seed(self, make_iri):
+        ds = make_iri("2024-06-15")
+        seeded = ds.randomSamples(nSample=3, seed=42)
+        assert seeded.attrs["seed"] == 42
+        unseeded = ds.randomSamples(nSample=3)
+        assert unseeded.attrs["seed"] == "unseeded"
