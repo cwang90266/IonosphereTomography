@@ -67,6 +67,18 @@ def sample_ray_geodetic(
     return np.asarray(lats, dtype=np.float64), np.asarray(lons, dtype=np.float64), alts_km
 
 
+def mean_altitude_km(ecef_km: np.ndarray) -> float:
+    """Mean geodetic altitude (km) of a set of ECEF-km points, e.g. a
+    receiver's position across its own ray geometry. Lets a caller
+    auto-derive ``los_within_roi``'s ``alt_limit_km`` from a satellite's
+    own altitude instead of a hand-picked constant (used by
+    ``ro_source.py`` to default to the LEO receiver's own mean altitude
+    per occultation, since that varies across LEOs in a batch)."""
+    pts = np.asarray(ecef_km, dtype=np.float64)
+    _, _, alts_m = _ECEF_TO_GEODETIC.transform(pts[0] * 1e3, pts[1] * 1e3, pts[2] * 1e3)
+    return float(np.mean(np.asarray(alts_m, dtype=np.float64) / 1000.0))
+
+
 def los_within_roi(
     rec_ecef_km: np.ndarray,
     gnss_ecef_km: np.ndarray,
@@ -133,10 +145,19 @@ def build_roi_dict(
     mode: str,
     *,
     alt_limit_km: float | None = None,
+    alt_limit_mode: str | None = None,
     fraction_required: float | None = None,
 ) -> dict | None:
     """The ``roi=`` dict ``netcdf_io.write_observations`` expects (Plan
-    Section 6.2), or None when no ROI was requested."""
+    Section 6.2), or None when no ROI was requested.
+
+    alt_limit_mode : optional free-text marker (e.g.
+        "auto_leo_mean_per_occultation" vs "fixed") recording how
+        alt_limit_km was obtained -- kept alongside the numeric value so a
+        later metadata inspection (the way this project's roi_mode
+        investigation worked) can tell a per-occultation-derived mean
+        apart from a single hand-picked constant.
+    """
     if center_lat is None or center_lon is None or radius_km is None:
         return None
     roi = {
@@ -147,6 +168,8 @@ def build_roi_dict(
     }
     if alt_limit_km is not None:
         roi["roi_alt_limit_km"] = float(alt_limit_km)
+    if alt_limit_mode is not None:
+        roi["roi_alt_limit_mode"] = alt_limit_mode
     if fraction_required is not None:
         roi["roi_fraction_required"] = float(fraction_required)
     return roi
@@ -155,6 +178,7 @@ def build_roi_dict(
 __all__ = [
     "haversine_km",
     "sample_ray_geodetic",
+    "mean_altitude_km",
     "los_within_roi",
     "build_roi_dict",
 ]
