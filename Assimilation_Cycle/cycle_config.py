@@ -176,6 +176,22 @@ class CycleConfig:
     matters for a *fresh* IRI2020 build (``edp_samples_path`` unset);
     has no effect in precomputed-``edp_samples_path`` mode, since the
     real ensemble there comes from the cached file, not a fresh draw."""
+    iri_rng_seed: int | None = None
+    """Seeds ``IRI_Sample_Inputs.randomSamples``'s ensemble draw (hour/
+    F10.7/Ap/IG12/Rz12 indices) via ``iri_selection.sampling_parameters_
+    for_cycle``. ``None`` (default): unchanged behavior, a fresh unseeded
+    generator every call. **A real, previously-undocumented gotcha found
+    2026-10-18** (the same class of bug as ``analysis_rng_seed``'s own
+    gotcha above, independently discovered here): two otherwise-identical
+    back-to-back runs (same config, same ``analysis_rng_seed``) produced
+    materially different per-style RMSE-vs-ISR results and even flipped
+    which run's ``converged`` flag was True, purely because each *fresh*
+    IRI2020 ensemble build (``edp_samples_path`` unset) silently drew a
+    different random ensemble -- this briefly looked like a real styles-
+    vs-boost effect until traced back here. Set and hold this fixed
+    across any compared conditions for the comparison to be valid, same
+    rule as ``analysis_rng_seed``. Only matters for a *fresh* IRI2020
+    build, same scope as ``iri_spread_kwargs`` above."""
 
     # --- Batching and observation error (Section 4.2, 8.1, 8.2) ---
     batch_size: int = 200

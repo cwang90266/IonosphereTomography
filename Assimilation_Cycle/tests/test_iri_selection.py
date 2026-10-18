@@ -77,6 +77,52 @@ class TestSamplingParametersForCycle:
         assert df.attrs["f107_sample_range"] == 3
         assert df.attrs["sample_method"] == "randomSamples"
 
+    def test_iri_rng_seed_makes_draw_reproducible(self, no_network):
+        """2026-10-18: unseeded by default (same as always), but two
+        otherwise-identical cycles with the same iri_rng_seed must draw
+        the exact same ensemble -- confirmed missing for real by two
+        back-to-back production runs whose results differed solely
+        because of this draw."""
+        cfg = _make_cfg(n_ensemble=25, iri_spread_kwargs={"f107_sample_range": 3}, iri_rng_seed=99)
+        df1 = iri_selection.sampling_parameters_for_cycle(cfg)
+        df2 = iri_selection.sampling_parameters_for_cycle(cfg)
+        pd.testing.assert_frame_equal(
+            df1[["hour", "f107", "ap", "ig12", "rz12"]],
+            df2[["hour", "f107", "ap", "ig12", "rz12"]],
+        )
+        assert df1.attrs["seed"] == 99
+
+    def test_iri_rng_seed_none_stays_unseeded(self, no_network):
+        cfg = _make_cfg(n_ensemble=10)
+        df = iri_selection.sampling_parameters_for_cycle(cfg)
+        assert df.attrs["seed"] == "unseeded"
+
+
+class TestDataDirSeparation:
+    """apf107.dat/ig_rz.dat are fetched-artifact files, not source data --
+    confirms they're cached under cfg.output_dir (the cycle's own run
+    folder) rather than wherever the process's cwd happens to be, and
+    that an unset output_dir falls back to the original behavior."""
+
+    def test_output_dir_passed_as_data_dir(self, monkeypatch, fixture_apf107, fixture_ig_rz, tmp_path):
+        seen = {}
+        monkeypatch.setattr(M, "get_apf107", lambda data_dir=None: (seen.setdefault("apf107", data_dir), fixture_apf107)[1])
+        monkeypatch.setattr(M, "get_ig_rz", lambda data_dir=None: (seen.setdefault("ig_rz", data_dir), fixture_ig_rz)[1])
+
+        cfg = _make_cfg(output_dir=tmp_path / "my_run")
+        iri_selection.load_or_build_iri_sample_inputs(cfg)
+        assert seen == {"apf107": str(tmp_path / "my_run"), "ig_rz": str(tmp_path / "my_run")}
+
+    def test_no_output_dir_falls_back_to_none(self, no_network):
+        """no_network's lambdas default data_dir=None -- if cfg.output_dir
+        is unset, load_or_build_iri_sample_inputs must pass data_dir=None
+        through (not e.g. an empty string), preserving the original
+        cwd-relative behavior for callers with no packaged-run output
+        directory (bare cycle_driver.run_cycle/style_sweep usage)."""
+        cfg = _make_cfg()
+        assert cfg.output_dir is None
+        iri_selection.load_or_build_iri_sample_inputs(cfg)   # must not raise
+
 
 class TestDataDirSeparation:
     """apf107.dat/ig_rz.dat are fetched-artifact files, not source data --

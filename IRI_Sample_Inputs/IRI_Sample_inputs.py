@@ -477,10 +477,22 @@ class IRI_Sample_Inputs:
                        f107_sample_range: int = None,
                        ig_sample_range: int = None,
                        rz_sample_range: int = None,
-                       nSample: int = None):
-        
+                       nSample: int = None,
+                       seed: int | None = None):
+
         if nSample == None:
             nSample = 1
+
+        # One shared generator for every draw below (2026-10-18: previously
+        # each draw built its own unseeded np.random.default_rng(), so this
+        # whole ensemble was silently non-reproducible -- confirmed by two
+        # back-to-back identically-configured runs producing materially
+        # different ANCHOR-vs-ISR results, which briefly looked like a real
+        # boost-vs-convergence effect until this was found). A single seeded
+        # generator reused across all five draws also avoids the subtler
+        # issue of several same-seeded-but-separate generators producing
+        # correlated draws.
+        rng = np.random.default_rng(seed)
 
         # Define range of parameters
         if hour_sample_range == None:
@@ -491,8 +503,8 @@ class IRI_Sample_Inputs:
             hour_range=[i-24 if i>24 else i for i in hour_range]
             hour_range.append(None)
 
-        hour_idx = np.random.default_rng().integers(0, len(hour_range)-1, size=nSample, endpoint=True)
-            
+        hour_idx = rng.integers(0, len(hour_range)-1, size=nSample, endpoint=True)
+
         f107_range=self.apf107["f107"]
         if f107_sample_range == None:
             f107_range=[None]
@@ -501,20 +513,20 @@ class IRI_Sample_Inputs:
             idx_end=min((self.current_idx_f107+f107_sample_range,len(f107_range)-1))
             f107_range=f107_range[idx_start:idx_end]
             f107_range.append(None)
-            
-        f107_idx = np.random.default_rng().integers(0, len(f107_range)-1, size=nSample, endpoint=True)
+
+        f107_idx = rng.integers(0, len(f107_range)-1, size=nSample, endpoint=True)
         #
         ap_range=self.apf107["iiap"]
         if ap_sample_range == None:
             ap_range=[None]
-        else:                
+        else:
             idx_start=max((0,self.current_idx_f107-ap_sample_range))
             idx_end=min((self.current_idx_f107+ap_sample_range,len(ap_range)-1))
             ap_range=ap_range[idx_start:idx_end]
             ap_range = [item for sublist in ap_range for item in sublist]
             ap_range.append(None)
 
-        ap_idx = np.random.default_rng().integers(0, len(ap_range)-1, size=nSample, endpoint=True)
+        ap_idx = rng.integers(0, len(ap_range)-1, size=nSample, endpoint=True)
         #
         if ig_sample_range == None:
             ig12_range=[None]
@@ -525,7 +537,7 @@ class IRI_Sample_Inputs:
             ig12_range=ig12_range[idx_start:idx_end]
             ig12_range.append(None)
 
-        ig12_idx = np.random.default_rng().integers(0, len(ig12_range)-1, size=nSample, endpoint=True)
+        ig12_idx = rng.integers(0, len(ig12_range)-1, size=nSample, endpoint=True)
 
         #
         if rz_sample_range == None:
@@ -537,8 +549,8 @@ class IRI_Sample_Inputs:
             Rz12_range=Rz12_range[idx_start:idx_end]
             Rz12_range.append(None)
 
-        Rz12_idx = np.random.default_rng().integers(0, len(Rz12_range)-1, size=nSample, endpoint=True)
-        
+        Rz12_idx = rng.integers(0, len(Rz12_range)-1, size=nSample, endpoint=True)
+
         Samples={'hour':[], 'f107':[],'ap':[],'ig12':[],'rz12':[]}
         for idx in range(nSample):
             Samples['hour'].append(hour_range[hour_idx[idx]])
@@ -546,7 +558,7 @@ class IRI_Sample_Inputs:
             Samples['ap'].append(ap_range[ap_idx[idx]])
             Samples['ig12'].append(ig12_range[ig12_idx[idx]])
             Samples['rz12'].append(Rz12_range[Rz12_idx[idx]])
-        
+
         ds = pd.DataFrame(Samples)
         ds.attrs["hour_sample_range"] = hour_sample_range
         ds.attrs["ap_sample_range"] = ap_sample_range
@@ -555,6 +567,7 @@ class IRI_Sample_Inputs:
         ds.attrs["rz_sample_range"] = rz_sample_range
         ds.attrs["nSample"] = nSample
         ds.attrs["sample_method"] = "randomSamples"
-       
+        ds.attrs["seed"] = seed if seed is not None else "unseeded"
+
         return ds
          

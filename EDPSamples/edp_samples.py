@@ -256,12 +256,40 @@ def get_IRI2020_EDP(DateTime: str,
             f"{exe} {namelist_filename} {IRI_output_filename}"
         )
 
+        # result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=tmpdir)
+        # if result.returncode != 0 or not os.path.exists(out_path):
+        #     raise RuntimeError(
+        #         f"IRI2020 failed (rc={result.returncode}):\n"
+        #         f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+        #     )
+
+        # return read_IRI2020_binary_output(out_path)
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=tmpdir)
         if result.returncode != 0 or not os.path.exists(out_path):
             raise RuntimeError(
                 f"IRI2020 failed (rc={result.returncode}):\n"
                 f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}"
             )
+
+        # # Temporary debugging copies for Mac/Linux IRI comparison
+        # import shutil
+
+        # debug_dir = os.path.expanduser(
+        #     "~/Desktop/IonosphereTomography-pin_dev/iri_debug"
+        # )
+        # os.makedirs(debug_dir, exist_ok=True)
+
+        # shutil.copy2(
+        #     nml_path,
+        #     os.path.join(debug_dir, "IRI2020_input_namelist_linux.nml")
+        # )
+
+        # shutil.copy2(
+        #     out_path,
+        #     os.path.join(debug_dir, "IRI_output_linux.dat")
+        # )
+
+        # print("Saved IRI debug files to:", debug_dir)
 
         return read_IRI2020_binary_output(out_path)
     
@@ -1835,7 +1863,11 @@ class EDPSamples(xr.Dataset):
         ax.add_feature(cfeature.OCEAN, facecolor='lightblue', zorder=0)
         ax.add_feature(cfeature.COASTLINE.with_scale('110m'), linewidth=0.5, zorder=1)
         ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5, zorder=1)
-        ax.gridlines(draw_labels=True, alpha=0.3)
+
+        # Avoid Cartopy/Shapely Gridliner failure on polar stereographic maps.
+        # High-latitude Regional grids may also auto-switch to polar projection.
+        if not use_polar_projection:
+            ax.gridlines(draw_labels=True, alpha=0.3)
 
         if geo_type == "Global":
             ax.set_global()
@@ -2182,11 +2214,13 @@ class EDPSamples(xr.Dataset):
                     )
                 return idx_alt, weight_alt, idx_mesh, weight_mesh
             
-    def get_observation_operator(self, podTc2_data: dict, num_segments: int = 1000) -> np.ndarray:
+    def get_observation_operator(
+        self, podTc2_data: dict, num_segments: int = 1000, max_extrap_m: float = 1_000_000.0
+    ) -> np.ndarray:
         """
         Generates the Observation Operator (H matrix) for the Kalman Filter.
         Maps the integration path of RO rays to the flattened state vector.
-        
+
         Parameters
         ----------
         podTc2_data : dict
@@ -2196,6 +2230,16 @@ class EDPSamples(xr.Dataset):
             produces.
         num_segments : int, default 1000
             Number of segments to divide each ray into for integration.
+        max_extrap_m : float, default 1_000_000.0
+            Maximum distance (m) beyond the mesh boundary to trust the
+            nearest-neighbour fallback below; segments farther than this
+            are dropped (zero weight) instead of extrapolated. Mirrors
+            ``forward_model_mesh_tec``'s own ``max_extrap_m`` cap -- without
+            it, a ray segment arbitrarily far outside the mesh still gets
+            assigned entirely to the nearest vertex, which produced an
+            isolated high-value artifact at one mesh cell when verified
+            against real data (22.8% of segments outside the mesh, 81% of
+            those collapsing onto a single vertex).
 
         Returns
         -------
@@ -2225,9 +2269,21 @@ class EDPSamples(xr.Dataset):
             always_xy=True
         )
 
-        # Cache the KDTree for the "NearestNDInterpolator" fallback outside the mesh
+        # Cache the KDTree for the "NearestNDInterpolator" fallback outside
+        # the mesh. Project to azimuthal equidistant centred on the mesh,
+        # mirroring forward_model_mesh_tec's own approach -- geolocation is
+        # (lon, lat) in degrees, and raw degree-space Euclidean distance
+        # distorts real distance badly away from the mesh centroid
+        # (especially at high latitude), so both the nearest-vertex lookup
+        # and the max_extrap_m check below need a proper local metric
+        # space in meters, not degree-space distance.
         if n_geo > 1:
-            tree = cKDTree(geolocation)
+            centroid_lon = float(np.mean(geolocation[:, 0]))
+            centroid_lat = float(np.mean(geolocation[:, 1]))
+            extrap_proj = pyproj.Proj(proj='aeqd', lat_0=centroid_lat,
+                                       lon_0=centroid_lon, ellps='WGS84')
+            mesh_x, mesh_y = extrap_proj(geolocation[:, 0], geolocation[:, 1])
+            tree = cKDTree(np.column_stack([mesh_x, mesh_y]))
 
         for i in tqdm(range(n_rays), desc="Building H Matrix"):
             t = np.linspace(0, 1, num_segments)
@@ -2326,20 +2382,27 @@ class EDPSamples(xr.Dataset):
 
                 # --- B. Handle points OUTSIDE the mesh (Nearest Neighbor Fallback) ---
                 if np.any(outside):
-                    # Query KDTree for the single closest vertex (weight = 1.0).
-                    # `tree` was built on `geolocation`, which is (lon, lat)
-                    # -- same ordering fix as the barycentric branch above.
-                    _, near_v = tree.query(np.column_stack([lons_v[outside], lats_v[outside]]))
-                    
-                    a0_out = a_idx0[outside]
-                    a1_out = a_idx1[outside]
-                    aw0_out = aw0[outside]
-                    aw1_out = aw1[outside]
-                    dl_out = dl_m_v[outside]
-                    
-                    # Distribute entirely to the nearest vertical column
-                    np.add.at(H[i], a0_out * n_geo + near_v, dl_out * aw0_out)
-                    np.add.at(H[i], a1_out * n_geo + near_v, dl_out * aw1_out)
+                    # Query the projected (meters) KDTree for the single
+                    # closest vertex (weight = 1.0), then drop segments
+                    # farther than max_extrap_m instead of trusting an
+                    # unconstrained nearest-neighbour fallback arbitrarily
+                    # far outside the mesh -- mirrors forward_model_mesh_
+                    # tec's own max_extrap_m policy.
+                    out_x, out_y = extrap_proj(lons_v[outside], lats_v[outside])
+                    dist_m, near_v = tree.query(np.column_stack([out_x, out_y]))
+                    within_cap = dist_m <= max_extrap_m
+
+                    if np.any(within_cap):
+                        a0_out = a_idx0[outside][within_cap]
+                        a1_out = a_idx1[outside][within_cap]
+                        aw0_out = aw0[outside][within_cap]
+                        aw1_out = aw1[outside][within_cap]
+                        dl_out = dl_m_v[outside][within_cap]
+                        near_v_capped = near_v[within_cap]
+
+                        # Distribute entirely to the nearest vertical column
+                        np.add.at(H[i], a0_out * n_geo + near_v_capped, dl_out * aw0_out)
+                        np.add.at(H[i], a1_out * n_geo + near_v_capped, dl_out * aw1_out)
 
         # Convert final integral path lengths to TEC Units (1 TECU = 1e16)
         H /= 1e16
@@ -2431,7 +2494,7 @@ class EDPSamples(xr.Dataset):
                 # Maximum distance (m) beyond the mesh boundary to trust nearest-neighbour.
                 # Points further than this are set to zero instead of extrapolated.
                 mesh_tree = cKDTree(geo_xy)
-                max_extrap_m = 500_000.0   # 500 km — tune to your mesh size
+                max_extrap_m = 1_000_000.0   # 1000 km — mirrors get_observation_operator's own cap
 
                 spatial_interp_lin  = LinearNDInterpolator(geo_xy, edps_2d)
                 spatial_interp_near = NearestNDInterpolator(geo_xy, edps_2d)

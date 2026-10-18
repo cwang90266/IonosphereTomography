@@ -230,7 +230,11 @@ class TestPrecomputedFileMode:
             "GNSS": np.ones((3, 2)),
             "date": pd.Timestamp("2025-11-18T10:00:00"),
         }]
-        monkeypatch.setattr(observation_stream, "prepare_ro_observations", lambda **kw: fake_raw)
+        fake_report = {"alt_limit_km_used_mean": None, "alt_limit_km_mode": None}
+        monkeypatch.setattr(
+            observation_stream, "prepare_ro_observations",
+            lambda **kw: (fake_raw, fake_report) if kw.get("return_report") else fake_raw,
+        )
 
         out_path = tmp_path / "ro_out.nc"
         cfg = _make_cfg(ro_observations_output_path=out_path)
