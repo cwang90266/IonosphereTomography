@@ -118,6 +118,14 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     out = Path(cfg.output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    # Run-level boost status (2026-10-17 user request): stamped onto the
+    # TEC/EDP profile plot titles below so a saved/shared image is
+    # self-identifying without needing its file path/folder name.
+    boost_label = (
+        f"boosted (amplitude={cfg.diagonal_boost_amplitude:g})"
+        if cfg.diagonal_boost_amplitude is not None else "no boost"
+    )
+
     # -- Step 2: IRI sample inputs (.pkl artifact) -------------------------
     # Saved regardless of edp_samples_path, so this artifact always exists
     # even in precomputed-EDPSamples mode (where it otherwise wouldn't get
@@ -194,6 +202,10 @@ def run_package(cfg: CycleConfig) -> PackageResult:
 
     ro_entries = [e for e in all_entries if e.obs_type == "RO"]
     for entry in ro_entries:
+        # overlay_los defaults True here (per-entry plot); the combined
+        # plot below defaults it off, since pooling every entry's track
+        # gets visually dense fast -- pass overlay_los explicitly to turn
+        # it on for a one-off diagnostic.
         fig = output.plot_observation_operator_sum(edp_samples, entry)
         _savefig(fig, out / f"{cfg.label}_obs_operator" / f"{entry.label}.png")
     if ro_entries:
@@ -249,6 +261,7 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                     output.plot_tec_edp_profile_comparison(
                         entry, y_forecast, y_analysis, y_measured,
                         edp_samples, decoded_forecast, decoded_analysis,
+                        style=_style, boost_label=boost_label,
                     ),
                     _style_dir / "profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png",
                 )
@@ -354,6 +367,7 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         _savefig(
             output.plot_cross_style_tec_edp_comparison(
                 slot["entry"], slot["tec"], slot["edp"], altitude,
+                boost_label=boost_label,
             ),
             out / f"{cfg.label}_cross_style_profiles" / f"batch{batch_index:04d}_{entry_label}.png",
         )
