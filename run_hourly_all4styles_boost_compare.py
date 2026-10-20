@@ -98,7 +98,7 @@ import pandas as pd
 # Repository / fixed project paths
 # =============================================================================
 
-REPO = Path("/home/pin/Desktop/IonosphereTomography-pin_dev")  # ===Edit here===
+REPO = Path("/home/knelson/src/IonosphereTomography")  # ===Edit here===
 # Four "Edit here" in total, no trailing "/"
 
 for _p in (
@@ -123,8 +123,8 @@ from Ensemble_Kalman_Engine import EnsembleState
 from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
 
 
-RO_ROOT = Path("/home/pin/Desktop/tomography_project/piq_data/podTc2")  # ===Edit here===
-ISR_DIR = Path("/home/pin/Desktop/ISR_PCA/PCA_data")  # ===Edit here===
+RO_ROOT = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/podTc2")  # ===Edit here===
+ISR_DIR = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/ISR_data")  # ===Edit here===
 TRO_ISR_FILE = ISR_DIR / "TROISR2025_nonan.nc"
 SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
 
@@ -133,7 +133,7 @@ SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
 TRO_ISR_EXTENDED_FILE = ISR_DIR / "TROISR2025_nonan_extended.nc"
 TRO_ISR_PCA_BASIS_FILE = ISR_DIR / "TROISR2025_nonan_pca_basis.nc"
 
-OUTPUT_ROOT = Path("/home/pin/Desktop/tomography_output")  # ===Edit here===
+OUTPUT_ROOT = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/tomography_output") # =Edit here=
 
 DEFAULT_STYLES = [
     "ANCHOR",
