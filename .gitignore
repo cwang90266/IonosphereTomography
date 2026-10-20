@@ -1,6 +1,4 @@
 *.egg-info/
-iri2020_driver
-iri2020_namelist_driver
 .claude/
 Figures/
 DataFiles/
@@ -24,3 +22,10 @@ _stale_locks/
 # source tree; ignored here as a backstop for the cwd-relative fallback.
 /apf107.dat
 /ig_rz.dat
+
+# Ignore Pipfile.lock
+*.lock
+
+# Ignore the IRI drivers, since they should be recompiled for different machines
+/iri2020_new/src/iri2020/iri2020_driver
+/iri2020_new/src/iri2020/iri2020_namelist_driver
