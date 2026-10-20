@@ -34,19 +34,21 @@ IRI2020. Hours with no accepted RO occultation are skipped, so expensive IRI
 and KF work is not wasted.
 
 Example:
-    cd ~/Desktop/IonosphereTomography-pin_dev
-    source init_iri2020_env.sh
 
     python run_hourly_all4styles_boost_compare.py \
         --date 2025-10-16 \
         --start-hour 0 \
         --end-hour 24
 
-To test only 10:00-12:00 UTC first:
+By default, large/cache intermediate artifacts are suppressed. To write
+all package artifacts, including the normally suppressed .dat/.pkl/.nc files:
+
     python run_hourly_all4styles_boost_compare.py \
         --date 2025-10-16 \
-        --start-hour 10 \
-        --end-hour 12
+        --start-hour 0 \
+        --end-hour 24 \
+        --output all
+
 
 To run only one of the PCA styles:
     python run_hourly_all4styles_boost_compare.py \
@@ -81,23 +83,11 @@ do
 done
 
 
-
-
 and, for every style, BOTH covariance conditions:
   - no_boost
   - boosted (diagonal boost amplitude=0.5 in log10-density space)
 
 Therefore every successful one-hour slot runs 8 filter cases total.
-
-For a fair A/B comparison, the no-boost run builds the fresh hourly IRI2020
-ensemble once. The boosted run reuses that exact saved base IRI ensemble and
-adds the diagonal covariance boost before parameterization. It does NOT draw a
-second independent IRI ensemble.
-
-IMPORTANT:
-  TROISR2025_nonan.nc is the only ISR data source used to build the ISR-PCA
-  basis. SVLISR2025_nonan.nc is NEVER used in PCA training; Svalbard remains
-  independent validation only.
 
 For PCA_1D_10ex_ISR the script automatically reuses/builds:
   TROISR2025_nonan_extended.nc
@@ -118,6 +108,7 @@ import csv
 import gc
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from dataclasses import replace
@@ -135,7 +126,8 @@ import pandas as pd
 # Repository / fixed project paths
 # =============================================================================
 
-REPO = Path("/home/pin/Desktop/IonosphereTomography-pin_dev") # ===Edit here===
+REPO = Path("/home/pin/Desktop/IonosphereTomography-pin_dev")  # ===Edit here===
+# Four "Edit here" in total, no trailing "/"
 
 for _p in (
     REPO,
@@ -148,7 +140,7 @@ for _p in (
 
 from Assimilation_Cycle.cycle_config import CycleConfig, default_altitude_grid
 from Assimilation_Cycle.package_run import run_package
-from Assimilation_Cycle import ensemble_init, observation_stream, output
+from Assimilation_Cycle import ensemble_init, observation_stream, output, iri_selection
 from Assimilation_Cycle import cycle_driver as cycle_driver_module
 from Assimilation_Cycle import package_run as package_run_module
 from Assimilation_Cycle.diagonal_boost import apply_diagonal_boost
@@ -159,7 +151,7 @@ from Ensemble_Kalman_Engine import EnsembleState
 from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
 
 
-RO_ROOT = Path("/home/pin/Desktop/tomography_project/piq_data/podTc2") # ===Edit here===
+RO_ROOT = Path("/home/pin/Desktop/tomography_project/piq_data/podTc2")  # ===Edit here===
 ISR_DIR = Path("/home/pin/Desktop/ISR_PCA/PCA_data")  # ===Edit here===
 TRO_ISR_FILE = ISR_DIR / "TROISR2025_nonan.nc"
 SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
@@ -169,7 +161,7 @@ SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
 TRO_ISR_EXTENDED_FILE = ISR_DIR / "TROISR2025_nonan_extended.nc"
 TRO_ISR_PCA_BASIS_FILE = ISR_DIR / "TROISR2025_nonan_pca_basis.nc"
 
-OUTPUT_ROOT = Path("/home/pin/Desktop/tomography_output/") # ===Edit here===
+OUTPUT_ROOT = Path("/home/pin/Desktop/tomography_output")  # ===Edit here===
 
 DEFAULT_STYLES = [
     "ANCHOR",
@@ -217,7 +209,7 @@ GRID_RADIUS_DEG = 18.0
 
 N_ENSEMBLE = 2000
 MAX_TEC_PER_BATCH = 100_000
-OBS_SIGMA_TECU = 3.0
+OBS_SIGMA_TECU = 5.0
 ANALYSIS_RNG_SEED = 777
 
 # Diagonal covariance boost configuration.
@@ -242,8 +234,13 @@ IRI_SPREAD_KWARGS = {
 }
 
 RO_KWARGS_TEMPLATE = {
-    "roi_mode": "tangent_point",
+    # Updated develop behavior: retain individual RO rays only when at least
+    # 65% of the LOS below that occultation's mean LEO altitude lies inside
+    # the ROI.  alt_limit_km=None tells ro_source.py to derive the mean LEO
+    # altitude separately for each occultation.
+    "roi_mode": "full_los",
     "alt_limit_km": None,
+    "fraction_required": 0.65,
     "min_valid_rays": 50,
     "max_rays_per_occultation": 200,
     "include_abel": True,
@@ -305,6 +302,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-existing", action=argparse.BooleanOptionalAction, default=False,
         help="Skip an hour if its hourly_summary.csv already says success.",
+    )
+    parser.add_argument(
+        "--output",
+        choices=("minimal", "all"),
+        default="minimal",
+        help=(
+            "Output policy for large/cache intermediate artifacts. "
+            "'minimal' (default) suppresses apf107.dat, ig_rz.dat, "
+            "*_iri_sample_inputs.pkl, *_edp_samples.nc, *_parameterized.nc, "
+            "and *_ensembles/ensemble_batch_*.nc. "
+            "'all' writes those artifacts too. Scientific figures, CSV summaries, "
+            "processed RO observations, and validation products are written in both modes."
+        ),
     )
     return parser.parse_args()
 
@@ -496,64 +506,97 @@ def build_hyper_params_by_style(styles: list[str], basis_path: Path | None) -> d
 
 class _NoArtifactRunContext:
     """
-    Hourly-only runtime patching for run_package.
+    Hourly run context that always preserves the controlled A/B behavior
+    (boosted reuses the exact no-boost base EDP in memory) while making
+    heavy/cache artifacts optional.
 
-    Suppresses these netCDF artifacts without editing package_run.py:
+    output_mode="minimal" (default) suppresses:
       - *_edp_samples.nc
       - *_parameterized.nc
       - *_ensembles/ensemble_batch_*.nc
+      - *_iri_sample_inputs.pkl
+      - apf107.dat
+      - ig_rz.dat
 
-    It also captures the exact in-memory Parameterized_EDPSamples objects so
-    downstream ISR validation can decode without reopening *_parameterized.nc.
+    output_mode="all" writes those artifacts using the normal package paths.
+
+    In both modes the exact in-memory Parameterized_EDPSamples objects are
+    captured so downstream ISR validation does not depend on reopening a
+    parameterized netCDF file.
     """
 
-    def __init__(self, *, base_edp_samples=None):
+    def __init__(self, *, base_edp_samples=None, output_mode: str = "minimal"):
+        if output_mode not in {"minimal", "all"}:
+            raise ValueError(f"Unknown output_mode={output_mode!r}")
         self.base_edp_samples = base_edp_samples
+        self.output_mode = output_mode
         self.parameterizations = {}
 
         self._orig_load_or_build = None
+        self._orig_load_or_build_iri = None
         self._orig_save_parameterized = None
         self._orig_save_ensemble = None
+        self._iri_tmpdir = None
 
     def __enter__(self):
         self._orig_load_or_build = ensemble_init.load_or_build_edp_samples
+        self._orig_load_or_build_iri = iri_selection.load_or_build_iri_sample_inputs
         self._orig_save_parameterized = Parameterized_EDPSamples.saveNetCDF
         self._orig_save_ensemble = cycle_driver_module.save_ensemble_netcdf
 
         base_edp_samples = self.base_edp_samples
+        output_mode = self.output_mode
         orig_load = self._orig_load_or_build
+        orig_load_iri = self._orig_load_or_build_iri
+        orig_save_parameterized = self._orig_save_parameterized
         captured = self.parameterizations
 
-        def _load_or_build_no_edp_nc(cfg):
-            # Boosted condition: reuse the exact no-boost base ensemble in memory,
-            # then apply the configured boost exactly as ensemble_init normally does.
+        if output_mode == "minimal":
+            self._iri_tmpdir = tempfile.TemporaryDirectory(prefix="ionosphere_iri_")
+            iri_tmpdir = self._iri_tmpdir.name
+
+            def _load_or_build_iri_no_artifacts(cfg):
+                tmp_cfg = replace(
+                    cfg,
+                    output_dir=iri_tmpdir,
+                    iri_sample_inputs_output_path=None,
+                )
+                return orig_load_iri(tmp_cfg)
+
+            iri_selection.load_or_build_iri_sample_inputs = _load_or_build_iri_no_artifacts
+
+        def _load_or_build_controlled_ab(cfg):
             if base_edp_samples is not None:
                 amplitude = cfg.diagonal_boost_amplitude
                 if amplitude in (None, 0):
-                    return base_edp_samples
+                    edp = base_edp_samples
+                else:
+                    edp = apply_diagonal_boost(
+                        base_edp_samples,
+                        amplitude=amplitude,
+                        vertical_scale_km=cfg.diagonal_boost_vertical_scale_km,
+                        horizontal_scale_km=cfg.diagonal_boost_horizontal_scale_km,
+                        rng=np.random.default_rng(cfg.diagonal_boost_rng_seed),
+                        log_space=cfg.diagonal_boost_log_space,
+                        taper_start_km=cfg.diagonal_boost_taper_start_km,
+                        taper_end_km=cfg.diagonal_boost_taper_end_km,
+                        taper_floor=cfg.diagonal_boost_taper_floor,
+                    )
 
-                return apply_diagonal_boost(
-                    base_edp_samples,
-                    amplitude=amplitude,
-                    vertical_scale_km=cfg.diagonal_boost_vertical_scale_km,
-                    horizontal_scale_km=cfg.diagonal_boost_horizontal_scale_km,
-                    rng=np.random.default_rng(cfg.diagonal_boost_rng_seed),
-                    log_space=cfg.diagonal_boost_log_space,
-                    taper_start_km=cfg.diagonal_boost_taper_start_km,
-                    taper_end_km=cfg.diagonal_boost_taper_end_km,
-                    taper_floor=cfg.diagonal_boost_taper_floor,
-                )
+                if output_mode == "all" and cfg.edp_samples_output_path is not None:
+                    Path(cfg.edp_samples_output_path).parent.mkdir(
+                        parents=True, exist_ok=True
+                    )
+                    edp.saveNetCDF(cfg.edp_samples_output_path)
+                return edp
 
-            # No-boost condition: build fresh hourly IRI as usual, but clear only
-            # the EDP output path so *_edp_samples.nc is never written.
-            return orig_load(replace(cfg, edp_samples_output_path=None))
+            if output_mode == "minimal":
+                return orig_load(replace(cfg, edp_samples_output_path=None))
+            return orig_load(cfg)
 
-        def _capture_parameterized_no_nc(pes, path):
-            # Capture the exact object package_run just constructed, but do not
-            # write *_parameterized.nc.
+        def _capture_parameterized(pes, path):
             style = getattr(pes, "style", None)
             if style is None:
-                # Fallback: infer style from the path suffix.
                 name = Path(path).name
                 for candidate in DEFAULT_STYLES:
                     if f"_{candidate}_parameterized.nc" in name:
@@ -561,24 +604,30 @@ class _NoArtifactRunContext:
                         break
             if style is not None:
                 captured[str(style)] = pes
+
+            if output_mode == "all":
+                return orig_save_parameterized(pes, path)
             return None
 
         def _skip_ensemble_nc(*args, **kwargs):
-            # No file and therefore no *_ensembles directory created by saver.
             return None
 
-        # package_run_module.ensemble_init is the same module object, so patching
-        # ensemble_init here affects run_package's call too.
-        ensemble_init.load_or_build_edp_samples = _load_or_build_no_edp_nc
-        Parameterized_EDPSamples.saveNetCDF = _capture_parameterized_no_nc
-        cycle_driver_module.save_ensemble_netcdf = _skip_ensemble_nc
+        ensemble_init.load_or_build_edp_samples = _load_or_build_controlled_ab
+        Parameterized_EDPSamples.saveNetCDF = _capture_parameterized
+
+        if output_mode == "minimal":
+            cycle_driver_module.save_ensemble_netcdf = _skip_ensemble_nc
 
         return self
 
     def __exit__(self, exc_type, exc, tb):
         ensemble_init.load_or_build_edp_samples = self._orig_load_or_build
+        iri_selection.load_or_build_iri_sample_inputs = self._orig_load_or_build_iri
         Parameterized_EDPSamples.saveNetCDF = self._orig_save_parameterized
         cycle_driver_module.save_ensemble_netcdf = self._orig_save_ensemble
+        if self._iri_tmpdir is not None:
+            self._iri_tmpdir.cleanup()
+            self._iri_tmpdir = None
         return False
 
 
@@ -1251,6 +1300,14 @@ def main():
             f"log_space={condition['diagonal_boost_log_space']}"
         )
     print(f"Total cases per successful hour: {len(args.styles) * len(RUN_CONDITIONS)}")
+    print(f"Output policy: {args.output}")
+    if args.output == "minimal":
+        print(
+            "  Suppressed: apf107.dat, ig_rz.dat, *_iri_sample_inputs.pkl, "
+            "*_edp_samples.nc, *_parameterized.nc, *_ensembles/ensemble_batch_*.nc"
+        )
+    else:
+        print("  All package artifacts enabled.")
 
     print("Loading ISR validation files once...")
     tro = load_isr_dataset(TRO_ISR_FILE)
@@ -1392,7 +1449,8 @@ def main():
                 with _NoArtifactRunContext(
                     base_edp_samples=(
                         base_edp_samples if condition_name == "boosted" else None
-                    )
+                    ),
+                    output_mode=args.output,
                 ) as no_artifacts:
                     result = run_package(cfg)
                     in_memory_parameterizations = dict(no_artifacts.parameterizations)
