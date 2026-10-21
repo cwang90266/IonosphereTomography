@@ -14,19 +14,7 @@ Main additions per successful one-hour slot, per style:
        analysis error/RMSE-by-native-altitude-gate against Tromso (red)
        and Svalbard (green). No extrapolation beyond each ISR's native gates.
 
-After all windows, per style and RO-count bin:
-  - summary_<style>_RO_<bin>_median_rmse.png
-       median hourly analysis error/RMSE vs altitude, with +/-1 sigma
-       across one-hour windows for Tromso and Svalbard.
-  - summary_<style>_RO_bins_1x5_median_rmse.png
-       the five RO-count bins in one horizontal 1x5 panel with a common x-axis
-       limit, generated separately for IRI-derived PCA_3D_10ex and
-       ISR-derived PCA_1D_10ex_ISR.
-  - summary_PCA_styles_RO_bins_2x5_median_rmse.png
-       both PCA styles stacked as two rows, with the same x-axis limit across
-       all ten panels for direct visual comparison.
-
-Hours with fewer than 5 accepted RO occultation profiles are skipped.
+RO-count-bin comparison summaries are currently disabled; no aggregate\nRO-bin comparison CSVs or figures are generated.\n\nHours with fewer than 5 accepted RO occultation profiles are skipped.
 RO-count bins for assimilated hours are non-overlapping:
     5, 6-10, 11-15, 16-20, >20
 
@@ -1779,54 +1767,70 @@ def main():
     error_csv = OUTPUT_ROOT / f"hourly_dual_isr_errors_{day:%Y-%m-%d}.csv"
     errors_df.to_csv(error_csv, index=False)
 
-    if not errors_df.empty:
-        print(
-            "\nCreating RO-count-binned median +/-1 sigma "
-            "summary figures for all 8 cases..."
-        )
-
-        # Individual 1x5 row for each of the 8 style/boost combinations.
-        for style in args.styles:
-            for condition in RUN_CONDITIONS:
-                condition_name = condition["name"]
-
-                for bin_tag, bin_label, low, high in RO_COUNT_BINS:
-                    path = plot_ro_count_summary(
-                        errors_df,
-                        style,
-                        condition_name,
-                        bin_tag,
-                        bin_label,
-                        low,
-                        high,
-                        OUTPUT_ROOT,
-                    )
-                    if path is not None:
-                        print("  saved", path)
-
-                row_path = plot_ro_count_summary_row(
-                    errors_df, style, condition_name, OUTPUT_ROOT
-                )
-                if row_path is not None:
-                    print("  saved", row_path)
-
-        # Four styles at fixed condition: easier no-boost vs boosted reading.
-        for condition in RUN_CONDITIONS:
-            grid_path = plot_condition_summary_grid(
-                errors_df,
-                args.styles,
-                condition["name"],
-                OUTPUT_ROOT,
-            )
-            if grid_path is not None:
-                print("  saved", grid_path)
-
-        # All eight cases together, same x-axis limit across all 40 panels.
-        grid8_path = plot_all_8runs_summary_grid(
-            errors_df, args.styles, OUTPUT_ROOT
-        )
-        if grid8_path is not None:
-            print("  saved", grid8_path)
+    # ================================================================
+    # RO-count-bin comparison outputs DISABLED
+    # ================================================================
+    # Keep all per-hour assimilation and ISR validation outputs unchanged.
+    #
+    # The cross-hour comparison products grouped by RO count
+    # (5 / 6-10 / 11-15 / 16-20 / >20) are intentionally not generated.
+    # This disables only the aggregate RO-bin CSVs/figures:
+    #
+    #   summary_<condition>_<style>_RO_<bin>_median_rmse.csv
+    #   summary_<condition>_<style>_RO_<bin>_median_rmse.png
+    #   summary_<condition>_<style>_RO_bins_1x5_median_rmse.png
+    #   summary_<condition>_all4styles_RO_bins_4x5_median_rmse.png
+    #   summary_all8runs_RO_bins_8x5_median_rmse.png
+    #
+    # The helper functions are intentionally left in this file so these
+    # summary products can be re-enabled later without changing the hourly
+    # scientific workflow.
+    #
+    # if not errors_df.empty:
+    #     print(
+    #         "\nCreating RO-count-binned median +/-1 sigma "
+    #         "summary figures for all 8 cases..."
+    #     )
+    #
+    #     for style in args.styles:
+    #         for condition in RUN_CONDITIONS:
+    #             condition_name = condition["name"]
+    #
+    #             for bin_tag, bin_label, low, high in RO_COUNT_BINS:
+    #                 path = plot_ro_count_summary(
+    #                     errors_df,
+    #                     style,
+    #                     condition_name,
+    #                     bin_tag,
+    #                     bin_label,
+    #                     low,
+    #                     high,
+    #                     OUTPUT_ROOT,
+    #                 )
+    #                 if path is not None:
+    #                     print("  saved", path)
+    #
+    #             row_path = plot_ro_count_summary_row(
+    #                 errors_df, style, condition_name, OUTPUT_ROOT
+    #             )
+    #             if row_path is not None:
+    #                 print("  saved", row_path)
+    #
+    #     for condition in RUN_CONDITIONS:
+    #         grid_path = plot_condition_summary_grid(
+    #             errors_df,
+    #             args.styles,
+    #             condition["name"],
+    #             OUTPUT_ROOT,
+    #         )
+    #         if grid_path is not None:
+    #             print("  saved", grid_path)
+    #
+    #     grid8_path = plot_all_8runs_summary_grid(
+    #         errors_df, args.styles, OUTPUT_ROOT
+    #     )
+    #     if grid8_path is not None:
+    #         print("  saved", grid8_path)
 
     if mode_timing_rows:
         pd.DataFrame(mode_timing_rows).to_csv(
