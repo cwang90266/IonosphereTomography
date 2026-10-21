@@ -1692,16 +1692,8 @@ def main():
                 pd.DataFrame(hour_error_rows).to_csv(
                     hour_dir / "dual_isr_errors.csv", index=False
                 )
-                pd.DataFrame(hourly_rows).to_csv(
-                    OUTPUT_ROOT
-                    / f"hourly_run_summary_{day:%Y-%m-%d}.csv",
-                    index=False,
-                )
-                pd.DataFrame(all_error_rows + hour_error_rows).to_csv(
-                    OUTPUT_ROOT
-                    / f"hourly_dual_isr_errors_{day:%Y-%m-%d}.csv",
-                    index=False,
-                )
+                # Daily aggregate run/error CSVs intentionally disabled.
+                # Per-hour hourly_summary.csv and dual_isr_errors.csv are retained.
 
             # Both conditions completed.
             all_error_rows.extend(hour_error_rows)
@@ -1757,15 +1749,12 @@ def main():
                 raise
 
     # ---------------------------------------------------------------------
-    # 4. Day/range summary tables and RO-count-bin figures.
+    # 4. Optional aggregate RO-bin products are disabled below.
+    #    No root-level hourly_run_summary_* or hourly_dual_isr_errors_* CSVs.
     # ---------------------------------------------------------------------
-    hourly_df = pd.DataFrame(hourly_rows)
-    hourly_csv = OUTPUT_ROOT / f"hourly_run_summary_{day:%Y-%m-%d}.csv"
-    hourly_df.to_csv(hourly_csv, index=False)
-
+    # Root-level daily aggregate run/error CSVs intentionally disabled.
+    # Keep only the per-hour CSVs plus the daily RO-status CSV and timing CSV.
     errors_df = pd.DataFrame(all_error_rows)
-    error_csv = OUTPUT_ROOT / f"hourly_dual_isr_errors_{day:%Y-%m-%d}.csv"
-    errors_df.to_csv(error_csv, index=False)
 
     # ================================================================
     # RO-count-bin comparison outputs DISABLED
@@ -1848,8 +1837,6 @@ def main():
     print(
         f"Total elapsed: {hh:02d}:{mm:02d}:{ss:05.2f} (hh:mm:ss)"
     )
-    print("Hourly summary:", hourly_csv)
-    print("Hourly ISR-error table:", error_csv)
     print("Output root:", OUTPUT_ROOT)
 
 
