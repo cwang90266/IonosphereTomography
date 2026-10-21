@@ -26,8 +26,9 @@ After all windows, per style and RO-count bin:
        both PCA styles stacked as two rows, with the same x-axis limit across
        all ten panels for direct visual comparison.
 
-RO-count bins are non-overlapping:
-    1-5, 6-10, 11-15, 16-20, >20
+Hours with fewer than 5 accepted RO occultation profiles are skipped.
+RO-count bins for assimilated hours are non-overlapping:
+    5, 6-10, 11-15, 16-20, >20
 
 The script precomputes/filters RO observations for each hour BEFORE running
 IRI2020. Hours with no accepted RO occultation are skipped, so expensive IRI
@@ -35,6 +36,7 @@ and KF work is not wasted.
 
 Example:
 
+    source Driver_Scripts/init_iri2020_env.sh
     python run_hourly_all4styles_boost_compare.py \
         --date 2025-10-16 \
         --start-hour 0 \
@@ -63,25 +65,6 @@ The default run compares ALL FOUR parameterization styles:
   - PCA_1D_10ex
   - PCA_1D_10ex_ISR
 
-  
-
-For running for several days.
-
-cd ~/Desktop/IonosphereTomography-pin_dev
-source init_iri2020_env.sh
-
-for DATE in \
-  2025-10-14 \
-  2025-10-15 \
-  2025-10-16 \
-  2025-10-17
-do
-  python run_hourly_all4styles_boost_compare.py \
-    --date "$DATE" \
-    --start-hour 0 \
-    --end-hour 24
-done
-
 
 and, for every style, BOTH covariance conditions:
   - no_boost
@@ -106,6 +89,7 @@ from __future__ import annotations
 import argparse
 import csv
 import gc
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -247,7 +231,7 @@ RO_KWARGS_TEMPLATE = {
 }
 
 RO_COUNT_BINS = [
-    ("01_05", "1-5", 1, 5),
+    ("05_05", "5", 5, 5),
     ("06_10", "6-10", 6, 10),
     ("11_15", "11-15", 11, 15),
     ("16_20", "16-20", 16, 20),
@@ -1238,6 +1222,47 @@ def plot_all_8runs_summary_grid(
     return path
 
 
+def save_daily_ro_status(rows: list[dict], day: datetime) -> Path:
+    """
+    Merge newly checked hours into the persistent daily RO-status CSV.
+
+    Behavior across separate script runs:
+      - existing hours are preserved;
+      - rerunning an hour replaces that hour's previous row;
+      - rows are always sorted chronologically by window_start_utc.
+    """
+    path = OUTPUT_ROOT / f"{day:%Y-%m-%d}_ro_hourly_status.csv"
+
+    new_df = pd.DataFrame(rows)
+    if new_df.empty:
+        return path
+
+    if path.exists():
+        try:
+            old_df = pd.read_csv(path)
+        except Exception:
+            old_df = pd.DataFrame()
+    else:
+        old_df = pd.DataFrame()
+
+    combined = pd.concat([old_df, new_df], ignore_index=True, sort=False)
+
+    # The newest result for a repeated hour wins.
+    combined = combined.drop_duplicates(
+        subset=["window_start_utc"],
+        keep="last",
+    )
+
+    # ISO timestamps sort correctly in chronological order.
+    combined = combined.sort_values(
+        "window_start_utc",
+        kind="stable",
+    ).reset_index(drop=True)
+
+    combined.to_csv(path, index=False)
+    return path
+
+
 def successful_summary_exists(hour_dir: Path) -> bool:
     path = hour_dir / "hourly_summary.csv"
     if not path.exists():
@@ -1323,6 +1348,8 @@ def main():
 
     all_error_rows: list[dict] = []
     hourly_rows: list[dict] = []
+    mode_timing_rows: list[dict] = []
+    daily_ro_status_rows: list[dict] = []
     total_t0 = time.perf_counter()
 
     for hour in range(args.start_hour, args.end_hour):
@@ -1330,11 +1357,10 @@ def main():
         end = start + timedelta(hours=1)
         folder = hour_folder_name(start, end)
         hour_dir = OUTPUT_ROOT / folder
-        hour_dir.mkdir(parents=True, exist_ok=True)
 
         print("\n" + "=" * 96)
         print(f"HOUR: {hour_label(start, end)}")
-        print(f"OUTPUT: {hour_dir}")
+        print(f"OUTPUT (only if RO >= 5): {hour_dir}")
         print("=" * 96)
 
         if args.skip_existing and successful_summary_exists(hour_dir):
@@ -1351,42 +1377,44 @@ def main():
             continue
 
         hour_t0 = time.perf_counter()
-        precomputed_ro = hour_dir / "accepted_ro_observations.nc"
         hour_error_rows: list[dict] = []
         hour_summary_rows: list[dict] = []
 
         try:
-            # -------------------------------------------------------------
-            # 1. Prepare/QC RO once for the hour.
-            # -------------------------------------------------------------
-            pre_cfg = make_precheck_cfg(start, end, ro_dir, precomputed_ro)
-            pre_batches = observation_stream.assemble(pre_cfg)
-            ro_entries = unique_ro_entries(pre_batches)
-            n_ro = len(ro_entries)
-            n_tec = count_tec_rays(pre_batches)
+            # Precheck in a temporary directory so skipped hours leave no folder/files.
+            with tempfile.TemporaryDirectory(prefix="ro_precheck_") as pre_tmp:
+                precomputed_ro_tmp = Path(pre_tmp) / "accepted_ro_observations.nc"
+                pre_cfg = make_precheck_cfg(start, end, ro_dir, precomputed_ro_tmp)
+                pre_batches = observation_stream.assemble(pre_cfg)
+                ro_entries = unique_ro_entries(pre_batches)
+                n_ro = len(ro_entries)
+                n_tec = count_tec_rays(pre_batches)
 
-            print(f"Accepted RO occultation profiles: {n_ro}")
-            print(f"Accepted TEC rays:                {n_tec}")
+                print(f"Accepted RO occultation profiles: {n_ro}")
+                print(f"Accepted TEC rays:                {n_tec}")
 
-            if n_ro == 0 or n_tec == 0:
-                elapsed = time.perf_counter() - hour_t0
-                print("SKIP: no accepted RO observations; no filters run.")
-                row = {
+                skipped_for_ro = (n_ro < 5 or n_tec == 0)
+                daily_ro_status_rows.append({
                     "window_start_utc": start.isoformat(),
                     "window_end_utc": end.isoformat(),
-                    "condition": "none",
-                    "status": "skipped_no_ro",
-                    "n_ro_profiles": n_ro,
-                    "n_tec_rays": n_tec,
-                    "elapsed_seconds": elapsed,
-                    "output_dir": str(hour_dir),
-                    "message": "no accepted RO observations",
-                }
-                hourly_rows.append(row)
-                pd.DataFrame([row]).to_csv(
-                    hour_dir / "hourly_summary.csv", index=False
-                )
-                continue
+                    "n_ro_profiles": int(n_ro),
+                    "n_tec_rays": int(n_tec),
+                    "skipped": bool(skipped_for_ro),
+                    "status": "skipped_too_few_ro" if skipped_for_ro else "accepted_for_assimilation",
+                })
+                daily_status_path = save_daily_ro_status(daily_ro_status_rows, day)
+
+                if skipped_for_ro:
+                    print(
+                        f"SKIP: only {n_ro} accepted RO profiles "
+                        "(minimum required = 5); no hourly folder/files created."
+                    )
+                    print(f"Daily RO status updated: {daily_status_path}")
+                    continue
+
+                hour_dir.mkdir(parents=True, exist_ok=True)
+                precomputed_ro = hour_dir / "accepted_ro_observations.nc"
+                shutil.copy2(precomputed_ro_tmp, precomputed_ro)
 
             tro_match = nearest_profile_in_hour(tro, start, end)
             svl_match = nearest_profile_in_hour(svl, start, end)
@@ -1463,6 +1491,30 @@ def main():
                     f"{condition_name} used RO profiles={n_ro_used}, "
                     f"TEC rays={n_tec_used}"
                 )
+
+                # package_run stores the actual run_cycle wall time separately
+                # for each parameterization style. Report/store all 8 modes:
+                # 4 styles x (no_boost, boosted).
+                print("Per-mode assimilation timing:")
+                for style in cfg.styles:
+                    _cycle_result, n_state, style_wall_time_s = result.results_by_style[style]
+                    print(
+                        f"  {condition_name:9s} | {style:16s} | "
+                        f"{style_wall_time_s:9.2f} s "
+                        f"({style_wall_time_s / 60.0:6.2f} min) | "
+                        f"n_state={n_state}"
+                    )
+                    mode_timing_rows.append({
+                        "window_start_utc": start.isoformat(),
+                        "window_end_utc": end.isoformat(),
+                        "condition": condition_name,
+                        "style": style,
+                        "n_state": int(n_state),
+                        "n_ro_profiles": int(n_ro_used),
+                        "n_tec_rays": int(n_tec_used),
+                        "assimilation_wall_time_seconds": float(style_wall_time_s),
+                        "assimilation_wall_time_minutes": float(style_wall_time_s) / 60.0,
+                    })
 
                 if condition_name == "no_boost":
                     base_edp_samples = result.edp_samples
@@ -1665,11 +1717,33 @@ def main():
 
             # Both conditions completed.
             all_error_rows.extend(hour_error_rows)
+            for _row in reversed(daily_ro_status_rows):
+                if _row["window_start_utc"] == start.isoformat():
+                    _row["status"] = "success"
+                    _row["skipped"] = False
+                    break
+            save_daily_ro_status(daily_ro_status_rows, day)
+
+            hour_mode_timings = [
+                row for row in mode_timing_rows
+                if row["window_start_utc"] == start.isoformat()
+            ]
+            if hour_mode_timings:
+                pd.DataFrame(hour_mode_timings).to_csv(
+                    hour_dir / "mode_timing.csv", index=False
+                )
+
             elapsed = time.perf_counter() - hour_t0
             print(f"Hour complete in {elapsed / 60.0:.1f} min")
 
         except Exception as exc:
             elapsed = time.perf_counter() - hour_t0
+            for _row in reversed(daily_ro_status_rows):
+                if _row["window_start_utc"] == start.isoformat():
+                    _row["status"] = "failed_after_ro_precheck"
+                    _row["skipped"] = False
+                    break
+            save_daily_ro_status(daily_ro_status_rows, day)
             print(
                 f"FAILED hour {hour_label(start, end)}: "
                 f"{type(exc).__name__}: {exc}"
@@ -1753,6 +1827,11 @@ def main():
         )
         if grid8_path is not None:
             print("  saved", grid8_path)
+
+    if mode_timing_rows:
+        pd.DataFrame(mode_timing_rows).to_csv(
+            OUTPUT_ROOT / f"{args.date}_mode_timing.csv", index=False
+        )
 
     total_elapsed = time.perf_counter() - total_t0
     hh = int(total_elapsed // 3600)
