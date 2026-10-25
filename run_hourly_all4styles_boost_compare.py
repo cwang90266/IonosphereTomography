@@ -22,39 +22,31 @@ Main additions per successful one-hour slot, per style:
   ensemble decoded at the station itself, so Svalbard gets its own
   forecast-vs-analysis comparison, not only Tromso.
 
-After all windows, per style and RO-count bin:
-  - summary_<style>_RO_<bin>_median_rmse.png
-       median hourly analysis error/RMSE vs altitude, with +/-1 sigma
-       across one-hour windows for Tromso and Svalbard.
-  - summary_<style>_RO_bins_1x5_median_rmse.png
-       the five RO-count bins in one horizontal 1x5 panel with a common x-axis
-       limit, generated separately for IRI-derived PCA_3D_10ex and
-       ISR-derived PCA_1D_10ex_ISR.
-  - summary_PCA_styles_RO_bins_2x5_median_rmse.png
-       both PCA styles stacked as two rows, with the same x-axis limit across
-       all ten panels for direct visual comparison.
-
-RO-count bins are non-overlapping:
-    1-5, 6-10, 11-15, 16-20, >20
+RO-count-bin comparison summaries are currently disabled; no aggregate\nRO-bin comparison CSVs or figures are generated.\n\nHours with fewer than 5 accepted RO occultation profiles are skipped.
+RO-count bins for assimilated hours are non-overlapping:
+    5, 6-10, 11-15, 16-20, >20
 
 The script precomputes/filters RO observations for each hour BEFORE running
 IRI2020. Hours with no accepted RO occultation are skipped, so expensive IRI
 and KF work is not wasted.
 
 Example:
-    cd ~/Desktop/IonosphereTomography-pin_dev
-    source init_iri2020_env.sh
 
+    source Driver_Scripts/init_iri2020_env.sh
     python run_hourly_all4styles_boost_compare.py \
         --date 2025-10-16 \
         --start-hour 0 \
         --end-hour 24
 
-To test only 10:00-12:00 UTC first:
+By default, large/cache intermediate artifacts are suppressed. To write
+all package artifacts, including the normally suppressed .dat/.pkl/.nc files:
+
     python run_hourly_all4styles_boost_compare.py \
         --date 2025-10-16 \
-        --start-hour 10 \
-        --end-hour 12
+        --start-hour 0 \
+        --end-hour 24 \
+        --output all
+
 
 To run only one of the PCA styles:
     python run_hourly_all4styles_boost_compare.py \
@@ -69,43 +61,12 @@ The default run compares ALL FOUR parameterization styles:
   - PCA_1D_10ex
   - PCA_1D_10ex_ISR
 
-  
-
-For running for several days.
-
-cd ~/Desktop/IonosphereTomography-pin_dev
-source init_iri2020_env.sh
-
-for DATE in \
-  2025-10-14 \
-  2025-10-15 \
-  2025-10-16 \
-  2025-10-17
-do
-  python run_hourly_all4styles_boost_compare.py \
-    --date "$DATE" \
-    --start-hour 0 \
-    --end-hour 24
-done
-
-
-
 
 and, for every style, BOTH covariance conditions:
   - no_boost
   - boosted (diagonal boost amplitude=0.5 in log10-density space)
 
 Therefore every successful one-hour slot runs 8 filter cases total.
-
-For a fair A/B comparison, the no-boost run builds the fresh hourly IRI2020
-ensemble once. The boosted run reuses that exact saved base IRI ensemble and
-adds the diagonal covariance boost before parameterization. It does NOT draw a
-second independent IRI ensemble.
-
-IMPORTANT:
-  TROISR2025_nonan.nc is the only ISR data source used to build the ISR-PCA
-  basis. SVLISR2025_nonan.nc is NEVER used in PCA training; Svalbard remains
-  independent validation only.
 
 For PCA_1D_10ex_ISR the script automatically reuses/builds:
   TROISR2025_nonan_extended.nc
@@ -124,8 +85,10 @@ from __future__ import annotations
 import argparse
 import csv
 import gc
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from dataclasses import replace
@@ -143,7 +106,8 @@ import pandas as pd
 # Repository / fixed project paths
 # =============================================================================
 
-REPO = Path("/home/pin/Desktop/IonosphereTomography-pin_dev") # ===Edit here===
+REPO = Path("/home/pin/Desktop/IonosphereTomography-pin_dev")  # ===Edit here===
+# Four "Edit here" in total, no trailing "/"
 
 for _p in (
     REPO,
@@ -156,7 +120,7 @@ for _p in (
 
 from Assimilation_Cycle.cycle_config import CycleConfig, default_altitude_grid
 from Assimilation_Cycle.package_run import run_package
-from Assimilation_Cycle import ensemble_init, observation_stream, output
+from Assimilation_Cycle import ensemble_init, observation_stream, output, iri_selection
 from Assimilation_Cycle import cycle_driver as cycle_driver_module
 from Assimilation_Cycle import package_run as package_run_module
 from Assimilation_Cycle.diagonal_boost import apply_diagonal_boost
@@ -167,7 +131,7 @@ from Ensemble_Kalman_Engine import EnsembleState
 from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
 
 
-RO_ROOT = Path("/home/pin/Desktop/tomography_project/piq_data/podTc2") # ===Edit here===
+RO_ROOT = Path("/home/pin/Desktop/tomography_project/piq_data/podTc2")  # ===Edit here===
 ISR_DIR = Path("/home/pin/Desktop/ISR_PCA/PCA_data")  # ===Edit here===
 TRO_ISR_FILE = ISR_DIR / "TROISR2025_nonan.nc"
 SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
@@ -177,7 +141,7 @@ SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
 TRO_ISR_EXTENDED_FILE = ISR_DIR / "TROISR2025_nonan_extended.nc"
 TRO_ISR_PCA_BASIS_FILE = ISR_DIR / "TROISR2025_nonan_pca_basis.nc"
 
-OUTPUT_ROOT = Path("/home/pin/Desktop/tomography_output/") # ===Edit here===
+OUTPUT_ROOT = Path("/home/pin/Desktop/tomography_output")  # ===Edit here===
 
 DEFAULT_STYLES = [
     "ANCHOR",
@@ -225,7 +189,7 @@ GRID_RADIUS_DEG = 18.0
 
 N_ENSEMBLE = 2000
 MAX_TEC_PER_BATCH = 100_000
-OBS_SIGMA_TECU = 3.0
+OBS_SIGMA_TECU = 5.0
 ANALYSIS_RNG_SEED = 777
 
 # Diagonal covariance boost configuration.
@@ -250,15 +214,20 @@ IRI_SPREAD_KWARGS = {
 }
 
 RO_KWARGS_TEMPLATE = {
-    "roi_mode": "tangent_point",
+    # Updated develop behavior: retain individual RO rays only when at least
+    # 65% of the LOS below that occultation's mean LEO altitude lies inside
+    # the ROI.  alt_limit_km=None tells ro_source.py to derive the mean LEO
+    # altitude separately for each occultation.
+    "roi_mode": "full_los",
     "alt_limit_km": None,
+    "fraction_required": 0.65,
     "min_valid_rays": 50,
     "max_rays_per_occultation": 200,
     "include_abel": True,
 }
 
 RO_COUNT_BINS = [
-    ("01_05", "1-5", 1, 5),
+    ("05_05", "5", 5, 5),
     ("06_10", "6-10", 6, 10),
     ("11_15", "11-15", 11, 15),
     ("16_20", "16-20", 16, 20),
@@ -313,6 +282,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-existing", action=argparse.BooleanOptionalAction, default=False,
         help="Skip an hour if its hourly_summary.csv already says success.",
+    )
+    parser.add_argument(
+        "--output",
+        choices=("minimal", "all"),
+        default="minimal",
+        help=(
+            "Output policy for large/cache intermediate artifacts. "
+            "'minimal' (default) suppresses apf107.dat, ig_rz.dat, "
+            "*_iri_sample_inputs.pkl, *_edp_samples.nc, *_parameterized.nc, "
+            "and *_ensembles/ensemble_batch_*.nc. "
+            "'all' writes those artifacts too. Scientific figures, CSV summaries, "
+            "processed RO observations, and validation products are written in both modes."
+        ),
     )
     return parser.parse_args()
 
@@ -504,64 +486,97 @@ def build_hyper_params_by_style(styles: list[str], basis_path: Path | None) -> d
 
 class _NoArtifactRunContext:
     """
-    Hourly-only runtime patching for run_package.
+    Hourly run context that always preserves the controlled A/B behavior
+    (boosted reuses the exact no-boost base EDP in memory) while making
+    heavy/cache artifacts optional.
 
-    Suppresses these netCDF artifacts without editing package_run.py:
+    output_mode="minimal" (default) suppresses:
       - *_edp_samples.nc
       - *_parameterized.nc
       - *_ensembles/ensemble_batch_*.nc
+      - *_iri_sample_inputs.pkl
+      - apf107.dat
+      - ig_rz.dat
 
-    It also captures the exact in-memory Parameterized_EDPSamples objects so
-    downstream ISR validation can decode without reopening *_parameterized.nc.
+    output_mode="all" writes those artifacts using the normal package paths.
+
+    In both modes the exact in-memory Parameterized_EDPSamples objects are
+    captured so downstream ISR validation does not depend on reopening a
+    parameterized netCDF file.
     """
 
-    def __init__(self, *, base_edp_samples=None):
+    def __init__(self, *, base_edp_samples=None, output_mode: str = "minimal"):
+        if output_mode not in {"minimal", "all"}:
+            raise ValueError(f"Unknown output_mode={output_mode!r}")
         self.base_edp_samples = base_edp_samples
+        self.output_mode = output_mode
         self.parameterizations = {}
 
         self._orig_load_or_build = None
+        self._orig_load_or_build_iri = None
         self._orig_save_parameterized = None
         self._orig_save_ensemble = None
+        self._iri_tmpdir = None
 
     def __enter__(self):
         self._orig_load_or_build = ensemble_init.load_or_build_edp_samples
+        self._orig_load_or_build_iri = iri_selection.load_or_build_iri_sample_inputs
         self._orig_save_parameterized = Parameterized_EDPSamples.saveNetCDF
         self._orig_save_ensemble = cycle_driver_module.save_ensemble_netcdf
 
         base_edp_samples = self.base_edp_samples
+        output_mode = self.output_mode
         orig_load = self._orig_load_or_build
+        orig_load_iri = self._orig_load_or_build_iri
+        orig_save_parameterized = self._orig_save_parameterized
         captured = self.parameterizations
 
-        def _load_or_build_no_edp_nc(cfg):
-            # Boosted condition: reuse the exact no-boost base ensemble in memory,
-            # then apply the configured boost exactly as ensemble_init normally does.
+        if output_mode == "minimal":
+            self._iri_tmpdir = tempfile.TemporaryDirectory(prefix="ionosphere_iri_")
+            iri_tmpdir = self._iri_tmpdir.name
+
+            def _load_or_build_iri_no_artifacts(cfg):
+                tmp_cfg = replace(
+                    cfg,
+                    output_dir=iri_tmpdir,
+                    iri_sample_inputs_output_path=None,
+                )
+                return orig_load_iri(tmp_cfg)
+
+            iri_selection.load_or_build_iri_sample_inputs = _load_or_build_iri_no_artifacts
+
+        def _load_or_build_controlled_ab(cfg):
             if base_edp_samples is not None:
                 amplitude = cfg.diagonal_boost_amplitude
                 if amplitude in (None, 0):
-                    return base_edp_samples
+                    edp = base_edp_samples
+                else:
+                    edp = apply_diagonal_boost(
+                        base_edp_samples,
+                        amplitude=amplitude,
+                        vertical_scale_km=cfg.diagonal_boost_vertical_scale_km,
+                        horizontal_scale_km=cfg.diagonal_boost_horizontal_scale_km,
+                        rng=np.random.default_rng(cfg.diagonal_boost_rng_seed),
+                        log_space=cfg.diagonal_boost_log_space,
+                        taper_start_km=cfg.diagonal_boost_taper_start_km,
+                        taper_end_km=cfg.diagonal_boost_taper_end_km,
+                        taper_floor=cfg.diagonal_boost_taper_floor,
+                    )
 
-                return apply_diagonal_boost(
-                    base_edp_samples,
-                    amplitude=amplitude,
-                    vertical_scale_km=cfg.diagonal_boost_vertical_scale_km,
-                    horizontal_scale_km=cfg.diagonal_boost_horizontal_scale_km,
-                    rng=np.random.default_rng(cfg.diagonal_boost_rng_seed),
-                    log_space=cfg.diagonal_boost_log_space,
-                    taper_start_km=cfg.diagonal_boost_taper_start_km,
-                    taper_end_km=cfg.diagonal_boost_taper_end_km,
-                    taper_floor=cfg.diagonal_boost_taper_floor,
-                )
+                if output_mode == "all" and cfg.edp_samples_output_path is not None:
+                    Path(cfg.edp_samples_output_path).parent.mkdir(
+                        parents=True, exist_ok=True
+                    )
+                    edp.saveNetCDF(cfg.edp_samples_output_path)
+                return edp
 
-            # No-boost condition: build fresh hourly IRI as usual, but clear only
-            # the EDP output path so *_edp_samples.nc is never written.
-            return orig_load(replace(cfg, edp_samples_output_path=None))
+            if output_mode == "minimal":
+                return orig_load(replace(cfg, edp_samples_output_path=None))
+            return orig_load(cfg)
 
-        def _capture_parameterized_no_nc(pes, path):
-            # Capture the exact object package_run just constructed, but do not
-            # write *_parameterized.nc.
+        def _capture_parameterized(pes, path):
             style = getattr(pes, "style", None)
             if style is None:
-                # Fallback: infer style from the path suffix.
                 name = Path(path).name
                 for candidate in DEFAULT_STYLES:
                     if f"_{candidate}_parameterized.nc" in name:
@@ -569,24 +584,30 @@ class _NoArtifactRunContext:
                         break
             if style is not None:
                 captured[str(style)] = pes
+
+            if output_mode == "all":
+                return orig_save_parameterized(pes, path)
             return None
 
         def _skip_ensemble_nc(*args, **kwargs):
-            # No file and therefore no *_ensembles directory created by saver.
             return None
 
-        # package_run_module.ensemble_init is the same module object, so patching
-        # ensemble_init here affects run_package's call too.
-        ensemble_init.load_or_build_edp_samples = _load_or_build_no_edp_nc
-        Parameterized_EDPSamples.saveNetCDF = _capture_parameterized_no_nc
-        cycle_driver_module.save_ensemble_netcdf = _skip_ensemble_nc
+        ensemble_init.load_or_build_edp_samples = _load_or_build_controlled_ab
+        Parameterized_EDPSamples.saveNetCDF = _capture_parameterized
+
+        if output_mode == "minimal":
+            cycle_driver_module.save_ensemble_netcdf = _skip_ensemble_nc
 
         return self
 
     def __exit__(self, exc_type, exc, tb):
         ensemble_init.load_or_build_edp_samples = self._orig_load_or_build
+        iri_selection.load_or_build_iri_sample_inputs = self._orig_load_or_build_iri
         Parameterized_EDPSamples.saveNetCDF = self._orig_save_parameterized
         cycle_driver_module.save_ensemble_netcdf = self._orig_save_ensemble
+        if self._iri_tmpdir is not None:
+            self._iri_tmpdir.cleanup()
+            self._iri_tmpdir = None
         return False
 
 
@@ -1224,6 +1245,47 @@ def plot_all_8runs_summary_grid(
     return path
 
 
+def save_daily_ro_status(rows: list[dict], day: datetime) -> Path:
+    """
+    Merge newly checked hours into the persistent daily RO-status CSV.
+
+    Behavior across separate script runs:
+      - existing hours are preserved;
+      - rerunning an hour replaces that hour's previous row;
+      - rows are always sorted chronologically by window_start_utc.
+    """
+    path = OUTPUT_ROOT / f"{day:%Y-%m-%d}_ro_hourly_status.csv"
+
+    new_df = pd.DataFrame(rows)
+    if new_df.empty:
+        return path
+
+    if path.exists():
+        try:
+            old_df = pd.read_csv(path)
+        except Exception:
+            old_df = pd.DataFrame()
+    else:
+        old_df = pd.DataFrame()
+
+    combined = pd.concat([old_df, new_df], ignore_index=True, sort=False)
+
+    # The newest result for a repeated hour wins.
+    combined = combined.drop_duplicates(
+        subset=["window_start_utc"],
+        keep="last",
+    )
+
+    # ISO timestamps sort correctly in chronological order.
+    combined = combined.sort_values(
+        "window_start_utc",
+        kind="stable",
+    ).reset_index(drop=True)
+
+    combined.to_csv(path, index=False)
+    return path
+
+
 def successful_summary_exists(hour_dir: Path) -> bool:
     path = hour_dir / "hourly_summary.csv"
     if not path.exists():
@@ -1286,6 +1348,14 @@ def main():
             f"log_space={condition['diagonal_boost_log_space']}"
         )
     print(f"Total cases per successful hour: {len(args.styles) * len(RUN_CONDITIONS)}")
+    print(f"Output policy: {args.output}")
+    if args.output == "minimal":
+        print(
+            "  Suppressed: apf107.dat, ig_rz.dat, *_iri_sample_inputs.pkl, "
+            "*_edp_samples.nc, *_parameterized.nc, *_ensembles/ensemble_batch_*.nc"
+        )
+    else:
+        print("  All package artifacts enabled.")
 
     print("Loading ISR validation files once...")
     tro = load_isr_dataset(TRO_ISR_FILE)
@@ -1301,6 +1371,8 @@ def main():
 
     all_error_rows: list[dict] = []
     hourly_rows: list[dict] = []
+    mode_timing_rows: list[dict] = []
+    daily_ro_status_rows: list[dict] = []
     total_t0 = time.perf_counter()
 
     for hour in range(args.start_hour, args.end_hour):
@@ -1308,11 +1380,10 @@ def main():
         end = start + timedelta(hours=1)
         folder = hour_folder_name(start, end)
         hour_dir = OUTPUT_ROOT / folder
-        hour_dir.mkdir(parents=True, exist_ok=True)
 
         print("\n" + "=" * 96)
         print(f"HOUR: {hour_label(start, end)}")
-        print(f"OUTPUT: {hour_dir}")
+        print(f"OUTPUT (only if RO >= 5): {hour_dir}")
         print("=" * 96)
 
         if args.skip_existing and successful_summary_exists(hour_dir):
@@ -1329,42 +1400,44 @@ def main():
             continue
 
         hour_t0 = time.perf_counter()
-        precomputed_ro = hour_dir / "accepted_ro_observations.nc"
         hour_error_rows: list[dict] = []
         hour_summary_rows: list[dict] = []
 
         try:
-            # -------------------------------------------------------------
-            # 1. Prepare/QC RO once for the hour.
-            # -------------------------------------------------------------
-            pre_cfg = make_precheck_cfg(start, end, ro_dir, precomputed_ro)
-            pre_batches = observation_stream.assemble(pre_cfg)
-            ro_entries = unique_ro_entries(pre_batches)
-            n_ro = len(ro_entries)
-            n_tec = count_tec_rays(pre_batches)
+            # Precheck in a temporary directory so skipped hours leave no folder/files.
+            with tempfile.TemporaryDirectory(prefix="ro_precheck_") as pre_tmp:
+                precomputed_ro_tmp = Path(pre_tmp) / "accepted_ro_observations.nc"
+                pre_cfg = make_precheck_cfg(start, end, ro_dir, precomputed_ro_tmp)
+                pre_batches = observation_stream.assemble(pre_cfg)
+                ro_entries = unique_ro_entries(pre_batches)
+                n_ro = len(ro_entries)
+                n_tec = count_tec_rays(pre_batches)
 
-            print(f"Accepted RO occultation profiles: {n_ro}")
-            print(f"Accepted TEC rays:                {n_tec}")
+                print(f"Accepted RO occultation profiles: {n_ro}")
+                print(f"Accepted TEC rays:                {n_tec}")
 
-            if n_ro == 0 or n_tec == 0:
-                elapsed = time.perf_counter() - hour_t0
-                print("SKIP: no accepted RO observations; no filters run.")
-                row = {
+                skipped_for_ro = (n_ro < 5 or n_tec == 0)
+                daily_ro_status_rows.append({
                     "window_start_utc": start.isoformat(),
                     "window_end_utc": end.isoformat(),
-                    "condition": "none",
-                    "status": "skipped_no_ro",
-                    "n_ro_profiles": n_ro,
-                    "n_tec_rays": n_tec,
-                    "elapsed_seconds": elapsed,
-                    "output_dir": str(hour_dir),
-                    "message": "no accepted RO observations",
-                }
-                hourly_rows.append(row)
-                pd.DataFrame([row]).to_csv(
-                    hour_dir / "hourly_summary.csv", index=False
-                )
-                continue
+                    "n_ro_profiles": int(n_ro),
+                    "n_tec_rays": int(n_tec),
+                    "skipped": bool(skipped_for_ro),
+                    "status": "skipped_too_few_ro" if skipped_for_ro else "accepted_for_assimilation",
+                })
+                daily_status_path = save_daily_ro_status(daily_ro_status_rows, day)
+
+                if skipped_for_ro:
+                    print(
+                        f"SKIP: only {n_ro} accepted RO profiles "
+                        "(minimum required = 5); no hourly folder/files created."
+                    )
+                    print(f"Daily RO status updated: {daily_status_path}")
+                    continue
+
+                hour_dir.mkdir(parents=True, exist_ok=True)
+                precomputed_ro = hour_dir / "accepted_ro_observations.nc"
+                shutil.copy2(precomputed_ro_tmp, precomputed_ro)
 
             tro_match = nearest_profile_in_hour(tro, start, end)
             svl_match = nearest_profile_in_hour(svl, start, end)
@@ -1427,7 +1500,8 @@ def main():
                 with _NoArtifactRunContext(
                     base_edp_samples=(
                         base_edp_samples if condition_name == "boosted" else None
-                    )
+                    ),
+                    output_mode=args.output,
                 ) as no_artifacts:
                     result = run_package(cfg)
                     in_memory_parameterizations = dict(no_artifacts.parameterizations)
@@ -1440,6 +1514,30 @@ def main():
                     f"{condition_name} used RO profiles={n_ro_used}, "
                     f"TEC rays={n_tec_used}"
                 )
+
+                # package_run stores the actual run_cycle wall time separately
+                # for each parameterization style. Report/store all 8 modes:
+                # 4 styles x (no_boost, boosted).
+                print("Per-mode assimilation timing:")
+                for style in cfg.styles:
+                    _cycle_result, n_state, style_wall_time_s = result.results_by_style[style]
+                    print(
+                        f"  {condition_name:9s} | {style:16s} | "
+                        f"{style_wall_time_s:9.2f} s "
+                        f"({style_wall_time_s / 60.0:6.2f} min) | "
+                        f"n_state={n_state}"
+                    )
+                    mode_timing_rows.append({
+                        "window_start_utc": start.isoformat(),
+                        "window_end_utc": end.isoformat(),
+                        "condition": condition_name,
+                        "style": style,
+                        "n_state": int(n_state),
+                        "n_ro_profiles": int(n_ro_used),
+                        "n_tec_rays": int(n_tec_used),
+                        "assimilation_wall_time_seconds": float(style_wall_time_s),
+                        "assimilation_wall_time_minutes": float(style_wall_time_s) / 60.0,
+                    })
 
                 if condition_name == "no_boost":
                     base_edp_samples = result.edp_samples
@@ -1631,24 +1729,38 @@ def main():
                 pd.DataFrame(hour_error_rows).to_csv(
                     hour_dir / "dual_isr_errors.csv", index=False
                 )
-                pd.DataFrame(hourly_rows).to_csv(
-                    OUTPUT_ROOT
-                    / f"hourly_run_summary_{day:%Y-%m-%d}.csv",
-                    index=False,
-                )
-                pd.DataFrame(all_error_rows + hour_error_rows).to_csv(
-                    OUTPUT_ROOT
-                    / f"hourly_dual_isr_errors_{day:%Y-%m-%d}.csv",
-                    index=False,
-                )
+                # Daily aggregate run/error CSVs intentionally disabled.
+                # Per-hour hourly_summary.csv and dual_isr_errors.csv are retained.
 
             # Both conditions completed.
             all_error_rows.extend(hour_error_rows)
+            for _row in reversed(daily_ro_status_rows):
+                if _row["window_start_utc"] == start.isoformat():
+                    _row["status"] = "success"
+                    _row["skipped"] = False
+                    break
+            save_daily_ro_status(daily_ro_status_rows, day)
+
+            hour_mode_timings = [
+                row for row in mode_timing_rows
+                if row["window_start_utc"] == start.isoformat()
+            ]
+            if hour_mode_timings:
+                pd.DataFrame(hour_mode_timings).to_csv(
+                    hour_dir / "mode_timing.csv", index=False
+                )
+
             elapsed = time.perf_counter() - hour_t0
             print(f"Hour complete in {elapsed / 60.0:.1f} min")
 
         except Exception as exc:
             elapsed = time.perf_counter() - hour_t0
+            for _row in reversed(daily_ro_status_rows):
+                if _row["window_start_utc"] == start.isoformat():
+                    _row["status"] = "failed_after_ro_precheck"
+                    _row["skipped"] = False
+                    break
+            save_daily_ro_status(daily_ro_status_rows, day)
             print(
                 f"FAILED hour {hour_label(start, end)}: "
                 f"{type(exc).__name__}: {exc}"
@@ -1674,64 +1786,82 @@ def main():
                 raise
 
     # ---------------------------------------------------------------------
-    # 4. Day/range summary tables and RO-count-bin figures.
+    # 4. Optional aggregate RO-bin products are disabled below.
+    #    No root-level hourly_run_summary_* or hourly_dual_isr_errors_* CSVs.
     # ---------------------------------------------------------------------
-    hourly_df = pd.DataFrame(hourly_rows)
-    hourly_csv = OUTPUT_ROOT / f"hourly_run_summary_{day:%Y-%m-%d}.csv"
-    hourly_df.to_csv(hourly_csv, index=False)
-
+    # Root-level daily aggregate run/error CSVs intentionally disabled.
+    # Keep only the per-hour CSVs plus the daily RO-status CSV and timing CSV.
     errors_df = pd.DataFrame(all_error_rows)
-    error_csv = OUTPUT_ROOT / f"hourly_dual_isr_errors_{day:%Y-%m-%d}.csv"
-    errors_df.to_csv(error_csv, index=False)
 
-    if not errors_df.empty:
-        print(
-            "\nCreating RO-count-binned median +/-1 sigma "
-            "summary figures for all 8 cases..."
+    # ================================================================
+    # RO-count-bin comparison outputs DISABLED
+    # ================================================================
+    # Keep all per-hour assimilation and ISR validation outputs unchanged.
+    #
+    # The cross-hour comparison products grouped by RO count
+    # (5 / 6-10 / 11-15 / 16-20 / >20) are intentionally not generated.
+    # This disables only the aggregate RO-bin CSVs/figures:
+    #
+    #   summary_<condition>_<style>_RO_<bin>_median_rmse.csv
+    #   summary_<condition>_<style>_RO_<bin>_median_rmse.png
+    #   summary_<condition>_<style>_RO_bins_1x5_median_rmse.png
+    #   summary_<condition>_all4styles_RO_bins_4x5_median_rmse.png
+    #   summary_all8runs_RO_bins_8x5_median_rmse.png
+    #
+    # The helper functions are intentionally left in this file so these
+    # summary products can be re-enabled later without changing the hourly
+    # scientific workflow.
+    #
+    # if not errors_df.empty:
+    #     print(
+    #         "\nCreating RO-count-binned median +/-1 sigma "
+    #         "summary figures for all 8 cases..."
+    #     )
+    #
+    #     for style in args.styles:
+    #         for condition in RUN_CONDITIONS:
+    #             condition_name = condition["name"]
+    #
+    #             for bin_tag, bin_label, low, high in RO_COUNT_BINS:
+    #                 path = plot_ro_count_summary(
+    #                     errors_df,
+    #                     style,
+    #                     condition_name,
+    #                     bin_tag,
+    #                     bin_label,
+    #                     low,
+    #                     high,
+    #                     OUTPUT_ROOT,
+    #                 )
+    #                 if path is not None:
+    #                     print("  saved", path)
+    #
+    #             row_path = plot_ro_count_summary_row(
+    #                 errors_df, style, condition_name, OUTPUT_ROOT
+    #             )
+    #             if row_path is not None:
+    #                 print("  saved", row_path)
+    #
+    #     for condition in RUN_CONDITIONS:
+    #         grid_path = plot_condition_summary_grid(
+    #             errors_df,
+    #             args.styles,
+    #             condition["name"],
+    #             OUTPUT_ROOT,
+    #         )
+    #         if grid_path is not None:
+    #             print("  saved", grid_path)
+    #
+    #     grid8_path = plot_all_8runs_summary_grid(
+    #         errors_df, args.styles, OUTPUT_ROOT
+    #     )
+    #     if grid8_path is not None:
+    #         print("  saved", grid8_path)
+
+    if mode_timing_rows:
+        pd.DataFrame(mode_timing_rows).to_csv(
+            OUTPUT_ROOT / f"{args.date}_mode_timing.csv", index=False
         )
-
-        # Individual 1x5 row for each of the 8 style/boost combinations.
-        for style in args.styles:
-            for condition in RUN_CONDITIONS:
-                condition_name = condition["name"]
-
-                for bin_tag, bin_label, low, high in RO_COUNT_BINS:
-                    path = plot_ro_count_summary(
-                        errors_df,
-                        style,
-                        condition_name,
-                        bin_tag,
-                        bin_label,
-                        low,
-                        high,
-                        OUTPUT_ROOT,
-                    )
-                    if path is not None:
-                        print("  saved", path)
-
-                row_path = plot_ro_count_summary_row(
-                    errors_df, style, condition_name, OUTPUT_ROOT
-                )
-                if row_path is not None:
-                    print("  saved", row_path)
-
-        # Four styles at fixed condition: easier no-boost vs boosted reading.
-        for condition in RUN_CONDITIONS:
-            grid_path = plot_condition_summary_grid(
-                errors_df,
-                args.styles,
-                condition["name"],
-                OUTPUT_ROOT,
-            )
-            if grid_path is not None:
-                print("  saved", grid_path)
-
-        # All eight cases together, same x-axis limit across all 40 panels.
-        grid8_path = plot_all_8runs_summary_grid(
-            errors_df, args.styles, OUTPUT_ROOT
-        )
-        if grid8_path is not None:
-            print("  saved", grid8_path)
 
     total_elapsed = time.perf_counter() - total_t0
     hh = int(total_elapsed // 3600)
@@ -1744,8 +1874,6 @@ def main():
     print(
         f"Total elapsed: {hh:02d}:{mm:02d}:{ss:05.2f} (hh:mm:ss)"
     )
-    print("Hourly summary:", hourly_csv)
-    print("Hourly ISR-error table:", error_csv)
     print("Output root:", OUTPUT_ROOT)
 
 

@@ -124,32 +124,6 @@ class TestDataDirSeparation:
         iri_selection.load_or_build_iri_sample_inputs(cfg)   # must not raise
 
 
-class TestDataDirSeparation:
-    """apf107.dat/ig_rz.dat are fetched-artifact files, not source data --
-    confirms they're cached under cfg.output_dir (the cycle's own run
-    folder) rather than wherever the process's cwd happens to be, and
-    that an unset output_dir falls back to the original behavior."""
-
-    def test_output_dir_passed_as_data_dir(self, monkeypatch, fixture_apf107, fixture_ig_rz, tmp_path):
-        seen = {}
-        monkeypatch.setattr(M, "get_apf107", lambda data_dir=None: (seen.setdefault("apf107", data_dir), fixture_apf107)[1])
-        monkeypatch.setattr(M, "get_ig_rz", lambda data_dir=None: (seen.setdefault("ig_rz", data_dir), fixture_ig_rz)[1])
-
-        cfg = _make_cfg(output_dir=tmp_path / "my_run")
-        iri_selection.load_or_build_iri_sample_inputs(cfg)
-        assert seen == {"apf107": str(tmp_path / "my_run"), "ig_rz": str(tmp_path / "my_run")}
-
-    def test_no_output_dir_falls_back_to_none(self, no_network):
-        """no_network's lambdas default data_dir=None -- if cfg.output_dir
-        is unset, load_or_build_iri_sample_inputs must pass data_dir=None
-        through (not e.g. an empty string), preserving the original
-        cwd-relative behavior for callers with no packaged-run output
-        directory (bare cycle_driver.run_cycle/style_sweep usage)."""
-        cfg = _make_cfg()
-        assert cfg.output_dir is None
-        iri_selection.load_or_build_iri_sample_inputs(cfg)   # must not raise
-
-
 class TestPrecomputedFileMode:
     def test_saves_and_reloads_iri_sample_inputs(self, tmp_path, no_network):
         out = tmp_path / "iri_cycle"
