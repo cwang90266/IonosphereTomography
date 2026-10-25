@@ -11,8 +11,16 @@ Main additions per successful one-hour slot, per style:
        nearest Tromso ISR profile, nearest Svalbard ISR profile,
        title includes number of RO occultation profiles and TEC rays used.
   2) dual_isr_rmse_by_altitude.png
-       analysis error/RMSE-by-native-altitude-gate against Tromso (red)
-       and Svalbard (green). No extrapolation beyond each ISR's native gates.
+       analysis (solid) and forecast (dashed) error/RMSE-by-native-altitude-
+       gate against Tromso (red) and Svalbard (green). No extrapolation
+       beyond each ISR's native gates.
+
+  dual_isr_errors.csv (per hour) holds, for each style/condition/station
+  and native ISR gate: analysis_error_m3, forecast_error_m3, the matched
+  ISR profile time (isr_time_utc), and the Ne values behind both errors
+  (isr_ne_m3, forecast_ne_m3, analysis_ne_m3). The forecast is the prior
+  ensemble decoded at the station itself, so Svalbard gets its own
+  forecast-vs-analysis comparison, not only Tromso.
 
 After all windows, per style and RO-count bin:
   - summary_<style>_RO_<bin>_median_rmse.png
@@ -786,24 +794,35 @@ def station_error_profile(
     analysis_profile: np.ndarray,
     isr,
     match,
+    forecast_profile: np.ndarray | None = None,
 ):
+    """Gate-wise |model - ISR| for the analysis (and the forecast, if given)
+    at one station, on the ISR's native gates."""
     if match is None:
         return None
     isr_time, isr_ne = match
-    a_mean = np.nanmean(analysis_profile, axis=-1)
-    model_at_isr = interp_log10(isr.altitude, model_altitude, a_mean)
-    valid = np.isfinite(model_at_isr) & np.isfinite(isr_ne)
-    error = np.full_like(isr.altitude, np.nan, dtype=float)
-    # With one model/ISR pair per hour, sqrt((model-ISR)^2) = absolute error.
-    # Across hourly windows these gate-wise errors are aggregated below.
-    error[valid] = np.abs(model_at_isr[valid] - isr_ne[valid])
-    return {
+
+    def _abs_error(profile):
+        mean = np.nanmean(profile, axis=-1)
+        model_at_isr = interp_log10(isr.altitude, model_altitude, mean)
+        valid = np.isfinite(model_at_isr) & np.isfinite(isr_ne)
+        error = np.full_like(isr.altitude, np.nan, dtype=float)
+        # With one model/ISR pair per hour, sqrt((model-ISR)^2) = absolute error.
+        # Across hourly windows these gate-wise errors are aggregated below.
+        error[valid] = np.abs(model_at_isr[valid] - isr_ne[valid])
+        return error, model_at_isr
+
+    error, model_at_isr = _abs_error(analysis_profile)
+    out = {
         "time": isr_time,
         "altitude_km": np.asarray(isr.altitude, dtype=float),
         "error_m3": error,
         "isr_ne_m3": np.asarray(isr_ne, dtype=float),
         "model_ne_m3": model_at_isr,
     }
+    if forecast_profile is not None:
+        out["forecast_error_m3"], out["forecast_ne_m3"] = _abs_error(forecast_profile)
+    return out
 
 
 def plot_dual_isr_error(
@@ -818,21 +837,24 @@ def plot_dual_isr_error(
 ):
     fig, ax = plt.subplots(figsize=(7, 9))
 
-    if tro_error is not None:
+    for code, err, color in (("TRO", tro_error, "red"), ("SVL", svl_error, "green")):
+        if err is None:
+            continue
         ax.plot(
-            tro_error["error_m3"], tro_error["altitude_km"],
-            ".-", color="red", markersize=4, label="TRO analysis RMSE/error",
+            err["error_m3"], err["altitude_km"],
+            ".-", color=color, markersize=4, label=f"{code} analysis RMSE/error",
         )
-    if svl_error is not None:
-        ax.plot(
-            svl_error["error_m3"], svl_error["altitude_km"],
-            ".-", color="green", markersize=4, label="SVL analysis RMSE/error",
-        )
+        if "forecast_error_m3" in err:
+            ax.plot(
+                err["forecast_error_m3"], err["altitude_km"],
+                ".--", color=color, alpha=0.5, markersize=3,
+                label=f"{code} forecast RMSE/error",
+            )
 
-    ax.set_xlabel(r"Analysis RMSE/error vs. ISR (m$^{-3}$)")
+    ax.set_xlabel(r"Forecast/analysis RMSE/error vs. ISR (m$^{-3}$)")
     ax.set_ylabel("Altitude (km)")
     ax.set_title(
-        f"{style} -- analysis error vs. TRO/SVL ISR\n"
+        f"{style} -- forecast/analysis error vs. TRO/SVL ISR\n"
         f"{hour_label(start, end)} | RO profiles={n_ro} | TEC rays={n_tec}"
     )
     ax.legend(loc="best", fontsize=8)
@@ -854,9 +876,14 @@ def append_error_rows(
 ):
     if error_profile is None:
         return
-    for altitude, error in zip(
-        error_profile["altitude_km"], error_profile["error_m3"]
-    ):
+
+    def _value(key, i):
+        values = error_profile.get(key)
+        if values is None:
+            return np.nan
+        return float(values[i]) if np.isfinite(values[i]) else np.nan
+
+    for i, altitude in enumerate(error_profile["altitude_km"]):
         rows.append({
             "style": style,
             "condition": condition,
@@ -866,7 +893,15 @@ def append_error_rows(
             "n_ro_profiles": n_ro,
             "n_tec_rays": n_tec,
             "altitude_km": float(altitude),
-            "analysis_error_m3": float(error) if np.isfinite(error) else np.nan,
+            "analysis_error_m3": _value("error_m3", i),
+            # Added columns: forecast error and the Ne values behind both
+            # errors, so forecast-vs-analysis gains (and relative errors) can
+            # be scored at every station without an offline rebuild.
+            "forecast_error_m3": _value("forecast_error_m3", i),
+            "isr_time_utc": pd.Timestamp(error_profile["time"]).isoformat(),
+            "isr_ne_m3": _value("isr_ne_m3", i),
+            "forecast_ne_m3": _value("forecast_ne_m3", i),
+            "analysis_ne_m3": _value("model_ne_m3", i),
         })
 
 
@@ -1515,10 +1550,12 @@ def main():
                     )
 
                     tro_error = station_error_profile(
-                        model_altitude, a_tro, tro, tro_match
+                        model_altitude, a_tro, tro, tro_match,
+                        forecast_profile=f_tro,
                     )
                     svl_error = station_error_profile(
-                        model_altitude, a_svl, svl, svl_match
+                        model_altitude, a_svl, svl, svl_match,
+                        forecast_profile=f_svl,
                     )
 
                     plot_dual_isr_error(

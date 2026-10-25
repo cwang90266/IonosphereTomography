@@ -23,6 +23,12 @@ analysis error at the ISR gates (`dual_isr_errors.csv`). It does not store:
 - the model TEC for each ray, so the fit to the RO data cannot be checked;
 - full profiles, so NmF2/hmF2/NmE/hmE cannot be compared.
 
+Runs made with the driver after the change of 2026-10-25 also write
+`forecast_error_m3`, `isr_time_utc`, `isr_ne_m3`, `forecast_ne_m3` and
+`analysis_ne_m3` to `dual_isr_errors.csv` for every station. This covers
+forecast-vs-analysis at Svalbard without a rebuild. The TEC fit, the
+overlap and full-column profiles still need the rebuild.
+
 Everything above is recomputed exactly from the saved ensembles. On the
 October 2025 runs (30 hours × 8 runs), the rebuilt analysis reproduces
 `dual_isr_errors.csv` to a relative difference of about 1e-12 at both
