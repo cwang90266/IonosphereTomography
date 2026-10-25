@@ -53,13 +53,12 @@ Conditions are found automatically: any subfolder holding an
 `*_parameterized.nc` and at least one `ensemble_batch_*.nc`. The last batch
 file is taken as the final analysis of the hour.
 
-> **Check before a new campaign.** The local copy of
-> `run_hourly_all4styles_boost_compare.py` patches out writing
-> `*_edp_samples.nc`, `*_parameterized.nc` and the ensemble files (see
-> `_load_or_build_no_edp_nc`, `_capture_parameterized_no_nc`,
-> `_skip_ensemble_nc`). The October 2025 runs, made with the
-> `IonosphereTomography-pin_dev` copy, did save them. Make sure the driver
-> used for new runs saves all three, or nothing can be scored.
+> **Output mode of the driver.** `run_hourly_all4styles_boost_compare.py`
+> writes these three file types by default (`--output scoring`), at about
+> 1.5 GB per hour folder. A run made with `--output minimal` does not write
+> them and cannot be scored by `extract_run_diagnostics.py`. `--output all`
+> writes them as well as the IRI cache files (`apf107.dat`, `ig_rz.dat`,
+> `*_iri_sample_inputs.pkl`).
 
 ### 2.2 ISR files
 
