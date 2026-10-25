@@ -38,8 +38,11 @@ Example:
         --start-hour 0 \
         --end-hour 24
 
-By default, large/cache intermediate artifacts are suppressed. To write
-all package artifacts, including the normally suppressed .dat/.pkl/.nc files:
+By default (--output scoring) the files Run_Scoring needs to rebuild and
+score a run are written -- *_edp_samples.nc, *_parameterized.nc and
+*_ensembles/ensemble_batch_*.nc (about 1.5 GB per hour folder) -- while the
+IRI cache files (.dat/.pkl) are suppressed. --output minimal suppresses all
+of these. To write all package artifacts, including the .dat/.pkl files:
 
     python run_hourly_all4styles_boost_compare.py \
         --date 2025-10-16 \
@@ -285,15 +288,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        choices=("minimal", "all"),
-        default="minimal",
+        choices=("scoring", "minimal", "all"),
+        default="scoring",
         help=(
             "Output policy for large/cache intermediate artifacts. "
-            "'minimal' (default) suppresses apf107.dat, ig_rz.dat, "
-            "*_iri_sample_inputs.pkl, *_edp_samples.nc, *_parameterized.nc, "
-            "and *_ensembles/ensemble_batch_*.nc. "
-            "'all' writes those artifacts too. Scientific figures, CSV summaries, "
-            "processed RO observations, and validation products are written in both modes."
+            "'scoring' (default) writes *_edp_samples.nc, *_parameterized.nc and "
+            "*_ensembles/ensemble_batch_*.nc -- the inputs Run_Scoring needs to "
+            "rebuild TEC residuals and full profiles (~1.5 GB per hour) -- and "
+            "suppresses apf107.dat, ig_rz.dat and *_iri_sample_inputs.pkl. "
+            "'minimal' suppresses all six (the run then cannot be rescored). "
+            "'all' writes all six. Scientific figures, CSV summaries, "
+            "processed RO observations, and validation products are written in every mode."
         ),
     )
     return parser.parse_args()
@@ -490,23 +495,24 @@ class _NoArtifactRunContext:
     (boosted reuses the exact no-boost base EDP in memory) while making
     heavy/cache artifacts optional.
 
-    output_mode="minimal" (default) suppresses:
-      - *_edp_samples.nc
-      - *_parameterized.nc
-      - *_ensembles/ensemble_batch_*.nc
+    output_mode="scoring" (default) writes the files Run_Scoring needs
+    (*_edp_samples.nc, *_parameterized.nc, *_ensembles/ensemble_batch_*.nc)
+    and suppresses the IRI cache files:
       - *_iri_sample_inputs.pkl
       - apf107.dat
       - ig_rz.dat
 
-    output_mode="all" writes those artifacts using the normal package paths.
+    output_mode="minimal" suppresses all six of the files above.
+
+    output_mode="all" writes all six using the normal package paths.
 
     In both modes the exact in-memory Parameterized_EDPSamples objects are
     captured so downstream ISR validation does not depend on reopening a
     parameterized netCDF file.
     """
 
-    def __init__(self, *, base_edp_samples=None, output_mode: str = "minimal"):
-        if output_mode not in {"minimal", "all"}:
+    def __init__(self, *, base_edp_samples=None, output_mode: str = "scoring"):
+        if output_mode not in {"scoring", "minimal", "all"}:
             raise ValueError(f"Unknown output_mode={output_mode!r}")
         self.base_edp_samples = base_edp_samples
         self.output_mode = output_mode
@@ -530,8 +536,10 @@ class _NoArtifactRunContext:
         orig_load_iri = self._orig_load_or_build_iri
         orig_save_parameterized = self._orig_save_parameterized
         captured = self.parameterizations
+        # Files Run_Scoring needs: written in "scoring" and "all".
+        save_scoring_files = output_mode in {"scoring", "all"}
 
-        if output_mode == "minimal":
+        if output_mode != "all":
             self._iri_tmpdir = tempfile.TemporaryDirectory(prefix="ionosphere_iri_")
             iri_tmpdir = self._iri_tmpdir.name
 
@@ -563,14 +571,14 @@ class _NoArtifactRunContext:
                         taper_floor=cfg.diagonal_boost_taper_floor,
                     )
 
-                if output_mode == "all" and cfg.edp_samples_output_path is not None:
+                if save_scoring_files and cfg.edp_samples_output_path is not None:
                     Path(cfg.edp_samples_output_path).parent.mkdir(
                         parents=True, exist_ok=True
                     )
                     edp.saveNetCDF(cfg.edp_samples_output_path)
                 return edp
 
-            if output_mode == "minimal":
+            if not save_scoring_files:
                 return orig_load(replace(cfg, edp_samples_output_path=None))
             return orig_load(cfg)
 
@@ -585,7 +593,7 @@ class _NoArtifactRunContext:
             if style is not None:
                 captured[str(style)] = pes
 
-            if output_mode == "all":
+            if save_scoring_files:
                 return orig_save_parameterized(pes, path)
             return None
 
@@ -595,7 +603,7 @@ class _NoArtifactRunContext:
         ensemble_init.load_or_build_edp_samples = _load_or_build_controlled_ab
         Parameterized_EDPSamples.saveNetCDF = _capture_parameterized
 
-        if output_mode == "minimal":
+        if not save_scoring_files:
             cycle_driver_module.save_ensemble_netcdf = _skip_ensemble_nc
 
         return self
