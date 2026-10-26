@@ -244,6 +244,8 @@ def run_cycle(cfg: CycleConfig, edp_samples, parameterization, batches: list[Cyc
     ``run_batch_loop``'s docstring.
     """
     driver = GeneralEnKFDriver(style=cfg.style, hyper_params=cfg.hyper_params)
+    if cfg.analysis_rng_seed is not None:
+        driver.config.rng = np.random.default_rng(cfg.analysis_rng_seed)
     obs_operators = [
         driver.build_observation_operator(
             edp_samples, parameterization, ensemble_prior.param_shape, batch.podTc2_data,

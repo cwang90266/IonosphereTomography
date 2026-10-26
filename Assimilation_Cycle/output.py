@@ -28,6 +28,7 @@ try:
 except ImportError:
     pass
 import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
 
 from Ensemble_Kalman_Engine import EnsembleState
 from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
@@ -247,15 +248,130 @@ def plot_iri_input_distributions(sampling_parameters, fig=None, figsize=(11, 6))
     return fig
 
 
+def ray_ground_track(entry, num_segments: int = 1000):
+    """Geographic (lon, lat, altitude_km) of every ray segment midpoint for
+    every ray in one RO/IGS ``entry`` -- the same GNSS<->receiver chord
+    sampling and ECEF->geodetic projection
+    ``EDPSamples.get_observation_operator``/``forward_model_mesh_tec`` each
+    do internally while building H, factored out here as a plotting-only
+    utility (deliberately *not* wired into either of those -- this changes
+    no production math, only what a diagnostic can additionally draw) so
+    ``plot_observation_operator_sum``'s ``overlay_los`` can show where a
+    ray's geometry actually passes through, independent of how its
+    contribution ends up distributed onto the state grid.
+
+    Returns
+    -------
+    lons, lats, alts_km : flat (n_rays * (num_segments - 1),) arrays,
+        one entry per ray segment midpoint, all rays concatenated.
+    """
+    import pyproj
+
+    podTc2 = entry.to_operator_dict()
+    LEO = podTc2["rec_ecef_km"]
+    GNSS = podTc2["gnss_ecef_km"]
+    n_rays = LEO.shape[1]
+
+    transformer = pyproj.Transformer.from_crs(
+        pyproj.CRS.from_proj4("+proj=geocent +ellps=WGS84 +datum=WGS84"),
+        pyproj.CRS.from_proj4("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+        always_xy=True,
+    )
+
+    all_lons, all_lats, all_alts = [], [], []
+    t = np.linspace(0, 1, num_segments)
+    for i in range(n_rays):
+        ray_points = GNSS[:, i:i + 1] + (LEO[:, i:i + 1] - GNSS[:, i:i + 1]) * t
+        midpoints = (ray_points[:, :-1] + ray_points[:, 1:]) / 2.0
+        lons, lats, alts_m = transformer.transform(
+            midpoints[0, :] * 1e3, midpoints[1, :] * 1e3, midpoints[2, :] * 1e3
+        )
+        all_lons.append(lons)
+        all_lats.append(lats)
+        all_alts.append(alts_m / 1000.0)
+
+    return np.concatenate(all_lons), np.concatenate(all_lats), np.concatenate(all_alts)
+
+
+def _adaptive_los_alpha(n_near: int) -> float:
+    """Alpha for the LOS scatter overlay, scaled down as the number of
+    points actually drawn in one panel grows (2026-10-17 user request:
+    the overlay still looked solid at a fixed low alpha for some single-
+    entry panels). Point density, not entry/ray count, is what drives
+    alpha-stacking back to near-opaque -- an occultation's rays usually
+    trace one narrow bundle rather than spreading out, so even a single
+    entry can pack hundreds to thousands of overlapping points into a few
+    panels (confirmed against real data: a 173-ray entry had up to 2360
+    points within +/-25km of one altitude, and needed alpha ~0.02 to let
+    the underlying sum(H) coloring show through -- a fixed 0.08 still
+    looked solid). Calibrated so ~600 near-points lands around 0.08 and
+    ~2400 lands around 0.02, clipped to stay visible for a sparse panel
+    and never fully opaque for a dense one."""
+    return float(np.clip(48.0 / max(n_near, 1), 0.02, 0.6))
+
+
 def plot_observation_operator_sum(
     edp_samples, entry, altitudes=(100, 200, 300, 400, 500, 600, 700, 800),
     num_segments: int = 1000, fig=None, figsize=(14, 7),
+    mask_zero: bool = True, overlay_los: bool = True, los_alt_tol_km: float = 25.0,
+    los_alpha: float | None = None,
 ):
     """Sum of the observation operator's rows over every ray in one RO/IGS
     ``entry``, shown on the horizontal grid at several altitudes (plan/docx
     step 5) -- "where on the grid does this occultation/arc actually have
     sensitivity, and at what height." One panel per altitude in
-    ``altitudes`` (nearest available grid level used)."""
+    ``altitudes`` (nearest available grid level used).
+
+    Parameters
+    ----------
+    mask_zero : bool, default True
+        Diagnostic (2026-10-16): grid cells where ``sum(H)`` is *exactly*
+        zero -- no ray in ``entry`` ever touches that (altitude, geo-vertex)
+        state component at all -- are set to NaN before plotting, so
+        ``tripcolor`` masks those triangles out to the background map color
+        instead of coloring them the colormap's dark end, which was
+        visually indistinguishable from a small-but-nonzero value. Exact
+        zero is the correct test here, not a tolerance: an untouched H
+        entry is never touched by any accumulation at all, so it is a hard
+        0.0, not numerical noise near zero.
+    overlay_los : bool, default True
+        Diagnostic (2026-10-16, on by default for the single-entry plot
+        per 2026-10-16 user request -- the combined/all-RO plot below
+        defaults this off instead, since pooling every entry's track
+        there gets visually dense fast): scatter each ray's ground track
+        (segment midpoints within ``los_alt_tol_km`` of each panel's
+        altitude, via :func:`ray_ground_track`) on top of the sum(H) map,
+        so a nonzero region the real ray geometry never actually passes
+        near is immediately visually suspicious rather than easy to miss.
+    los_alt_tol_km : float, default 25.0
+        Half-width of the altitude band (km) used to select which ray
+        segment midpoints to draw on each panel.
+    los_alpha : float or None, default None
+        Alpha for the LOS scatter points. None (the default, 2026-10-17)
+        auto-computes a per-panel value from how many points actually
+        land in that panel (:func:`_adaptive_los_alpha`) -- a fixed alpha
+        either looked solid for a dense panel or too faint for a sparse
+        one, since density varies panel-to-panel even within one entry
+        (an occultation's rays usually bundle into one narrow corridor,
+        not spread evenly across altitudes). Pass an explicit float to
+        override with the same alpha everywhere.
+
+    Both diagnostics were added investigating a real, now-confirmed finding:
+    an isolated, disconnected high-value region this function's plots show
+    for some occultations is the nearest-neighbor nearest-vertex fallback in
+    ``EDPSamples.get_observation_operator`` for ray segments that fall
+    *outside* the mesh entirely -- unlike its sibling
+    ``forward_model_mesh_tec``, that fallback has no maximum-distance cap,
+    so far-outside segments (confirmed: up to thousands of km away) can
+    pile enormous, non-physical path length onto a single boundary vertex.
+    See the investigation notes for the real numbers measured against this
+    module's own ``podTc2_YM08.2025.322.10.06.0022.C22.01_0000.0001_nc``
+    example. ``overlay_los`` makes this visible directly: the bright region
+    this bug produces will show *no* red LOS points overlaid on or near it
+    (true for every panel/altitude -- genuine ray-touched cells always carry
+    `overlay_los` points over them), since no real ray geometry actually
+    passes through that location at that altitude.
+    """
     H_entry = edp_samples.get_observation_operator(entry.to_operator_dict(), num_segments=num_segments)
     n_height = len(edp_samples.altitude)
     n_geo = edp_samples.geolocation.shape[0]
@@ -269,11 +385,26 @@ def plot_observation_operator_sum(
                                   subplot_kw={"projection": _cartopy_projection(edp_samples)})
     axes = np.asarray(fig.axes).ravel()
 
+    los_lons = los_lats = los_alts = None
+    if overlay_los:
+        los_lons, los_lats, los_alts = ray_ground_track(entry, num_segments=num_segments)
+
     for ax, target_alt in zip(axes, altitudes):
         alt_idx = int(np.argmin(np.abs(edp_samples.altitude - target_alt)))
         actual_alt = float(edp_samples.altitude[alt_idx])
-        plot_horizontal(edp_samples, summed[alt_idx, :], target_alt=actual_alt, ax=ax,
+        values = summed[alt_idx, :].copy()
+        if mask_zero:
+            values = np.where(values == 0, np.nan, values)
+        plot_horizontal(edp_samples, values, target_alt=actual_alt, ax=ax,
                          scalar_label=f"sum(H) [{actual_alt:.0f} km]")
+        if overlay_los:
+            near = np.abs(los_alts - actual_alt) <= los_alt_tol_km
+            if np.any(near):
+                alpha = los_alpha if los_alpha is not None else _adaptive_los_alpha(int(near.sum()))
+                ax.scatter(los_lons[near], los_lats[near], s=1.0, c="red",
+                           transform=ccrs.Geodetic(), zorder=6, alpha=alpha,
+                           label=f"LOS (+/-{los_alt_tol_km:.0f}km)")
+                ax.legend(loc="lower left", fontsize=6, framealpha=0.8)
     for ax in axes[n_alt:]:
         ax.axis("off")
 
@@ -351,6 +482,56 @@ def _interpolate_field_at_latlon(edp_samples, field: np.ndarray, lat: float, lon
     return w[0] * field[:, verts[0], ...] + w[1] * field[:, verts[1], ...] + w[2] * field[:, verts[2], ...]
 
 
+def resolve_edp_query_point_and_profiles(
+    edp_samples, entry, decoded_forecast: np.ndarray, decoded_analysis: np.ndarray,
+    *, lat: float | None = None, lon: float | None = None,
+    tangent_alt_window: tuple[float, float] = (250.0, 350.0),
+):
+    """Shared by :func:`plot_edp_profile_comparison` and the cross-style
+    comparison plots (``package_run.py`` needs the same lat/lon-derivation
+    and horizontal-interpolation logic to collect one style's profile at
+    a time, before any of them are plotted): resolves the query
+    ``(lat, lon)`` (derived from ``entry`` if not given -- see
+    :func:`plot_edp_profile_comparison`'s docstring for the derivation
+    rule) and returns ``(lat, lon, forecast_profile, analysis_profile)``,
+    where the profiles are ``(n_height, n_members)`` -- the raw
+    interpolated ensemble, not yet reduced to mean/std, so a caller
+    comparing multiple styles can combine them however it needs to.
+
+    Raises ``ValueError`` under the same conditions
+    ``plot_edp_profile_comparison`` always has (no ``tangent_alt_km``, or
+    no ray in ``tangent_alt_window``, when ``lat``/``lon`` aren't given
+    explicitly).
+    """
+    if lat is None or lon is None:
+        if entry.tangent_alt_km is None:
+            raise ValueError("resolve_edp_query_point_and_profiles: entry has no tangent_alt_km; pass lat/lon explicitly.")
+        window_mask = (
+            (np.asarray(entry.tangent_alt_km) >= tangent_alt_window[0])
+            & (np.asarray(entry.tangent_alt_km) <= tangent_alt_window[1])
+        )
+        if not window_mask.any():
+            raise ValueError(
+                f"resolve_edp_query_point_and_profiles: no rays with tangent_alt_km in "
+                f"{tangent_alt_window} for entry {entry.label!r}; pass lat/lon explicitly."
+            )
+        candidate_idx = np.where(window_mask)[0]
+        best = candidate_idx[np.argmax(np.asarray(entry.tec)[candidate_idx])]
+
+        from edp_samples import EDPSamples as _E, _ecef_to_geodetic
+        tangent_xyz, _, _ = _E.rayTangent(
+            np.asarray(entry.rec_ecef_km)[:, best:best + 1],
+            np.asarray(entry.gnss_ecef_km)[:, best:best + 1],
+            units="km",
+        )
+        lat_arr, lon_arr, _ = _ecef_to_geodetic(tangent_xyz.T * 1000.0)
+        lat, lon = float(lat_arr[0]), float(lon_arr[0])
+
+    forecast_profile = _interpolate_field_at_latlon(edp_samples, decoded_forecast, lat, lon)
+    analysis_profile = _interpolate_field_at_latlon(edp_samples, decoded_analysis, lat, lon)
+    return lat, lon, forecast_profile, analysis_profile
+
+
 def plot_edp_profile_comparison(
     edp_samples, entry, decoded_forecast: np.ndarray, decoded_analysis: np.ndarray,
     *, lat: float | None = None, lon: float | None = None,
@@ -368,32 +549,10 @@ def plot_edp_profile_comparison(
 
     ``decoded_forecast``/``decoded_analysis`` : ``(n_height, n_geo, n_members)``.
     """
-    if lat is None or lon is None:
-        if entry.tangent_alt_km is None:
-            raise ValueError("plot_edp_profile_comparison: entry has no tangent_alt_km; pass lat/lon explicitly.")
-        window_mask = (
-            (np.asarray(entry.tangent_alt_km) >= tangent_alt_window[0])
-            & (np.asarray(entry.tangent_alt_km) <= tangent_alt_window[1])
-        )
-        if not window_mask.any():
-            raise ValueError(
-                f"plot_edp_profile_comparison: no rays with tangent_alt_km in "
-                f"{tangent_alt_window} for entry {entry.label!r}; pass lat/lon explicitly."
-            )
-        candidate_idx = np.where(window_mask)[0]
-        best = candidate_idx[np.argmax(np.asarray(entry.tec)[candidate_idx])]
-
-        from edp_samples import EDPSamples as _E, _ecef_to_geodetic
-        tangent_xyz, _, _ = _E.rayTangent(
-            np.asarray(entry.rec_ecef_km)[:, best:best + 1],
-            np.asarray(entry.gnss_ecef_km)[:, best:best + 1],
-            units="km",
-        )
-        lat_arr, lon_arr, _ = _ecef_to_geodetic(tangent_xyz.T * 1000.0)
-        lat, lon = float(lat_arr[0]), float(lon_arr[0])
-
-    forecast_profile = _interpolate_field_at_latlon(edp_samples, decoded_forecast, lat, lon)
-    analysis_profile = _interpolate_field_at_latlon(edp_samples, decoded_analysis, lat, lon)
+    lat, lon, forecast_profile, analysis_profile = resolve_edp_query_point_and_profiles(
+        edp_samples, entry, decoded_forecast, decoded_analysis,
+        lat=lat, lon=lon, tangent_alt_window=tangent_alt_window,
+    )
     f_mean, f_std = forecast_profile.mean(axis=-1), forecast_profile.std(axis=-1)
     a_mean, a_std = analysis_profile.mean(axis=-1), analysis_profile.std(axis=-1)
 
@@ -414,6 +573,150 @@ def plot_edp_profile_comparison(
     ax.set_title(f"EDP profile at ({lat:.2f}, {lon:.2f})" + (f" -- {entry.label}" if entry.label else ""))
     ax.legend(loc="best", fontsize=8)
     return ax
+
+
+def plot_tec_edp_profile_comparison(
+    entry, y_forecast: np.ndarray, y_analysis: np.ndarray, y_measured: np.ndarray,
+    edp_samples, decoded_forecast: np.ndarray, decoded_analysis: np.ndarray,
+    *, lat: float | None = None, lon: float | None = None,
+    tangent_alt_window: tuple[float, float] = (250.0, 350.0),
+    figsize=(12, 6), style: str | None = None, boost_label: str | None = None,
+):
+    """One two-panel figure per RO (2026-09-29 user request, replaces
+    separately saving :func:`plot_tec_profile_comparison` and
+    :func:`plot_edp_profile_comparison`): TEC comparison (left panel) and
+    EDP comparison (right panel) for the same occultation, same style.
+    Arguments are exactly the union of both functions' own (see their
+    docstrings). If no ray falls in ``tangent_alt_window`` (the EDP
+    panel's own possible failure mode), the EDP panel gets a placeholder
+    message instead of failing the whole figure -- the TEC panel is
+    always independently plottable.
+
+    style, boost_label : optional (2026-10-17 user request) -- shown on a
+    second suptitle line when given, so a saved/shared image is
+    self-identifying (which parameterization style, boosted or not)
+    without needing its file path/folder name."""
+    fig, (ax_tec, ax_edp) = plt.subplots(1, 2, figsize=figsize)
+
+    # Both plot_*_profile_comparison functions bake the entry label into
+    # their own per-axes title (sensible for standalone use); strip that
+    # redundant suffix here since the figure-level suptitle below already
+    # carries it -- otherwise the two titles visually collide with the
+    # suptitle (found visually reviewing the first version of this plot).
+    plot_tec_profile_comparison(entry, y_forecast, y_analysis, y_measured, ax=ax_tec)
+    ax_tec.set_title(ax_tec.get_title().split(":")[0])
+    try:
+        plot_edp_profile_comparison(
+            edp_samples, entry, decoded_forecast, decoded_analysis,
+            lat=lat, lon=lon, tangent_alt_window=tangent_alt_window, ax=ax_edp,
+        )
+        ax_edp.set_title(ax_edp.get_title().split(" -- ")[0])
+    except ValueError:
+        ax_edp.text(0.5, 0.5, f"no ray with tangent_alt_km in {tangent_alt_window}",
+                     ha="center", va="center", transform=ax_edp.transAxes)
+        ax_edp.set_title("EDP profile")
+
+    title = entry.label or entry.obs_type
+    subtitle = " -- ".join(s for s in (style, boost_label) if s)
+    fig.suptitle(f"{title}\n{subtitle}" if subtitle else title)
+    fig.tight_layout()
+    return fig
+
+
+_STYLE_COLORS = {}
+
+
+def _color_for_style(style: str) -> str:
+    """Stable color per style across a run (cross-style comparison plots
+    need the same style to always get the same color across every RO's
+    figure, not whatever matplotlib's cycler happens to be on)."""
+    if style not in _STYLE_COLORS:
+        _STYLE_COLORS[style] = f"C{len(_STYLE_COLORS) % 10}"
+    return _STYLE_COLORS[style]
+
+
+def plot_cross_style_tec_edp_comparison(
+    entry, tec_by_style: dict, edp_by_style: dict, altitude: np.ndarray, figsize=(12, 6),
+    boost_label: str | None = None,
+):
+    """One two-panel figure per RO (2026-09-29 user request), comparing
+    *every* style at once rather than one style's own forecast/analysis --
+    complements (does not replace) :func:`plot_tec_edp_profile_comparison`'s
+    per-style plots. Same style always gets the same color across every
+    RO's figure (:func:`_color_for_style`); forecast is solid, analysis is
+    dashed, so the encoding stays legible even with several styles
+    overlaid in one panel.
+
+    Parameters
+    ----------
+    entry : ObservationEntry
+        Used for ``tangent_alt_km`` (TEC panel y-axis) and ``abel``/
+        ``label`` (EDP panel overlay/title).
+    tec_by_style : dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]
+        style -> ``(y_forecast, y_analysis, y_measured)``, each already
+        sliced to this entry's rays. ``y_measured`` is plotted once (from
+        whichever style is listed first -- it's the same real data
+        regardless of style).
+    edp_by_style : dict[str, tuple[np.ndarray, np.ndarray] | None]
+        style -> ``(forecast_profile, analysis_profile)`` (each
+        ``(n_height, n_members)``, mean/std taken here) from
+        :func:`resolve_edp_query_point_and_profiles`, or ``None`` for a
+        style that had no ray in the EDP query window -- plotted as a
+        per-style placeholder note rather than dropped silently.
+    altitude : np.ndarray, shape (n_height,)
+    boost_label : optional (2026-10-17 user request) -- shown on a second
+        suptitle line, since this run-level property isn't otherwise
+        shown anywhere on a cross-style figure (unlike style, which
+        already has a legend entry per line here).
+    """
+    fig, (ax_tec, ax_edp) = plt.subplots(1, 2, figsize=figsize)
+
+    order = np.argsort(entry.tangent_alt_km) if entry.tangent_alt_km is not None else None
+    y_measured = None
+    for style, (y_forecast, y_analysis, y_meas) in tec_by_style.items():
+        color = _color_for_style(style)
+        if y_measured is None:
+            y_measured = y_meas
+        alt = np.asarray(entry.tangent_alt_km)[order] if order is not None else np.arange(len(y_forecast))
+        ax_tec.plot(np.asarray(y_forecast)[order] if order is not None else y_forecast, alt,
+                    color=color, linestyle="-", marker="o", markersize=2, label=f"{style} forecast")
+        ax_tec.plot(np.asarray(y_analysis)[order] if order is not None else y_analysis, alt,
+                    color=color, linestyle="--", marker="o", markersize=2, label=f"{style} analysis")
+    if y_measured is not None:
+        alt = np.asarray(entry.tangent_alt_km)[order] if order is not None else np.arange(len(y_measured))
+        ax_tec.plot(np.asarray(y_measured)[order] if order is not None else y_measured, alt,
+                    color="k", linestyle="-", marker="o", markersize=3, label="measured", zorder=5)
+    ax_tec.set_xlabel("TEC (TECU)")
+    ax_tec.set_ylabel("Tangent altitude (km)")
+    ax_tec.set_title("TEC profile (all styles)")
+    ax_tec.legend(loc="best", fontsize=7)
+
+    missing_styles = []
+    for style, profiles in edp_by_style.items():
+        color = _color_for_style(style)
+        if profiles is None:
+            missing_styles.append(style)
+            continue
+        forecast_profile, analysis_profile = profiles
+        f_mean = forecast_profile.mean(axis=-1)
+        a_mean = analysis_profile.mean(axis=-1)
+        ax_edp.plot(f_mean, altitude, color=color, linestyle="-", label=f"{style} forecast")
+        ax_edp.plot(a_mean, altitude, color=color, linestyle="--", label=f"{style} analysis")
+    if entry.abel and "Ne" in entry.abel and "alt_km" in entry.abel:
+        ax_edp.plot(entry.abel["Ne"], entry.abel["alt_km"], color="k", linestyle=":", label="Abel-retrieved")
+    ax_edp.set_xlabel("Electron density (m$^{-3}$)")
+    ax_edp.set_ylabel("Altitude (km)")
+    title = "EDP profile (all styles)"
+    if missing_styles:
+        title += f"\n(no window ray: {', '.join(missing_styles)})"
+    ax_edp.set_title(title)
+    if any(p is not None for p in edp_by_style.values()):
+        ax_edp.legend(loc="best", fontsize=7)
+
+    title = entry.label or entry.obs_type
+    fig.suptitle(f"{title}\n{boost_label}" if boost_label else title)
+    fig.tight_layout()
+    return fig
 
 
 def plot_style_comparison_summary(results_by_style: dict, fig=None, figsize=(11, 8)):
@@ -538,13 +841,26 @@ def plot_observations_geolocation(edp_samples, entries, ax=None, figsize=(10, 8)
 def plot_observation_operator_sum_combined(
     edp_samples, entries, altitudes=(100, 200, 300, 400, 500, 600, 700, 800),
     num_segments: int = 1000, fig=None, figsize=(14, 7), label: str = "all RO",
+    mask_zero: bool = True, overlay_los: bool = False, los_alt_tol_km: float = 25.0,
+    los_alpha: float | None = None,
 ):
     """Same as ``plot_observation_operator_sum``, but sums the observation
     operator's rows over *every ray from every entry* combined (e.g. all
     RO occultations at once), rather than one entry at a time -- "where,
     cumulatively, does this whole RO dataset have sensitivity, and at what
     height" (2026-09-27 user request, complements the existing per-RO
-    plots rather than replacing them)."""
+    plots rather than replacing them).
+
+    ``mask_zero``/``overlay_los``/``los_alt_tol_km``/``los_alpha``: same
+    diagnostics as ``plot_observation_operator_sum`` (2026-10-16) -- see
+    that function's docstring. ``overlay_los`` defaults to False here
+    (opt-in, unlike the single-entry plot's default-True), since pooling
+    every entry's track gets visually dense fast; pass it explicitly when
+    wanted. ``los_alpha=None`` auto-computes per panel the same way as the
+    single-entry plot (:func:`_adaptive_los_alpha`) -- pooling many
+    entries only means a typically higher per-panel point count, which
+    the same density-based formula already accounts for.
+    """
     rec = np.concatenate([np.asarray(e.rec_ecef_km, dtype=np.float64) for e in entries], axis=1)
     gnss = np.concatenate([np.asarray(e.gnss_ecef_km, dtype=np.float64) for e in entries], axis=1)
     H_combined = edp_samples.get_observation_operator(
@@ -562,11 +878,29 @@ def plot_observation_operator_sum_combined(
                                   subplot_kw={"projection": _cartopy_projection(edp_samples)})
     axes = np.asarray(fig.axes).ravel()
 
+    los_lons = los_lats = los_alts = None
+    if overlay_los:
+        tracks = [ray_ground_track(e, num_segments=num_segments) for e in entries]
+        los_lons = np.concatenate([t[0] for t in tracks])
+        los_lats = np.concatenate([t[1] for t in tracks])
+        los_alts = np.concatenate([t[2] for t in tracks])
+
     for ax, target_alt in zip(axes, altitudes):
         alt_idx = int(np.argmin(np.abs(edp_samples.altitude - target_alt)))
         actual_alt = float(edp_samples.altitude[alt_idx])
-        plot_horizontal(edp_samples, summed[alt_idx, :], target_alt=actual_alt, ax=ax,
+        values = summed[alt_idx, :].copy()
+        if mask_zero:
+            values = np.where(values == 0, np.nan, values)
+        plot_horizontal(edp_samples, values, target_alt=actual_alt, ax=ax,
                          scalar_label=f"sum(H) [{actual_alt:.0f} km]")
+        if overlay_los:
+            near = np.abs(los_alts - actual_alt) <= los_alt_tol_km
+            if np.any(near):
+                alpha = los_alpha if los_alpha is not None else _adaptive_los_alpha(int(near.sum()))
+                ax.scatter(los_lons[near], los_lats[near], s=1.0, c="red",
+                           transform=ccrs.Geodetic(), zorder=6, alpha=alpha,
+                           label=f"LOS (+/-{los_alt_tol_km:.0f}km)")
+                ax.legend(loc="lower left", fontsize=6, framealpha=0.8)
     for ax in axes[n_alt:]:
         ax.axis("off")
 

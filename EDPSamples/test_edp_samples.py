@@ -924,6 +924,39 @@ class TestAutoPolarProjection:
         ax = ds.plot_geolocation()
         assert isinstance(ax.projection, ccrs.NorthPolarStereo)
 
+    def test_auto_switched_regional_grid_extent_is_tightly_bounded(self):
+        """Real bug (2026-09-30 user report): the polar branch framed
+        EVERY polar-projection grid (auto-switched or not) on the full
+        -180..180 longitude range, correct only for a true circumpolar
+        "Polar" cap (genPolarArea always spans all longitudes). A small
+        auto-switched "Regional" grid like Tromso isn't circumpolar, so
+        that framing left the actual modeling area occupying only a
+        small corner of the plot. The extent must now tightly bound the
+        grid's own points instead -- checked by comparing the axes'
+        extent (in its own native projected coordinates) against the
+        points' own projected bounding box, not against some fixed
+        hemisphere-sized threshold."""
+        import cartopy.crs as ccrs
+        ds = self._build("Regional", Lat=69.6, Lon=19.2, radius=18.0, dLat=2.5)
+        ax = ds.plot_geolocation()
+        lon, lat = ds.geolocation[:, 0], ds.geolocation[:, 1]
+        xy = ax.projection.transform_points(ccrs.PlateCarree(), lon, lat)[:, :2]
+        x, y = xy[:, 0], xy[:, 1]
+        x0, x1, y0, y1 = ax.get_extent(ax.projection)
+        assert x1 - x0 < 3 * (x.max() - x.min())
+        assert y1 - y0 < 3 * (y.max() - y.min())
+
+    def test_true_polar_cap_still_uses_full_longitude_framing(self):
+        """A genuinely circumpolar "Polar" cap spans all longitudes by
+        construction (genPolarArea) -- unlike the auto-switched case
+        above, framing it on minLat alone (no longitude bound) is
+        correct and must be unchanged by the auto-switch fix."""
+        import cartopy.crs as ccrs
+        ds = self._build("Polar", minLat=80.0, dLat=5.0)
+        ax = ds.plot_geolocation()
+        x0, x1, _, _ = ax.get_extent(ccrs.PlateCarree())
+        assert x1 - x0 > 300.0   # still the (near-)full longitude range
+
     def test_global_geo_type_never_auto_switches(self):
         """Global spans the whole world by definition -- even though
         this fixture's equal-spaced sampling includes high-latitude
@@ -993,4 +1026,40 @@ class TestPlotHorizontalField:
         ax = ds.plot_horizontal_field(scalar=values, scalar_label="My Custom Label")
         colorbar_axes = ax.figure.axes[-1]   # the horizontal colorbar is appended last
         assert colorbar_axes.get_xlabel() == "My Custom Label"
+        plt.close("all")
+
+    def test_vmin_vmax_forwarded_for_mesh_tripcolor(self):
+        """Needed for a signed difference field (e.g. analysis - forecast
+        density) plotted with a diverging colormap -- without explicit
+        vmin/vmax, matplotlib auto-scales to the data's own min/max, which
+        generally isn't symmetric around zero and so doesn't map "no
+        change" to the colormap's center."""
+        import matplotlib.pyplot as plt
+        ds = self._build("Rectangle", minLon=-10, maxLon=10, dLon=5, minLat=0, maxLat=10, dLat=5)
+        values = np.linspace(-5.0, 5.0, ds.geolocation.shape[0])
+        ax = ds.plot_horizontal_field(scalar=values, vmin=-10.0, vmax=10.0, cmap="RdBu_r")
+        mappable = ax.collections[-1]   # the tripcolor PolyCollection, added last
+        assert mappable.get_clim() == (-10.0, 10.0)
+        plt.close("all")
+
+    def test_vmin_vmax_forwarded_for_scatter_fallback(self):
+        import matplotlib.pyplot as plt
+        ds = self._build("Point", Lon=0.0, Lat=0.0)   # no mesh -> scatter fallback
+        values = np.linspace(-5.0, 5.0, ds.geolocation.shape[0])
+        ax = ds.plot_horizontal_field(scalar=values, vmin=-3.0, vmax=3.0)
+        mappable = ax.collections[-1]
+        assert mappable.get_clim() == (-3.0, 3.0)
+        plt.close("all")
+
+    def test_vmin_vmax_default_to_auto_scaling(self):
+        """Omitting vmin/vmax must keep the existing auto-scaled
+        behavior -- a real regression risk since both now default to
+        ``None`` and are forwarded unconditionally."""
+        import matplotlib.pyplot as plt
+        ds = self._build("Rectangle", minLon=-10, maxLon=10, dLon=5, minLat=0, maxLat=10, dLat=5)
+        values = np.linspace(-5.0, 5.0, ds.geolocation.shape[0])
+        ax = ds.plot_horizontal_field(scalar=values)
+        mappable = ax.collections[-1]
+        clim = mappable.get_clim()
+        assert clim != (None, None)   # matplotlib resolved it to the data's own range
         plt.close("all")

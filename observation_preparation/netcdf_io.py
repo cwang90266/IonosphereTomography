@@ -27,7 +27,7 @@ _STR_SCALAR_FIELDS = ("obs_type", "label", "rec_id", "prn_id", "tec_type", "obs_
 
 _ROI_ATTRS = (
     "roi_center_lat", "roi_center_lon", "roi_radius_km", "roi_mode",
-    "roi_alt_limit_km", "roi_fraction_required",
+    "roi_alt_limit_km", "roi_alt_limit_mode", "roi_fraction_required",
 )
 
 _EXTRA_PREFIX = "extra_"

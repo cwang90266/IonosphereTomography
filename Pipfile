@@ -4,9 +4,9 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-numpy = ">=2.1"
+numpy = ">2.3"
 scipy = ">=1.16"
-xarray = ">=2025.4.0"
+xarray = ">=2026.1.0"
 requests = "~=2.32"
 matplotlib = "<4.0"
 cartopy = "~=0.25.0"
@@ -25,9 +25,9 @@ h5netcdf = "~=1.8"
 geopy = ">=2.3"
 pyproj = "~=3.6"
 boto3 = "*"
-python-dateutil = ">=2.9"
-# Local iri2020 package — editable install from the repo subfolder
-iri2020 = {path = "./iri2020_new/src", editable = true}
+wget = "*"
+global-land-mask = "*"
+iri2020 = {editable = true, path = "./iri2020_new"}
 
 [dev-packages]
 

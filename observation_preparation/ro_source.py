@@ -9,7 +9,7 @@ import netCDF4
 import numpy as np
 import pandas as pd
 
-from .roi_selection import haversine_km, los_within_roi, build_roi_dict
+from .roi_selection import haversine_km, los_within_roi, build_roi_dict, mean_altitude_km
 from .time_filter import normalize_timestamp, format_filename_number, time_window_tag
 from .schema import ObservationEntry
 from .netcdf_io import write_observations
@@ -258,6 +258,12 @@ def _build_clean_ro_entry(
     full pre-decimation geometry) rather than in filter_ro_metadata's
     lightweight scan-stage pre-filter, since it needs the full parsed
     LEO/GNSS geometry that only exists after parse_podTc2_nc_file().
+
+    alt_limit_km=None (the default) auto-derives the threshold per
+    occultation as this file's own LEO receiver's mean geodetic altitude
+    (data["LEO"]) rather than a hand-picked constant -- receiver altitude
+    varies across LEOs in a batch, so a fixed constant either over- or
+    under-restricts depending on which satellite flew which occultation.
     """
     _, _, tang_raw = rayTangent(data["LEO"], data["GNSS"], units="km")
 
@@ -272,23 +278,28 @@ def _build_clean_ro_entry(
 
     valid = np.isfinite(meas_tec) & (meas_tec > 0)
 
-    if roi_mode == "full_los":
-        valid &= los_within_roi(
-            data["LEO"], data["GNSS"],
-            center_lat, center_lon, radius_km, alt_limit_km,
-            num_segments=los_num_segments, fraction_required=fraction_required,
-        )
-
-    n_valid = int(valid.sum())
-
     info = {
         "label": label,
-        "n_valid_before_downsample": n_valid,
         "accepted": False,
         "reject_reason": None,
         "n_output_rays": 0,
         "stride": None,
     }
+
+    if roi_mode == "full_los":
+        eff_alt_limit_km = (
+            float(alt_limit_km) if alt_limit_km is not None
+            else mean_altitude_km(data["LEO"])
+        )
+        info["alt_limit_km_used"] = eff_alt_limit_km
+        valid &= los_within_roi(
+            data["LEO"], data["GNSS"],
+            center_lat, center_lon, radius_km, eff_alt_limit_km,
+            num_segments=los_num_segments, fraction_required=fraction_required,
+        )
+
+    n_valid = int(valid.sum())
+    info["n_valid_before_downsample"] = n_valid
 
     if n_valid < int(min_valid_rays):
         info["reject_reason"] = "too_few_valid_rays"
@@ -415,10 +426,15 @@ def prepare_ro_observations(
         isn't available at the cheap scan stage, "full_los" parses every
         file in [start_time, end_time) regardless of location -- a known,
         accepted cost (Plan Section 10 step 3), not optimized here.
-    alt_limit_km : float, required when roi_mode="full_los"
-        No auto-default (Plan Section 8.1): receiver altitude varies
-        across LEOs in a batch, so there's no single value to derive it
-        from without a first pass over the batch.
+    alt_limit_km : float or None, default None
+        When None (the default) and roi_mode="full_los", each occultation
+        gets its own threshold auto-derived as that file's LEO receiver's
+        mean geodetic altitude (see _build_clean_ro_entry) instead of one
+        hand-picked constant for the whole batch -- receiver altitude
+        varies across LEOs in a batch, so a fixed constant either over-
+        or under-restricts depending on which satellite flew which
+        occultation. Pass an explicit float to force the same fixed
+        threshold for every occultation instead.
     fraction_required : float, default 1.0
         Minimum fraction of each ray's sub-alt_limit_km LOS that must be
         within radius_km (Plan Section 8.2). 1.0 = every such point.
@@ -433,11 +449,6 @@ def prepare_ro_observations(
     """
     if roi_mode not in {"full_los", "tangent_point"}:
         raise ValueError(f"roi_mode must be 'full_los' or 'tangent_point', got {roi_mode!r}.")
-    if roi_mode == "full_los" and alt_limit_km is None:
-        raise ValueError(
-            "alt_limit_km is required when roi_mode='full_los' (Plan Section 8.1) "
-            "-- e.g. the LEO's own altitude, or the model's configured top altitude."
-        )
 
     podtc_dir = Path(podtc_dir)
     if not podtc_dir.is_dir():
@@ -545,6 +556,18 @@ def prepare_ro_observations(
         if entry is not None:
             observations.append(entry)
 
+    alt_limit_km_used_values = [
+        pf["alt_limit_km_used"] for pf in per_file if pf.get("alt_limit_km_used") is not None
+    ]
+    # When alt_limit_km was None, each occultation got its own auto-derived
+    # threshold (its LEO's own mean altitude) -- report the mean of those
+    # actually-used values so the netCDF/metadata record still carries a
+    # representative number instead of silently showing None.
+    alt_limit_km_for_metadata = (
+        alt_limit_km if alt_limit_km is not None
+        else (float(np.mean(alt_limit_km_used_values)) if alt_limit_km_used_values else None)
+    )
+
     report = {
         "source": "RO_podTc2",
         "podtc_dir": str(podtc_dir),
@@ -572,6 +595,8 @@ def prepare_ro_observations(
         "max_occultations": max_occultations,
         "roi_mode": roi_mode,
         "alt_limit_km": alt_limit_km,
+        "alt_limit_km_mode": "fixed" if alt_limit_km is not None else "auto_leo_mean_per_occultation",
+        "alt_limit_km_used_mean": alt_limit_km_for_metadata,
         "fraction_required": float(fraction_required),
         "per_file": per_file,
         "metadata_selected": metadata_selected.to_dict("records"),
@@ -582,7 +607,9 @@ def prepare_ro_observations(
             observations, report, output_dir, output_prefix,
             center_lat=center_lat, center_lon=center_lon, radius_km=radius_km,
             start_time=start_time, end_time=end_time,
-            roi_mode=roi_mode, alt_limit_km=alt_limit_km, fraction_required=fraction_required,
+            roi_mode=roi_mode, alt_limit_km=alt_limit_km_for_metadata,
+            alt_limit_mode=report["alt_limit_km_mode"] if roi_mode == "full_los" else None,
+            fraction_required=fraction_required,
         )
 
     return (observations, report) if return_report else observations
@@ -612,6 +639,7 @@ def export_ro_outputs(
     end_time=None,
     roi_mode="tangent_point",
     alt_limit_km=None,
+    alt_limit_mode=None,
     fraction_required=None,
 ):
     """Write one netCDF file (Plan Section 6.2) and one combined
@@ -629,7 +657,8 @@ def export_ro_outputs(
     entries = [ObservationEntry.from_dict(e, obs_type="RO") for e in observations]
     roi = build_roi_dict(
         center_lat, center_lon, radius_km, roi_mode,
-        alt_limit_km=alt_limit_km, fraction_required=fraction_required,
+        alt_limit_km=alt_limit_km, alt_limit_mode=alt_limit_mode,
+        fraction_required=fraction_required,
     )
 
     plot_geolocation(entries, roi=roi, output_path=out / f"{prefix}_geolocation.png")

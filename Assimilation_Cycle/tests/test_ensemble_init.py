@@ -23,15 +23,19 @@ from Assimilation_Cycle import ensemble_init
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _IRI2020_DIR = _REPO_ROOT / "iri2020_new" / "src" / "iri2020"
 _IRI2020_EXE = _IRI2020_DIR / "iri2020_namelist_driver"
-_EDP_FIXTURE = _REPO_ROOT / "TestCode" / "EDPSam_Point.nc"
+_EDP_FIXTURE = _REPO_ROOT / "Default_Data" / "EDPSam_Point.nc"
 
 _has_iri2020 = _IRI2020_EXE.exists() and os.access(_IRI2020_EXE, os.X_OK)
 
 
 @pytest.fixture(autouse=True)
-def _iri2020_env(monkeypatch):
+def _iri2020_env(monkeypatch, tmp_path):
     if _has_iri2020:
         monkeypatch.setenv("IRI2020_PATH", str(_IRI2020_DIR))
+    # cfg.output_dir is unset in these tests, so get_apf107/get_ig_rz fall
+    # back to cwd-relative paths -- chdir to tmp_path so that fallback
+    # can't write apf107.dat/ig_rz.dat into the real repo root.
+    monkeypatch.chdir(tmp_path)
 
 
 def _make_cfg(**overrides) -> CycleConfig:
@@ -135,6 +139,69 @@ class TestDiagonalBoostWiring:
         import edp_samples as E
         reloaded = E.EDPSamples.fromNetCDF(str(out))
         np.testing.assert_allclose(reloaded.edps, boosted.edps)
+
+
+def _synthetic_isr_basis_for_fixture(tmp_path, altitude_grid):
+    """A small synthetic ISR PCA basis, on the exact altitude grid
+    ``_EDP_FIXTURE`` uses, for ``TestDiagonalBoostWithIsrPcaStyle`` below
+    (no real ISR/IRI2020-extension file needed -- see
+    test_isr_pca_basis.py for the module's own dedicated unit tests)."""
+    import xarray as xr
+    from Assimilation_Cycle import isr_pca_basis as ipb
+
+    rng = np.random.default_rng(0)
+    n_profile = 40
+    mode = np.exp(-((altitude_grid - 300.0) / 150.0) ** 2) * 2.0 + 9.0
+    log_density = mode[:, None] + rng.normal(0.0, 0.3, size=(1, n_profile))
+    density = (10.0 ** log_density).astype(np.float32)
+
+    extended_path = tmp_path / "synthetic_extended_isr.nc"
+    xr.Dataset(
+        data_vars=dict(
+            altitude=(("altitude_gate",), altitude_grid),
+            Ne=(("altitude_gate", "time"), density),
+        ),
+    ).to_netcdf(extended_path)
+
+    basis = ipb.build_isr_pca_basis(extended_path, altitude_grid, retaining_threshold=0.99)
+    basis_path = tmp_path / "isr_pca_basis.nc"
+    ipb.save_isr_pca_basis(basis, basis_path)
+    return basis_path
+
+
+class TestDiagonalBoostWithIsrPcaStyle:
+    """Plan Section 4.1.4: diagonal_boost.py operates on the raw density
+    ensemble strictly before parameterization, so it should need no
+    changes to support 'PCA_1D_10ex_ISR' -- this is the wiring check
+    confirming that combination (log-space boosting, required for every
+    log10-based style per diagonal_boost.py's own module docstring)
+    actually runs end to end, never exercised before this style existed."""
+
+    def test_boost_log_space_plus_isr_pca_style_builds_successfully(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("IRI2020_PATH", raising=False)
+        import edp_samples as E
+        original = E.EDPSamples.fromNetCDF(str(_EDP_FIXTURE))
+        altitude_grid = np.asarray(original.altitude, dtype=float)
+        basis_path = _synthetic_isr_basis_for_fixture(tmp_path, altitude_grid)
+
+        cfg = _make_cfg(
+            edp_samples_path=_EDP_FIXTURE,
+            altitude_grid=altitude_grid,
+            style="PCA_1D_10ex_ISR",
+            isr_pca_basis_path=basis_path,
+            diagonal_boost_amplitude=0.3, diagonal_boost_log_space=True, diagonal_boost_rng_seed=3,
+        )
+        ensemble, edp_samples, parameterization = ensemble_init.build(cfg)
+
+        assert ensemble.n_members == edp_samples.edps.shape[-1]
+        # Boosting changed the raw ensemble (same assertion style as
+        # TestDiagonalBoostWiring above) ...
+        assert not np.allclose(np.asarray(edp_samples.edps), np.asarray(original.edps))
+        # ... and the ISR-basis style still successfully encoded it (a
+        # density/PCA altitude-grid mismatch would have raised here, the
+        # real bug this exact combination surfaced during real-data
+        # smoke-testing -- see CycleConfig.isr_pca_basis_path's docstring).
+        assert parameterization.hyper_params["PCA"].shape[0] == len(altitude_grid)
 
 
 class TestPrecomputedFileMode:

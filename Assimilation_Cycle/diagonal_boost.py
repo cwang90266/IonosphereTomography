@@ -62,6 +62,23 @@ is also a more physically apt (multiplicative-in-linear-space) way to
 perturb a field spanning multiple orders of magnitude. Not yet validated
 for ``PCA_3D_10ex`` at the time this was written -- see
 ``Assimilation_Cycle_Integration_Plan.md`` §17 for the latest result.
+
+**Altitude taper (``taper_start_km``/``taper_end_km``/``taper_floor``),
+added 2026-09-29:** TEC is a line integral dominated by the F2-peak
+region (roughly 250-350km, already the reference window used throughout
+this project's EDP-profile plots) -- a density perturbation well above
+that has very little effect on TEC, so the EnKF has almost no
+observational leverage to correct or constrain whatever the boost injects
+up there. User noticed exactly this after `iri_spread_kwargs` widened
+(Section 22): analysis EDPs got visibly wavy at high altitude without
+any corresponding TEC-residual improvement -- consistent with the boost
+injecting spread the data can't meaningfully act on at those heights
+(and which may itself be larger there, since topside density is more
+sensitive to the now-wider driving-index spread). The taper scales
+``amplitude`` down by height: full strength at/below ``taper_start_km``,
+linearly down to ``taper_floor`` (a fraction of the base amplitude, not
+necessarily zero) by ``taper_end_km``, held at the floor above that --
+confirmed with the user (default 400/700km, floor 0.1).
 """
 
 from __future__ import annotations
@@ -83,6 +100,16 @@ def _haversine_km(lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
          + np.cos(lat_r[:, None]) * np.cos(lat_r[None, :]) * np.sin(dlon / 2.0) ** 2)
     a = np.clip(a, 0.0, 1.0)
     return 2.0 * _EARTH_RADIUS_KM * np.arcsin(np.sqrt(a))
+
+
+def _altitude_taper(altitude: np.ndarray, start_km: float, end_km: float, floor: float) -> np.ndarray:
+    """``1.0`` at/below ``start_km``, ``floor`` at/above ``end_km``, linear
+    ramp between -- scales the boost amplitude down at altitudes TEC has
+    little sensitivity to (see module docstring)."""
+    if end_km <= start_km:
+        raise ValueError(f"_altitude_taper: end_km ({end_km}) must be > start_km ({start_km})")
+    frac = np.clip((altitude - start_km) / (end_km - start_km), 0.0, 1.0)
+    return 1.0 - frac * (1.0 - floor)
 
 
 def _gaussian_smoothing_matrix(distance: np.ndarray, scale: float) -> np.ndarray:
@@ -129,6 +156,9 @@ def apply_diagonal_boost(
     horizontal_scale_km: float = 200.0,
     rng: np.random.Generator | None = None,
     log_space: bool = False,
+    taper_start_km: float = 400.0,
+    taper_end_km: float = 700.0,
+    taper_floor: float = 0.1,
 ):
     """
     Return a copy of ``edp_samples`` with a smoothed, per-point-std-scaled
@@ -163,6 +193,15 @@ def apply_diagonal_boost(
         docstring). ``True``: perturb ``log10(density)`` instead and
         convert back via ``10**(...)`` -- no clipping ever needed, matches
         what ``density_10ex``/``PCA_*_10ex`` actually fit.
+    taper_start_km, taper_end_km, taper_floor : float
+        Altitude taper on ``amplitude`` (see module docstring) --
+        ``amplitude`` applies at full strength at/below
+        ``taper_start_km``, linearly falls to ``amplitude * taper_floor``
+        by ``taper_end_km``, and stays at that floor above. Defaults
+        (400km/700km/0.1) target TEC's F2-peak-dominated sensitivity;
+        pass ``taper_floor=0.0`` for no boosting at all above
+        ``taper_end_km``, or ``taper_start_km`` larger than the grid's own
+        max altitude for effectively no taper (full amplitude everywhere).
 
     Returns
     -------
@@ -186,7 +225,9 @@ def apply_diagonal_boost(
         X.shape, altitude, geo, vertical_scale_km, horizontal_scale_km, rng,
     )
 
-    perturbation = amplitude * std_hg[:, :, None] * normalized
+    taper = _altitude_taper(altitude, taper_start_km, taper_end_km, taper_floor)   # (n_height,)
+    effective_amplitude = amplitude * taper                                        # (n_height,)
+    perturbation = effective_amplitude[:, None, None] * std_hg[:, :, None] * normalized
     base_boosted = base + perturbation
     X_boosted = (10.0 ** base_boosted) if log_space else np.clip(base_boosted, a_min=_DENSITY_FLOOR, a_max=None)
 

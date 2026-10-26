@@ -37,6 +37,8 @@ from . import output
 from . import style_sweep
 from . import abel_consistency
 from .diagonal_boost import apply_diagonal_boost
+from . import isr_comparison
+from . import isr_pca_basis
 from .package_run import PackageResult, run_package
 
 __all__ = [
@@ -57,6 +59,8 @@ __all__ = [
     "style_sweep",
     "abel_consistency",
     "apply_diagonal_boost",
+    "isr_comparison",
+    "isr_pca_basis",
     "PackageResult",
     "run_package",
 ]

@@ -14,8 +14,45 @@ import numpy as np
 import pandas as pd
 from dateutil.parser import parse
 import pickle
+import os
+import shutil
 
-def get_apf107():
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_MODULE_DIR)
+_DEFAULT_DATA_DIR = os.path.join(_REPO_ROOT, "Default_Data")
+
+
+def _bundled_reference_path(filename: str) -> str:
+    """Path to the repository's bundled reference copy of ``filename``
+    (``apf107.dat``/``ig_rz.dat``, kept under ``Default_Data/`` alongside
+    this project's other default/fallback data) -- a separate, named
+    function so tests can monkeypatch it to force the network-fetch path
+    to actually run.
+
+    These files are nominally "fetched artifacts" (``get_apf107``/
+    ``get_ig_rz`` download them fresh from ``irimodel.org/indices/``), but
+    an older mirror (``chain-new.chain-project.net``) this code used to
+    point at went permanently dead (HTTP 404, confirmed directly), so a
+    bundled reference copy is kept as an offline fallback/fast seed that
+    doesn't depend on that upstream staying reachable. It is checked only
+    after a run's own ``data_dir`` cache; a fresh run still gets its own
+    materialized copy under its own output directory, not this one.
+    """
+    return os.path.join(_DEFAULT_DATA_DIR, filename)
+
+
+def _ensure_local_file(local_file: str, filename: str) -> None:
+    """If ``local_file`` doesn't exist yet, seed it from the bundled
+    reference copy (see ``_bundled_reference_path``) before falling back
+    to a network fetch -- called by both ``get_apf107``/``get_ig_rz``."""
+    if os.path.isfile(local_file):
+        return
+    reference = _bundled_reference_path(filename)
+    if os.path.isfile(reference) and os.path.abspath(reference) != os.path.abspath(local_file):
+        shutil.copy(reference, local_file)
+
+
+def get_apf107(data_dir: str | None = None):
     """
     Get updated data file apf107.dat
 
@@ -30,15 +67,22 @@ def get_apf107():
 
     Parameters
     ----------
-    None
+    data_dir : str, optional
+        Directory to read/cache ``apf107.dat`` in -- separates this
+        fetched-artifact file from the source tree (e.g. pass a cycle's
+        own output directory). ``None`` (default): the current working
+        directory, the original (pre-this-parameter) behavior.
 
     Returns apf107
     -------
 
     """
-    import os
-    local_file = "apf107.dat"
-    url = "https://chain-new.chain-project.net/echaim_downloads/apf107.dat"
+    local_file = os.path.join(data_dir, "apf107.dat") if data_dir else "apf107.dat"
+    url = "https://irimodel.org/indices/apf107.dat"
+
+    if data_dir:
+        os.makedirs(data_dir, exist_ok=True)
+    _ensure_local_file(local_file, "apf107.dat")
 
     if os.path.isfile(local_file):
         with open(local_file, "r") as fh:
@@ -82,13 +126,16 @@ def get_apf107():
 
     return apf107
 
-def get_ig_rz():
+def get_ig_rz(data_dir: str | None = None):
     """
     Get updated data file ig_rz.dat
 
     Parameters
     ----------
-    None
+    data_dir : str, optional
+        Directory to read/cache ``ig_rz.dat`` in -- same convention as
+        ``get_apf107``'s ``data_dir``. ``None`` (default): the current
+        working directory, the original behavior.
 
     Returns
     -------
@@ -96,13 +143,16 @@ def get_ig_rz():
         Dictionary containing parsed IG/Rz data.
     """
 
-    import os
     revision_date = []
     start_end_date = []
     ig = []
     rz = []
-    local_file = "ig_rz.dat"
-    url = "https://chain-new.chain-project.net/echaim_downloads/ig_rz.dat"
+    local_file = os.path.join(data_dir, "ig_rz.dat") if data_dir else "ig_rz.dat"
+    url = "https://irimodel.org/indices/ig_rz.dat"
+
+    if data_dir:
+        os.makedirs(data_dir, exist_ok=True)
+    _ensure_local_file(local_file, "ig_rz.dat")
 
     if os.path.isfile(local_file):
         with open(local_file, "r") as fh:
@@ -254,7 +304,15 @@ def show_iri_inputs(apf107,ig_rz):
     fig.show()
     
 class IRI_Sample_Inputs:
-    def __init__(self, DateTime_str: str):
+    def __init__(self, DateTime_str: str, data_dir: str | None = None):
+        """
+        ``data_dir``, if given, is where ``apf107.dat``/``ig_rz.dat`` are
+        read from/cached to (``get_apf107``/``get_ig_rz``) -- keeps these
+        fetched-artifact files out of the source tree, e.g. pass a
+        cycle's own output directory. ``None`` (default): current working
+        directory, the original behavior.
+        """
+        self._data_dir = data_dir
         DateTime_int = parse(DateTime_str)
         self.year = DateTime_int.year
         self.month = DateTime_int.month
@@ -274,8 +332,8 @@ class IRI_Sample_Inputs:
         else:
             self.second = 0
             
-        self.apf107 = get_apf107()
-        self.ig_rz = get_ig_rz()
+        self.apf107 = get_apf107(data_dir)
+        self.ig_rz = get_ig_rz(data_dir)
         
         # Identify the indice of the current time in the array apf107 and ig_rz
         datenum_f107 = [datetime.date(int(yy), int(mm), int(dd)) for yy, mm, dd in 
@@ -419,10 +477,22 @@ class IRI_Sample_Inputs:
                        f107_sample_range: int = None,
                        ig_sample_range: int = None,
                        rz_sample_range: int = None,
-                       nSample: int = None):
-        
+                       nSample: int = None,
+                       seed: int | None = None):
+
         if nSample == None:
             nSample = 1
+
+        # One shared generator for every draw below (2026-10-18: previously
+        # each draw built its own unseeded np.random.default_rng(), so this
+        # whole ensemble was silently non-reproducible -- confirmed by two
+        # back-to-back identically-configured runs producing materially
+        # different ANCHOR-vs-ISR results, which briefly looked like a real
+        # boost-vs-convergence effect until this was found). A single seeded
+        # generator reused across all five draws also avoids the subtler
+        # issue of several same-seeded-but-separate generators producing
+        # correlated draws.
+        rng = np.random.default_rng(seed)
 
         # Define range of parameters
         if hour_sample_range == None:
@@ -433,8 +503,8 @@ class IRI_Sample_Inputs:
             hour_range=[i-24 if i>24 else i for i in hour_range]
             hour_range.append(None)
 
-        hour_idx = np.random.default_rng().integers(0, len(hour_range)-1, size=nSample, endpoint=True)
-            
+        hour_idx = rng.integers(0, len(hour_range)-1, size=nSample, endpoint=True)
+
         f107_range=self.apf107["f107"]
         if f107_sample_range == None:
             f107_range=[None]
@@ -443,20 +513,20 @@ class IRI_Sample_Inputs:
             idx_end=min((self.current_idx_f107+f107_sample_range,len(f107_range)-1))
             f107_range=f107_range[idx_start:idx_end]
             f107_range.append(None)
-            
-        f107_idx = np.random.default_rng().integers(0, len(f107_range)-1, size=nSample, endpoint=True)
+
+        f107_idx = rng.integers(0, len(f107_range)-1, size=nSample, endpoint=True)
         #
         ap_range=self.apf107["iiap"]
         if ap_sample_range == None:
             ap_range=[None]
-        else:                
+        else:
             idx_start=max((0,self.current_idx_f107-ap_sample_range))
             idx_end=min((self.current_idx_f107+ap_sample_range,len(ap_range)-1))
             ap_range=ap_range[idx_start:idx_end]
             ap_range = [item for sublist in ap_range for item in sublist]
             ap_range.append(None)
 
-        ap_idx = np.random.default_rng().integers(0, len(ap_range)-1, size=nSample, endpoint=True)
+        ap_idx = rng.integers(0, len(ap_range)-1, size=nSample, endpoint=True)
         #
         if ig_sample_range == None:
             ig12_range=[None]
@@ -467,7 +537,7 @@ class IRI_Sample_Inputs:
             ig12_range=ig12_range[idx_start:idx_end]
             ig12_range.append(None)
 
-        ig12_idx = np.random.default_rng().integers(0, len(ig12_range)-1, size=nSample, endpoint=True)
+        ig12_idx = rng.integers(0, len(ig12_range)-1, size=nSample, endpoint=True)
 
         #
         if rz_sample_range == None:
@@ -479,8 +549,8 @@ class IRI_Sample_Inputs:
             Rz12_range=Rz12_range[idx_start:idx_end]
             Rz12_range.append(None)
 
-        Rz12_idx = np.random.default_rng().integers(0, len(Rz12_range)-1, size=nSample, endpoint=True)
-        
+        Rz12_idx = rng.integers(0, len(Rz12_range)-1, size=nSample, endpoint=True)
+
         Samples={'hour':[], 'f107':[],'ap':[],'ig12':[],'rz12':[]}
         for idx in range(nSample):
             Samples['hour'].append(hour_range[hour_idx[idx]])
@@ -488,7 +558,7 @@ class IRI_Sample_Inputs:
             Samples['ap'].append(ap_range[ap_idx[idx]])
             Samples['ig12'].append(ig12_range[ig12_idx[idx]])
             Samples['rz12'].append(Rz12_range[Rz12_idx[idx]])
-        
+
         ds = pd.DataFrame(Samples)
         ds.attrs["hour_sample_range"] = hour_sample_range
         ds.attrs["ap_sample_range"] = ap_sample_range
@@ -497,6 +567,7 @@ class IRI_Sample_Inputs:
         ds.attrs["rz_sample_range"] = rz_sample_range
         ds.attrs["nSample"] = nSample
         ds.attrs["sample_method"] = "randomSamples"
-       
+        ds.attrs["seed"] = seed if seed is not None else "unseeded"
+
         return ds
          

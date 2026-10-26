@@ -45,18 +45,26 @@ def _load_or_compute_ro(cfg: CycleConfig) -> list[ObservationEntry]:
     if cfg.ro_observations_path is not None:
         return read_observations(cfg.ro_observations_path)
 
-    raw = prepare_ro_observations(
+    need_report = cfg.ro_observations_output_path is not None
+    result = prepare_ro_observations(
         center_lat=cfg.center_lat, center_lon=cfg.center_lon, radius_km=cfg.radius_km,
         start_time=cfg.start_time, end_time=cfg.end_time,
+        return_report=need_report,
         **cfg.ro_kwargs,
     )
+    raw, report = result if need_report else (result, None)
     entries = [ObservationEntry.from_dict(d, obs_type="RO") for d in raw]
 
     if cfg.ro_observations_output_path is not None:
+        # alt_limit_km/alt_limit_mode come from the report, not straight
+        # from cfg.ro_kwargs -- when alt_limit_km=None (the auto-derive-
+        # per-occultation default), the report carries the representative
+        # mean actually used, instead of silently saving no value at all.
         roi = build_roi_dict(
             cfg.center_lat, cfg.center_lon, cfg.radius_km,
             cfg.ro_kwargs.get("roi_mode", "full_los"),
-            alt_limit_km=cfg.ro_kwargs.get("alt_limit_km"),
+            alt_limit_km=report.get("alt_limit_km_used_mean"),
+            alt_limit_mode=report.get("alt_limit_km_mode"),
             fraction_required=cfg.ro_kwargs.get("fraction_required"),
         )
         write_observations(entries, cfg.ro_observations_output_path, roi=roi)

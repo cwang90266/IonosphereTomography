@@ -1050,7 +1050,19 @@ def PCA2EDP_3D_map(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | No
 
 Parameterization_Style = Literal[
     'raw', 'density_10ex', 'ANCHOR', 'PCA_1D', 'PCA_3D', 'PCA_1D_10ex', 'PCA_3D_10ex',
+    'PCA_1D_10ex_ISR',
 ]
+"""``PCA_1D_10ex_ISR`` (ISR_Integration_Plan.md Section 4.1.2): mechanically
+identical to ``PCA_1D_10ex`` (1-D, log10-space PCA parameterization) --
+the only difference is where the basis comes from. Unlike every other PCA
+style, it never fits a basis from the ensemble it's given; it always
+requires a pre-fit ``PCA``/``PCA_mean`` in ``hyper_params`` (typically from
+``isr_pca_basis.load_isr_pca_basis``, a basis fit from real ISR-measured
+profiles rather than an IRI2020 climatological ensemble). A distinct style
+name (rather than just passing an ISR-sourced ``PCA`` under the
+``PCA_1D_10ex`` name) keeps side-by-side comparisons unambiguous -- see
+``Parameterized_EDPSamples.__init__``'s enforcement of "always supplied,
+never fit" for this style specifically."""
 
 
 @dataclass
@@ -1109,7 +1121,7 @@ class EDP_Parameterization:
             if hyper_params:
                 merged.update(hyper_params)
             return merged
-        if style in ('PCA_1D', 'PCA_1D_10ex'):
+        if style in ('PCA_1D', 'PCA_1D_10ex', 'PCA_1D_10ex_ISR'):
             if hyper_params is None or 'PCA' not in hyper_params:
                 raise ValueError(f"Parameterization {style} requires 'PCA' in hyper_params.")
             if np.asarray(hyper_params['PCA']).ndim != 2:
@@ -1157,7 +1169,11 @@ class EDP_Parameterization:
                 jacobian=lambda p, alt: ('block_diagonal', PCA2EDP_1D_map(p, PCA, mean=mean, linear=True)),
                 is_lossy=True,
             )
-        if style == 'PCA_1D_10ex':
+        if style in ('PCA_1D_10ex', 'PCA_1D_10ex_ISR'):
+            # Byte-for-byte identical math to PCA_1D_10ex -- the ISR
+            # variant only differs in where its PCA/PCA_mean came from
+            # (always pre-fit and supplied, see Parameterized_EDPSamples's
+            # enforcement for this style specifically).
             PCA = hyper_params['PCA']
             mean = hyper_params.get('PCA_mean')
             return ParameterizationSpec(
@@ -1309,13 +1325,36 @@ class Parameterized_EDPSamples:
         'PCA_1D_10ex': lambda E: ('nPCA', E.DIM_GEO, E.DIM_SAMPLE),
         'PCA_3D': lambda E: ('nPCA', E.DIM_SAMPLE),
         'PCA_3D_10ex': lambda E: ('nPCA', E.DIM_SAMPLE),
+        'PCA_1D_10ex_ISR': lambda E: ('nPCA', E.DIM_GEO, E.DIM_SAMPLE),
     }
 
     def __init__(self, EDP: EDPSamples, style: Parameterization_Style = 'density_10ex',
-                 hyper_params: dict | None = None):
+                 hyper_params: dict | None = None, param_vec: np.ndarray | None = None):
+        """
+        ``param_vec``, if given, is used as-is instead of being derived via
+        ``Parameterization.get_parameter(edps)`` -- an already-fitted
+        parameter vector (e.g. reloaded from a netCDF this class itself
+        saved, see :meth:`from_xarray`) round-trips for free this way.
+        Harmless to skip for any style (the math is deterministic), but
+        only matters for performance with ``'ANCHOR'``, whose fit is a
+        real per-profile Chapman curve fit -- re-deriving it from the raw
+        density on every load was a confirmed real cost (found doubling
+        full-scale ANCHOR runtime via ``reconstruction_error()``'s own
+        now-fixed version of this same mistake, then found a second time
+        in this constructor's own call from ``from_xarray``/``fromNetCDF``).
+        """
         hyper_params = dict(hyper_params) if hyper_params is not None else {}
-        is_pca = style in ('PCA_1D', 'PCA_1D_10ex', 'PCA_3D', 'PCA_3D_10ex')
-        if is_pca and 'retaining_threshold' not in hyper_params and 'PCA' not in hyper_params:
+        is_isr_pca = style == 'PCA_1D_10ex_ISR'
+        is_pca = is_isr_pca or style in ('PCA_1D', 'PCA_1D_10ex', 'PCA_3D', 'PCA_3D_10ex')
+        if is_isr_pca and 'PCA' not in hyper_params:
+            raise ValueError(
+                "Parameterization style 'PCA_1D_10ex_ISR' always requires a "
+                "pre-fit 'PCA' (and typically 'PCA_mean') in hyper_params -- "
+                "e.g. from isr_pca_basis.load_isr_pca_basis -- it never fits "
+                "a basis from this dataset's own ensemble, unlike the other "
+                "PCA_* styles."
+            )
+        if is_pca and not is_isr_pca and 'retaining_threshold' not in hyper_params and 'PCA' not in hyper_params:
             raise ValueError(
                 f"Parameterization style '{style}' requires either "
                 "'retaining_threshold' (to fit a new PCA basis from this "
@@ -1330,7 +1369,10 @@ class Parameterized_EDPSamples:
         new_vars: dict = {}
         if is_pca:
             is_3d = style.startswith('PCA_3D')
-            is_log = style.endswith('_10ex')
+            is_log = style.endswith('_10ex') or is_isr_pca   # PCA_1D_10ex_ISR is log-space too,
+            # but never reaches the fit-from-ensemble branch below that this flag guards (is_isr_pca
+            # always supplies 'PCA' directly) -- set correctly anyway so it can't silently mislead
+            # a future reader/change.
             if 'PCA' in hyper_params:
                 PCA = hyper_params['PCA']
                 mean = hyper_params.get('PCA_mean')
@@ -1359,7 +1401,8 @@ class Parameterized_EDPSamples:
 
         parameterization = EDP_Parameterization(style=style, hyper_params=hyper_params)
         alt_arg = altitude if parameterization.needs_altitude else None
-        param_vec = parameterization.get_parameter(edps, alt=alt_arg)
+        if param_vec is None:
+            param_vec = parameterization.get_parameter(edps, alt=alt_arg)
 
         param_dims = self._PARAM_DIMS[style](EDPSamples)
         new_vars['param_vec'] = (
@@ -1422,7 +1465,15 @@ class Parameterized_EDPSamples:
         if 'PCA_mean' in ds.data_vars:
             hyper_params['PCA_mean'] = ds.data_vars['PCA_mean'].to_numpy()
 
-        return Parameterized_EDPSamples(EDPSam, style=style, hyper_params=hyper_params)
+        # Reuse the already-fitted param_vec saved in the file instead of
+        # re-deriving it from the raw density -- EDPSamples.from_xarray(ds)
+        # (above) reconstructs a clean EDPSamples that doesn't carry this
+        # over, so without this the constructor would otherwise re-fit from
+        # scratch on every load (confirmed real cost for 'ANCHOR': a full
+        # per-profile Chapman re-fit, see __init__'s param_vec docstring).
+        param_vec = ds.data_vars['param_vec'].to_numpy() if 'param_vec' in ds.data_vars else None
+
+        return Parameterized_EDPSamples(EDPSam, style=style, hyper_params=hyper_params, param_vec=param_vec)
 
     def saveNetCDF(self, path: str, **kwargs: Any) -> None:
         """Write the wrapped ``EDPSamples`` (including param_vec/PCA) to NetCDF."""
@@ -1431,9 +1482,31 @@ class Parameterized_EDPSamples:
     # -- Diagnostics: how much error does this parameterization introduce? ----
 
     def reconstruction_error(self, in_log10: bool = False) -> tuple[np.ndarray, np.ndarray]:
-        """Reconstruction residual/estimate for every (height, geo, sample)."""
-        return self.Parameterization.reconstruction_error(
-            self.EDPSamples.edps, alt=self._alt_arg, in_log10=in_log10)
+        """Reconstruction residual/estimate for every (height, geo, sample).
+
+        Reuses the ``param_vec`` already fitted and stored at construction
+        (decode-only: ``get_density(param_vec)``) rather than calling
+        ``Parameterization.reconstruction_error(raw_density)``, which
+        would re-derive ``param_vec`` from scratch via ``get_parameter``
+        -- harmless (and cheap) for every style except ``ANCHOR``, where
+        it silently repeated the full per-profile Chapman fit a second
+        time. Found as a real cost doubling ANCHOR's wall time in a
+        real-data full-scale run (`plot_reconstruction_error_statistics`/
+        `error_summary` both call this). Numerically identical either
+        way -- the fit is deterministic -- so this is a pure performance
+        fix, not a behavior change.
+        """
+        param_vec = self.EDPSamples["param_vec"].to_numpy()
+        density = np.asarray(self.EDPSamples.edps, dtype=float)
+        density_hat = np.asarray(self.Parameterization.get_density(param_vec, alt=self._alt_arg), dtype=float)
+        if in_log10:
+            mld = self.Parameterization.hyper_params.get('minlog10Density', 4.0)
+            floor = 10.0 ** mld
+            residual = (np.log10(np.maximum(density, floor))
+                        - np.log10(np.maximum(density_hat, floor)))
+        else:
+            residual = density - density_hat
+        return residual, density_hat
 
     def error_summary(self, in_log10: bool = True) -> dict:
         """

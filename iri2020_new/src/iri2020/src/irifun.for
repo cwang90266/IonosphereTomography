@@ -221,7 +221,7 @@ C--------------------------------------------------------------
          y7=y6*exp(-(xl-2)/1.5)
          xlogNe=y1+y7
 		 if(abs(xlogNe).gt.38.0) xlogNe=sign(38.0,xlogNe)
-         gallden=10**(log10Ne+6.0)
+         gallden=10**(xlogNe+6.0)
        RETURN
        END
 C
@@ -260,7 +260,7 @@ C--------------------------------------------------------------
          y7=y6*exp(-(xl-2)/1.5)
          xlogNe=y1+y7
 		 if(abs(xlogNe).gt.38.0) xlogNe=sign(38.0,xlogNe)
-         caaden=10**(log10Ne+6.0)
+         caaden=10**(xlogNe+6.0)
        RETURN
        END
 C
