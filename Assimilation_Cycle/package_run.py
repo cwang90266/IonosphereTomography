@@ -41,7 +41,8 @@ from Ensemble_Kalman_Engine import EnsembleState
 from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
 
 from .cycle_config import CycleConfig
-from . import iri_selection, ensemble_init, observation_stream, output
+from . import iri_selection, ensemble_init, observation_stream, output, isr_comparison
+from .isr_pca_basis import resolve_hyper_params_for_style
 from .cycle_driver import CycleResult, run_cycle
 
 
@@ -52,6 +53,17 @@ class PackageResult:
     batches: list
     results_by_style: dict[str, tuple[CycleResult, int, float]]
     """style -> (CycleResult, n_state, wall_time_seconds)."""
+    isr_matches_by_style: dict[str, list] = field(default_factory=dict)
+    """style -> list[isr_comparison.BatchIsrMatch], populated only when
+    ``cfg.isr_file_path`` was set (ISR_Integration_Plan.md Section 4.3);
+    empty otherwise."""
+    isr_matches_by_tag_and_style: dict[str, dict[str, list]] = field(default_factory=dict)
+    """ISR output tag -> style -> list[BatchIsrMatch].
+
+    The empty-string tag is the backward-compatible primary
+    ``cfg.isr_file_path``; named tags come from
+    ``cfg.additional_isr_file_paths``.
+    """
 
 
 def _savefig(fig_or_ax_or_axes, path: Path) -> None:
@@ -68,6 +80,12 @@ def _savefig(fig_or_ax_or_axes, path: Path) -> None:
     fig = obj.figure if hasattr(obj, "figure") else obj
     fig.savefig(path, dpi=130, bbox_inches="tight")
     plt.close(fig)
+
+
+def _save_csv(df, path: Path) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
 
 
 def _collect_unique_entries(batches: list) -> list:
@@ -107,19 +125,57 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     out = Path(cfg.output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # -- Steps 2-3: IRI sample inputs + input-distribution plot -----------
+    # Run-level boost status (2026-10-17 user request): stamped onto the
+    # TEC/EDP profile plot titles below so a saved/shared image is
+    # self-identifying without needing its file path/folder name.
+    boost_label = (
+        f"boosted (amplitude={cfg.diagonal_boost_amplitude:g})"
+        if cfg.diagonal_boost_amplitude is not None else "no boost"
+    )
+
+    # -- Step 2: IRI sample inputs (.pkl artifact) -------------------------
+    # Saved regardless of edp_samples_path, so this artifact always exists
+    # even in precomputed-EDPSamples mode (where it otherwise wouldn't get
+    # built/saved as a side effect of anything below).
     cfg = cfg if cfg.iri_sample_inputs_output_path is not None else replace(
         cfg, iri_sample_inputs_output_path=out / f"{cfg.label}_iri_sample_inputs",
     )
-    sampling_parameters = iri_selection.sampling_parameters_for_cycle(cfg)
-    _savefig(output.plot_iri_input_distributions(sampling_parameters),
-             out / f"{cfg.label}_iri_input_distributions.png")
+    iri_selection.load_or_build_iri_sample_inputs(cfg)
 
-    # -- Step 4: EDPSamples + per-style parameterization + plots ----------
+    # -- Step 4 (moved ahead of step 3): EDPSamples ------------------------
+    # edp_samples.sampling_parameters below is step 3's input for the
+    # distribution plot -- moved here (rather than calling
+    # iri_selection.sampling_parameters_for_cycle a second, independent
+    # time, as this used to) so the plot always reflects the *actual*
+    # ensemble in use. That separate call was a real bug found 2026-09-29:
+    # in precomputed-edp_samples_path mode it silently redrew a fresh,
+    # unrelated (and, with iri_spread_kwargs left at its default {}, fully
+    # degenerate/zero-spread) sample never used for anything but the plot,
+    # completely disconnected from the real (non-degenerate) driving
+    # indices of the ensemble actually loaded and assimilated -- and even
+    # in the fresh-build case it was a *second*, differently-seeded random
+    # draw from the one that actually built the ensemble, not the literal
+    # values used. Reading the real values back off edp_samples itself
+    # fixes both.
     cfg = cfg if cfg.edp_samples_output_path is not None else replace(
         cfg, edp_samples_output_path=out / f"{cfg.label}_edp_samples.nc",
     )
     edp_samples = ensemble_init.load_or_build_edp_samples(cfg)
+
+    # -- ISR comparison inputs (ISR_Integration_Plan.md Section 4.3), optional --
+    # The primary ISR keeps the historical untagged output naming. Additional
+    # stations use a caller-supplied short tag (e.g. "svl") but otherwise go
+    # through the exact same isr_comparison routines.
+    isr_by_tag: dict[str, Any] = {}
+    if cfg.isr_file_path is not None:
+        isr_by_tag[""] = isr_comparison.load_isr_dataset(cfg.isr_file_path)
+    for isr_tag, isr_path in cfg.additional_isr_file_paths.items():
+        isr_by_tag[str(isr_tag)] = isr_comparison.load_isr_dataset(isr_path)
+
+    # -- Step 3: input-distribution plot, from the real ensemble's own
+    #    sampling_parameters (see note above) -----------------------------
+    _savefig(output.plot_iri_input_distributions(edp_samples.sampling_parameters),
+             out / f"{cfg.label}_iri_input_distributions.png")
 
     _savefig(edp_samples.plot_geolocation(), out / f"{cfg.label}_horizontal_grid.png")
 
@@ -138,7 +194,7 @@ def run_package(cfg: CycleConfig) -> PackageResult:
 
     parameterizations: dict[str, Any] = {}
     for style in cfg.styles:
-        hyper_params = cfg.hyper_params_by_style.get(style)
+        hyper_params = resolve_hyper_params_for_style(cfg, style, cfg.hyper_params_by_style.get(style))
         pes = Parameterized_EDPSamples(edp_samples, style=style, hyper_params=hyper_params)
         pes.saveNetCDF(out / f"{cfg.label}_{style}_parameterized.nc")
         parameterizations[style] = pes
@@ -160,6 +216,10 @@ def run_package(cfg: CycleConfig) -> PackageResult:
 
     ro_entries = [e for e in all_entries if e.obs_type == "RO"]
     for entry in ro_entries:
+        # overlay_los defaults True here (per-entry plot); the combined
+        # plot below defaults it off, since pooling every entry's track
+        # gets visually dense fast -- pass overlay_los explicitly to turn
+        # it on for a one-off diagnostic.
         fig = output.plot_observation_operator_sum(edp_samples, entry)
         _savefig(fig, out / f"{cfg.label}_obs_operator" / f"{entry.label}.png")
     if ro_entries:
@@ -169,38 +229,76 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     # -- Steps 6-8: per-style assimilation, RMSE/rank plots, per-RO -------
     #    TEC/EDP comparison plots (via the on_batch callback -- decodes
     #    and plots one batch's forecast/analysis density at a time). -----
+    # cross_style_data collects, per (batch_index, entry.label), enough to
+    # build a same-RO comparison across every style once the per-style
+    # loop below finishes -- keyed by batch_index too (not just entry
+    # label) since an entry could in principle appear in different
+    # batches across runs, and each occurrence should get its own
+    # cross-style figure rather than conflating them.
+    cross_style_data: dict[tuple[int, str], dict[str, Any]] = {}
+
     results_by_style: dict[str, tuple[CycleResult, int, float]] = {}
+    # Backward-compatible primary-ISR matches plus the full multi-ISR mapping.
+    isr_matches_by_style: dict[str, list] = {}
+    isr_matches_by_tag_and_style: dict[str, dict[str, list]] = {
+        tag: {} for tag in isr_by_tag
+    }
     for style, pes in parameterizations.items():
         ensemble_prior = EnsembleState.from_parameterized_edp_samples(pes)
         style_cfg = replace(
-            cfg, style=style, hyper_params=cfg.hyper_params_by_style.get(style),
+            # The actual resolved hyper_params (incl. a loaded ISR PCA basis,
+            # if any) -- pes.Parameterization.hyper_params, not
+            # cfg.hyper_params_by_style.get(style) directly, which for
+            # 'PCA_1D_10ex_ISR' would be missing the loaded 'PCA'/'PCA_mean'.
+            # Functionally inert for run_cycle itself (it receives pes's
+            # already-built parameterization object separately), but kept
+            # consistent for provenance.
+            cfg, style=style, hyper_params=pes.Parameterization.hyper_params,
             save_intermediate_ensembles=True,
             ensemble_output_dir=out / f"{cfg.label}_{style}_ensembles",
         )
         style_dir = out / f"{cfg.label}_{style}"
 
+        isr_collectors = {
+            tag: isr_comparison.IsrComparisonCollector(edp_samples, isr_dataset)
+            for tag, isr_dataset in isr_by_tag.items()
+        }
+
         def _on_batch(batch, obs_operator, ensemble_forecast, ensemble_analysis, outcome,
-                      _style_dir=style_dir):
+                      _style_dir=style_dir, _style=style, _isr_collectors=isr_collectors):
+            for _collector in _isr_collectors.values():
+                _collector.on_batch(
+                    batch, obs_operator, ensemble_forecast, ensemble_analysis, outcome
+                )
+
             ro_here = [(e, s) for e, s in batch.entry_ray_ranges if e.obs_type == "RO"]
             if not ro_here:
                 return
             decoded_forecast = obs_operator.decode(ensemble_forecast.to_param_shape())
             decoded_analysis = obs_operator.decode(ensemble_analysis.to_param_shape())
             for entry, ray_slice in ro_here:
+                y_forecast = outcome.y_forecast[ray_slice]
+                y_analysis = outcome.y_analysis[ray_slice]
+                y_measured = outcome.y_obs_used[ray_slice]
                 _savefig(
-                    output.plot_tec_profile_comparison(
-                        entry, outcome.y_forecast[ray_slice], outcome.y_analysis[ray_slice],
-                        outcome.y_obs_used[ray_slice],
+                    output.plot_tec_edp_profile_comparison(
+                        entry, y_forecast, y_analysis, y_measured,
+                        edp_samples, decoded_forecast, decoded_analysis,
+                        style=_style, boost_label=boost_label,
                     ),
-                    _style_dir / "tec_profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png",
+                    _style_dir / "profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png",
                 )
+
+                key = (batch.batch_index, entry.label)
+                slot = cross_style_data.setdefault(key, {"entry": entry, "tec": {}, "edp": {}})
+                slot["tec"][_style] = (y_forecast, y_analysis, y_measured)
                 try:
-                    edp_ax = output.plot_edp_profile_comparison(
+                    _, _, forecast_profile, analysis_profile = output.resolve_edp_query_point_and_profiles(
                         edp_samples, entry, decoded_forecast, decoded_analysis,
                     )
+                    slot["edp"][_style] = (forecast_profile, analysis_profile)
                 except ValueError:
-                    continue  # no ray in the default 250-350km window for this entry
-                _savefig(edp_ax, _style_dir / "edp_profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png")
+                    slot["edp"][_style] = None   # no ray in the default 250-350km window for this entry/style
 
         t0 = time.time()
         result = run_cycle(style_cfg, edp_samples, pes.Parameterization, batches, ensemble_prior,
@@ -213,17 +311,80 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         _savefig(output.plot_igs_tec_scatter(batches, result, style_label=style),
                  style_dir / "igs_tec_scatter.png")
 
+        # -- Per-style ISR comparison for every configured ISR station. --
+        for isr_tag, isr_collector in isr_collectors.items():
+            isr_dataset = isr_by_tag[isr_tag]
+            isr_matches_by_tag_and_style[isr_tag][style] = isr_collector.matches
+            if isr_tag == "":
+                # Preserve PackageResult's historical primary-ISR field.
+                isr_matches_by_style[style] = isr_collector.matches
+
+            comparison_name = (
+                f"{cfg.label}_isr_comparison"
+                if isr_tag == ""
+                else f"{cfg.label}_{isr_tag}_isr_comparison"
+            )
+            isr_dir = out / comparison_name / style
+            model_altitude = np.asarray(edp_samples.altitude)
+
+            for match in isr_collector.matches:
+                _savefig(
+                    isr_comparison.plot_isr_nearest_point_comparison(
+                        match,
+                        model_altitude,
+                        isr_dataset.altitude,
+                        station_name=isr_dataset.station.name,
+                        style=style,
+                    ),
+                    isr_dir / "nearest_point" / f"batch{match.batch_index:04d}.png",
+                )
+
+            _savefig(
+                isr_comparison.plot_isr_range_comparison(
+                    isr_collector.matches,
+                    isr_dataset,
+                    cfg.start_time,
+                    cfg.end_time,
+                    model_altitude,
+                    percentile=cfg.isr_range_percentile,
+                    style=style,
+                ),
+                isr_dir / "range_comparison.png",
+            )
+
+            rmse_df = isr_comparison.pooled_isr_rmse_by_altitude(
+                isr_collector.matches,
+                model_altitude,
+                isr_dataset.altitude,
+            )
+            _save_csv(rmse_df, isr_dir / "pooled_rmse.csv")
+            _savefig(
+                isr_comparison.plot_pooled_isr_rmse(rmse_df, style=style),
+                isr_dir / "pooled_rmse.png",
+            )
+
         # Spatial distribution of the optimal (final analysis) EDP field,
         # at the same altitudes as Step 4's forecast/prior mean-density
         # plots -- lets a reviewer compare prior vs. analysis side by side
         # for the same style. Decode needs a real (any) obs_operator for
         # this style (decode() is geometry-independent -- see
         # observation_operator.py -- so any batch's operator works).
-        decode_driver = GeneralEnKFDriver(style=style, hyper_params=cfg.hyper_params_by_style.get(style))
+        decode_driver = GeneralEnKFDriver(style=style, hyper_params=pes.Parameterization.hyper_params)
         decode_op = decode_driver.build_observation_operator(
             edp_samples, pes.Parameterization, ensemble_prior.param_shape, batches[0].podTc2_data,
         )
         analysis_mean_density = decode_op.decode(result.final_ensemble.to_param_shape()).mean(axis=2)
+
+        # Forecast (prior) mean density, decoded through this SAME style's
+        # decode_op -- not the raw IRI ensemble mean already shown in Step
+        # 4's mean_density_*.png. Using the same decode path on both sides
+        # of the difference below isolates what assimilation actually
+        # changed; comparing against the raw (un-encoded) mean would also
+        # pick up each style's own encode/decode reconstruction error as
+        # spurious "difference" (confirmed with the user 2026-10-01).
+        forecast_mean_density = decode_op.decode(ensemble_prior.to_param_shape()).mean(axis=2)
+        diff_density = analysis_mean_density - forecast_mean_density
+
         for target_alt in (100, 200, 300, 400, 500):
             alt_idx = int(np.argmin(np.abs(edp_samples.altitude - target_alt)))
             actual_alt = float(edp_samples.altitude[alt_idx])
@@ -234,13 +395,106 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                 ),
                 style_dir / f"{cfg.label}_{style}_analysis_mean_density_{int(actual_alt)}km.png",
             )
+            abs_max = float(np.abs(diff_density[alt_idx, :]).max()) or 1.0
+            _savefig(
+                output.plot_horizontal(
+                    edp_samples, diff_density[alt_idx, :], target_alt=actual_alt,
+                    scalar_label=f"analysis - forecast mean Ne (m$^{{-3}}$) [{actual_alt:.0f} km]",
+                    cmap="RdBu_r", vmin=-abs_max, vmax=abs_max,
+                ),
+                style_dir / f"{cfg.label}_{style}_analysis_minus_forecast_density_{int(actual_alt)}km.png",
+            )
 
         results_by_style[style] = (result, ensemble_prior.n_state, wall_time_s)
+
+    # -- Cross-style per-RO TEC/EDP comparison (2026-09-29 user request) --
+    # One two-panel figure per RO, all styles overlaid in each panel --
+    # complements (not part of) the per-style profiles/ saved above.
+    altitude = np.asarray(edp_samples.altitude)
+    for (batch_index, entry_label), slot in cross_style_data.items():
+        _savefig(
+            output.plot_cross_style_tec_edp_comparison(
+                slot["entry"], slot["tec"], slot["edp"], altitude,
+                boost_label=boost_label,
+            ),
+            out / f"{cfg.label}_cross_style_profiles" / f"batch{batch_index:04d}_{entry_label}.png",
+        )
+
+    # -- Cross-style ISR comparison for every configured ISR station. -----
+    for isr_tag, isr_dataset in isr_by_tag.items():
+        matches_by_style = isr_matches_by_tag_and_style.get(isr_tag, {})
+        if not matches_by_style:
+            continue
+
+        comparison_name = (
+            f"{cfg.label}_isr_comparison_cross_style"
+            if isr_tag == ""
+            else f"{cfg.label}_{isr_tag}_isr_comparison_cross_style"
+        )
+        isr_cross_dir = out / comparison_name
+        model_altitude = np.asarray(edp_samples.altitude)
+
+        batch_indices = sorted({
+            m.batch_index
+            for matches in matches_by_style.values()
+            for m in matches
+        })
+        for batch_index in batch_indices:
+            matches_for_batch = {
+                style: next(
+                    (m for m in matches if m.batch_index == batch_index),
+                    None,
+                )
+                for style, matches in matches_by_style.items()
+            }
+            matches_for_batch = {
+                s: m for s, m in matches_for_batch.items() if m is not None
+            }
+            if not matches_for_batch:
+                continue
+
+            _savefig(
+                isr_comparison.plot_isr_nearest_point_comparison_cross_style(
+                    matches_for_batch,
+                    model_altitude,
+                    isr_dataset.altitude,
+                    station_name=isr_dataset.station.name,
+                ),
+                isr_cross_dir / "nearest_point" / f"batch{batch_index:04d}.png",
+            )
+
+        _savefig(
+            isr_comparison.plot_isr_range_comparison_cross_style(
+                matches_by_style,
+                isr_dataset,
+                cfg.start_time,
+                cfg.end_time,
+                model_altitude,
+                percentile=cfg.isr_range_percentile,
+            ),
+            isr_cross_dir / "range_comparison.png",
+        )
+
+        rmse_cross_df = isr_comparison.pooled_isr_rmse_by_altitude_cross_style(
+            matches_by_style,
+            model_altitude,
+            isr_dataset.altitude,
+        )
+        _save_csv(rmse_cross_df, isr_cross_dir / "pooled_rmse.csv")
+        _savefig(
+            isr_comparison.plot_pooled_isr_rmse_cross_style(rmse_cross_df),
+            isr_cross_dir / "pooled_rmse.png",
+        )
 
     # -- Step 9: cross-style comparison ------------------------------------
     _savefig(output.plot_style_comparison_summary(results_by_style),
              out / f"{cfg.label}_style_comparison.png")
 
     return PackageResult(
-        output_dir=out, edp_samples=edp_samples, batches=batches, results_by_style=results_by_style,
+        output_dir=out,
+        edp_samples=edp_samples,
+        batches=batches,
+        results_by_style=results_by_style,
+        isr_matches_by_style=isr_matches_by_style,
+        isr_matches_by_tag_and_style=isr_matches_by_tag_and_style,
     )

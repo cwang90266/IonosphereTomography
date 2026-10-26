@@ -4,8 +4,11 @@ Robust Madrigal ISR downloader for:
   - Tromso ISR (TRO): instrument 72, kindat 6400
   - EISCAT Svalbard Radar (SVL): instrument 95, kindat 6400
   - Millstone Hill ISR (MIL): instrument 30, "Combined basic parameters file"
+  - Jicamarca ISR (JRO): instrument 10, science electron-density products
 
-Downloads netCDF4 ONLY.
+Downloads netCDF4 for Madrigal 3 stations.  The Jicamarca server is Madrigal
+2.6 and cannot generate netCDF4, so JRO files are downloaded in their native
+HDF5 format instead.
 
 Behavior:
   * skips files already downloaded
@@ -41,7 +44,7 @@ USER_FULLNAME = "Pin-Hsuan Cheng"
 USER_EMAIL = "pich8403@colorado.edu"
 USER_AFFILIATION = "PlanetiQ"
 
-BASE_DIR = Path("/Users/User2/Desktop/PlanetiQ/ISR_PCA/data")
+BASE_DIR = Path("/home/pin/Desktop/tomography_project/Data/ISR_Data")
 
 # Number of attempts for each individual file.
 MAX_ATTEMPTS = 3
@@ -88,6 +91,25 @@ STATIONS = {
         ],
         "instrument": 30,
         "selector": "millstone_combined",
+    },
+
+    "JRO": {
+        "name": "Jicamarca IS Radar",
+        "urls": [
+            "https://www.igp.gob.pe/observatorios/radio-observatorio-jicamarca/madrigal",
+            "https://jro.igp.gob.pe/madrigal",
+        ],
+        # Official Madrigal instrument code for the Jicamarca IS Radar.
+        "instrument": 10,
+        # Jicamarca distributes density profiles through several science
+        # products/modes rather than one universal kindat.  These cover the
+        # basic-derived and Faraday-rotation density products, plus the newer
+        # F-region temperature/density product when present.
+        "kindats": (1050, 1800, 1801, 1802, 30003),
+        "selector": "jicamarca_density",
+        # JRO currently runs Madrigal 2.6. Server-side netCDF4 conversion is
+        # unavailable, but its native science files are HDF5.
+        "format": "hdf5",
     },
 }
 
@@ -156,19 +178,47 @@ def wanted_file(station_key, config, file_obj):
 
         return True, "Combined basic parameters file"
 
+    if config["selector"] == "jicamarca_density":
+        reject_terms = (
+            "not for science",
+            "not for scientific",
+            "plasma line",
+            "vertical velocity component only",
+            "drift",
+        )
+        if any(term in text for term in reject_terms):
+            return False, "rejected non-density/non-science Jicamarca product"
+
+        wanted_kindats = tuple(int(value) for value in config["kindats"])
+        if kindat in wanted_kindats:
+            return True, f"Jicamarca density kindat {kindat}"
+
+        # Description fallback makes the downloader robust to a future/new
+        # JRO density kindat without selecting perpendicular-drift products.
+        density_terms = (
+            "basic derived parameters",
+            "faraday rotation",
+            "electron density",
+            "f-region data electron and ion temperature",
+        )
+        if any(term in text for term in density_terms):
+            return True, f"Jicamarca density description (kindat {kindat})"
+
+        return False, f"not a Jicamarca density product (kindat {kindat})"
+
     return False, "unknown selector"
 
 
-def nc_output_path(output_dir: Path, remote_name: str) -> Path:
+def output_path(output_dir: Path, remote_name: str, download_format: str) -> Path:
     """
-    Madrigal source files are often .hdf5.
-    We request netCDF4, so store locally with .nc.
+    Choose a local extension matching the requested download format.
     """
     base = os.path.basename(remote_name)
 
     # Strip the original extension.
     stem = os.path.splitext(base)[0]
-    return output_dir / f"{stem}.nc"
+    extension = ".nc" if download_format.lower() == "netcdf4" else ".hdf5"
+    return output_dir / f"{stem}{extension}"
 
 
 def already_downloaded(path: Path) -> bool:
@@ -204,6 +254,7 @@ def download_with_retries(
     mad,
     remote_file: str,
     local_file: Path,
+    download_format: str,
 ):
     """
     Download one file as netCDF4.
@@ -213,14 +264,14 @@ def download_with_retries(
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            print(f"    Attempt {attempt}/{MAX_ATTEMPTS}: netCDF4")
+            print(f"    Attempt {attempt}/{MAX_ATTEMPTS}: {download_format}")
             mad.downloadFile(
                 remote_file,
                 str(local_file),
                 USER_FULLNAME,
                 USER_EMAIL,
                 USER_AFFILIATION,
-                format="netCDF4",
+                format=download_format,
             )
 
             if not local_file.exists() or local_file.stat().st_size == 0:
@@ -241,6 +292,12 @@ def download_with_retries(
             last_error = f"{type(exc).__name__}: {exc}"
             print(f"    FAILED: {last_error}")
             remove_partial(local_file)
+
+            # A server-version/format mismatch is permanent; retries only
+            # waste time and will produce exactly the same response.
+            if "requires Madrigal 3.0 or greater" in str(exc):
+                print("    NON-RETRYABLE format/server-version mismatch.")
+                return False, last_error
 
         except Exception as exc:
             # Catch Madrigal/server-side errors that do not fall into
@@ -311,6 +368,7 @@ def download_station(station_key, config, failed_rows):
     station_success = 0
     station_existing = 0
     station_failed = 0
+    download_format = str(config.get("format", "netCDF4"))
 
     for exp_index, exp in enumerate(experiments, start=1):
         exp_name = str(getattr(exp, "name", ""))
@@ -350,7 +408,7 @@ def download_station(station_key, config, failed_rows):
             station_candidates += 1
 
             remote_file = str(file_obj.name)
-            local_file = nc_output_path(output_dir, remote_file)
+            local_file = output_path(output_dir, remote_file, download_format)
 
             print(f"  Selected: {os.path.basename(remote_file)}")
             print(f"    Reason: {reason}")
@@ -366,6 +424,7 @@ def download_station(station_key, config, failed_rows):
                 mad,
                 remote_file,
                 local_file,
+                download_format,
             )
 
             if ok:
@@ -399,8 +458,8 @@ def main():
 
     failed_rows = []
 
-    # Change this list if you only want a subset, e.g. ["TRO", "SVL"]
-    stations_to_run = ["TRO", "SVL", "MIL"]
+    # Change this list if you only want a subset, e.g. ["TRO", "JRO"]
+    stations_to_run = ["TRO", "SVL", "MIL", "JRO"]
 
     for station_key in stations_to_run:
         try:

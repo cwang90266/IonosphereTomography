@@ -36,7 +36,16 @@ def default_altitude_grid() -> np.ndarray:
 
 
 def default_styles() -> list[str]:
-    return ["ANCHOR", "PCA_3D_10ex", "PCA_1D_10ex"]
+    """Confirmed with the user 2026-10-06 (ISR_Integration_Plan.md Section
+    4.1.3): adds 'PCA_1D_10ex_ISR' as a fourth default alongside the three
+    established styles, not a replacement for any of them. Running this
+    default set end to end requires ``CycleConfig.isr_pca_basis_path`` to
+    be set (or an explicit 'PCA' in ``hyper_params_by_style['PCA_1D_10ex_ISR']``)
+    -- 'PCA_1D_10ex_ISR' never fits a basis from the ensemble it's given
+    (see ``Parameterization.Parameterized_EDPSamples``), so a bare default
+    ``CycleConfig`` with no ISR basis configured will raise when this style
+    is reached, by design (fail loudly, not silently skip)."""
+    return ["ANCHOR", "PCA_3D_10ex", "PCA_1D_10ex", "PCA_1D_10ex_ISR"]
 
 
 def default_hyper_params_by_style() -> dict:
@@ -47,6 +56,42 @@ def default_hyper_params_by_style() -> dict:
     return {
         "PCA_3D_10ex": {"retaining_threshold": 1 - 1e-4},
         "PCA_1D_10ex": {"retaining_threshold": 1 - 1e-5},
+    }
+
+
+def default_iri_spread_kwargs() -> dict:
+    """Real-window defaults, confirmed with the user 2026-09-29 after
+    directly inspecting the underlying IRI2020 input files (previously
+    defaulted to `{}` -- no spread at all on any index, a real bug found
+    the same day: a fresh-build ensemble with this left unset is
+    2000 identical IRI2020 runs, see
+    `Assimilation_Cycle_Integration_Plan.md` Section 21/22).
+
+    Each `*_sample_range` is a window of *table rows*, not a fixed real
+    time span -- the two input files have different native cadences, so
+    the same integer means a different real span depending on which
+    index it's applied to:
+      - `apf107.dat` (`f107`/`ap`) is indexed one row per *calendar day*
+        (confirmed via its `yr`/`mn`/`dy` fields) -- `ap`'s value within
+        each row is itself 8 genuinely 3-hourly sub-values, but the
+        *window* steps in whole days. `f107_sample_range=30`/
+        `ap_sample_range=30` -> +/-30 real days.
+      - `ig_rz.dat` (`ig12`/`rz12`) is indexed one row per *calendar
+        month* (confirmed via its own `Start_end_month` header) --
+        `ig_sample_range=12`/`rz_sample_range=12` -> +/-12 real months.
+        These are 12-month *smoothed* indices by construction, so even a
+        wide window changes them slowly -- 12 is a real month-scale
+        window, not a narrow one, despite the smaller number.
+      - `hour` indexes local time-of-day directly in whole hours (no
+        separate file/cadence question) -- `hour_sample_range=3` ->
+        +/-3 real hours, exactly as stated.
+    """
+    return {
+        "hour_sample_range": 3,
+        "f107_sample_range": 30,
+        "ap_sample_range": 30,
+        "ig_sample_range": 12,
+        "rz_sample_range": 12,
     }
 
 
@@ -118,11 +163,35 @@ class CycleConfig:
 
     # --- Ensemble size / IRI spread (Section 4.3-4.4) ---
     n_ensemble: int = 2000
-    iri_spread_kwargs: dict = field(default_factory=dict)
+    iri_spread_kwargs: dict = field(default_factory=default_iri_spread_kwargs)
     """Forwarded to ``IRI_Sample_Inputs.randomSamples`` as
     ``hour_sample_range``/``f107_sample_range``/``ap_sample_range``/
-    ``ig_sample_range``/``rz_sample_range`` (all optional; omitted ones
-    default to no spread on that index -- see ``IRI_Sample_Inputs``)."""
+    ``ig_sample_range``/``rz_sample_range`` (all optional; a key left out
+    of an explicit override means no spread on that specific index, not a
+    fallback to the default below -- see ``IRI_Sample_Inputs``). Default
+    is ``default_iri_spread_kwargs()`` (+/-3 hours, +/-30 days for
+    `f107`/`ap`, +/-12 months for `ig12`/`rz12`) -- see that function's
+    docstring for why those numbers, and note they're table-row windows
+    at two different native cadences, not a single uniform unit. Only
+    matters for a *fresh* IRI2020 build (``edp_samples_path`` unset);
+    has no effect in precomputed-``edp_samples_path`` mode, since the
+    real ensemble there comes from the cached file, not a fresh draw."""
+    iri_rng_seed: int | None = None
+    """Seeds ``IRI_Sample_Inputs.randomSamples``'s ensemble draw (hour/
+    F10.7/Ap/IG12/Rz12 indices) via ``iri_selection.sampling_parameters_
+    for_cycle``. ``None`` (default): unchanged behavior, a fresh unseeded
+    generator every call. **A real, previously-undocumented gotcha found
+    2026-10-18** (the same class of bug as ``analysis_rng_seed``'s own
+    gotcha above, independently discovered here): two otherwise-identical
+    back-to-back runs (same config, same ``analysis_rng_seed``) produced
+    materially different per-style RMSE-vs-ISR results and even flipped
+    which run's ``converged`` flag was True, purely because each *fresh*
+    IRI2020 ensemble build (``edp_samples_path`` unset) silently drew a
+    different random ensemble -- this briefly looked like a real styles-
+    vs-boost effect until traced back here. Set and hold this fixed
+    across any compared conditions for the comparison to be valid, same
+    rule as ``analysis_rng_seed``. Only matters for a *fresh* IRI2020
+    build, same scope as ``iri_spread_kwargs`` above."""
 
     # --- Batching and observation error (Section 4.2, 8.1, 8.2) ---
     batch_size: int = 200
@@ -183,6 +252,22 @@ class CycleConfig:
     osse_mode: bool = False
     osse_rng_seed: int | None = None
 
+    analysis_rng_seed: int | None = None
+    """Seeds ``GeneralEnKFDriver``'s ``AnalysisConfig.rng`` (via
+    ``cycle_driver.run_cycle``) -- the generator actually used for the
+    stochastic perturbed-obs noise inside ``assimilate_one_cycle``/
+    ``analyze()``. ``None`` (default): unchanged behavior, a fresh
+    unseeded generator every call. **A real, previously-undocumented
+    gotcha confirmed twice in this project's history** (see
+    `Assimilation_Cycle_Integration_Plan.md` Section 13/14): this is a
+    *different* generator from ``run_batch_loop``'s own ``rng`` parameter
+    (which only covers OSSE noise synthesis and rank-histogram
+    tie-breaking) -- any comparison across nonlinear-EnKF runs (different
+    styles, different hyperparameters, different seeds) needs this one
+    explicitly set and held fixed across the compared conditions, or the
+    comparison is not valid (an unseeded run is a different random draw
+    every time, confounded with whatever is actually being compared)."""
+
     # --- Inter-batch covariance inflation (opt-in; Section 8.3's
     # "persistence, no inflation" default is unchanged unless this is set) ---
     inter_batch_inflation_factor: float | None = None
@@ -230,17 +315,110 @@ class CycleConfig:
     """Gaussian smoothing length (km) applied to the raw noise field along
     the altitude coordinate before it's added -- only used when
     ``diagonal_boost_amplitude`` is set."""
-    diagonal_boost_horizontal_scale_km: float = 200.0
+    diagonal_boost_horizontal_scale_km: float = 500.0
     """Gaussian smoothing length (km, great-circle) applied to the raw
     noise field over the horizontal point cloud before it's added -- only
     used when ``diagonal_boost_amplitude`` is set. Works directly on the
-    unstructured/mesh-based horizontal grid (no regular-grid assumption)."""
+    unstructured/mesh-based horizontal grid (no regular-grid assumption).
+
+    **Changed from 200 to 500 (2026-10-07/08), a real reversal finding**:
+    a full-scale real-data run (ISR_Integration_Plan.md's evaluation,
+    amplitude=0.5/log_space=True/h=200) looked like a clean win against
+    held-out RO+IGS TEC (the only metric this value was originally tuned
+    against) but was a 1-3 order-of-magnitude *regression* against real
+    ISR ground-truth density in the ~95-440km band (E-region through
+    F2-peak/lower-topside) -- for every parameterization style tested,
+    including the previously most-validated one. A follow-up real
+    3-parameter sweep (amplitude x this x `diagonal_boost_vertical_scale_km`,
+    scored directly against real ISR) found the damage is driven by this
+    parameter, not amplitude: at `h=500`, every amplitude in 0.1-0.5
+    improves *both* the TEC fit and the real ISR match simultaneously
+    (best found: amplitude=0.1, vertical=30, horizontal=500 -- ISR RMSE
+    *below* the no-boost baseline). Interpretation: a wider horizontal
+    correlation length makes the injected perturbation look like a
+    genuine broad-scale density anomaly rather than small-scale,
+    geographically-incoherent noise the filter can exploit to fit TEC via
+    locally-implausible vertical-shape distortions. `amplitude` itself is
+    still `None` (off) by default -- only this smoothing-scale default
+    changed, since boosting remains opt-in."""
     diagonal_boost_rng_seed: int | None = None
     """Seeds the random field draw for reproducible comparisons. `None`
     (default): a fresh unseeded generator every call -- fine for a single
     production run, but any *comparison* across boost settings needs this
     set and held fixed, the same standing lesson as
     ``AnalysisConfig.rng`` elsewhere in this project."""
+    diagonal_boost_taper_start_km: float = 400.0
+    diagonal_boost_taper_end_km: float = 700.0
+    diagonal_boost_taper_floor: float = 0.1
+    """Altitude taper on `diagonal_boost_amplitude` (confirmed with the
+    user 2026-09-29, after a real-data finding: `diagonal_boost_amplitude`
+    is a flat fraction of each point's own std, but TEC is a line
+    integral dominated by the F2-peak region (~250-350km) -- a
+    perturbation well above that has almost no effect on TEC, so the
+    EnKF has little power to constrain whatever the boost injects there.
+    With `iri_spread_kwargs` widened (Section 22), this showed up as
+    visibly wavy analysis EDPs at high altitude with no corresponding
+    TEC-residual improvement. Full amplitude at/below
+    `diagonal_boost_taper_start_km`, linearly down to
+    `diagonal_boost_amplitude * diagonal_boost_taper_floor` by
+    `diagonal_boost_taper_end_km`, held at that floor above -- see
+    `diagonal_boost.py`'s module docstring for the full reasoning. Only
+    matters when `diagonal_boost_amplitude` is set."""
+
+    # --- ISR comparison (ISR_Integration_Plan.md Section 4.3) ---
+    isr_file_path: str | Path | None = None
+    """Path to a preprocessed ISR netCDF (e.g. ``TROISR2025_nonan.nc``'s
+    schema: ``altitude``/``Ne``/``time_utc`` data variables,
+    ``station_name``/``station_latitude``/``station_longitude`` global
+    attrs -- see ``isr_comparison.load_isr_dataset``). ``None`` (default):
+    no ISR comparison is run. Station-agnostic by construction -- any ISR
+    station's file with this schema works, nothing here is Tromso-specific.
+    Note this is the *raw* (or ISR-adaptive-filtered) ISR file, not the
+    IRI2020-topside-extended one -- the comparison tooling interpolates
+    the model profile down onto the ISR instrument's own native altitude
+    gates rather than the other way around, so it has no need for (and no
+    dependency on) the topside extension used by the ISR-PCA
+    parameterization style."""
+    additional_isr_file_paths: dict[str, str | Path] = field(default_factory=dict)
+    """Optional additional ISR validation files, keyed by a short output tag.
+
+    Each entry is processed by the exact same ``isr_comparison`` collector,
+    plotting, and pooled-RMSE routines used for ``isr_file_path``. For example,
+    ``{"svl": "/path/to/SVLISR2025_nonan.nc"}`` produces
+    ``<label>_svl_isr_comparison/...`` and
+    ``<label>_svl_isr_comparison_cross_style/...``.
+
+    ``isr_file_path`` remains the backward-compatible primary ISR and keeps
+    the historical untagged output names ``<label>_isr_comparison`` and
+    ``<label>_isr_comparison_cross_style``. An empty dict means no additional
+    ISR stations."""
+    isr_pca_basis_path: str | Path | None = None
+    """Path to a precomputed :class:`isr_pca_basis.IsrPcaBasis` netCDF
+    (``isr_pca_basis.save_isr_pca_basis``'s output) -- supplies
+    ``hyper_params['PCA']``/``['PCA_mean']`` for the ``'PCA_1D_10ex_ISR'``
+    style wherever it's resolved (``ensemble_init.py``, ``package_run.py``,
+    ``style_sweep.py``, via ``isr_pca_basis.resolve_hyper_params_for_style``),
+    unless ``hyper_params``/``hyper_params_by_style`` already supplies
+    ``'PCA'`` explicitly (that takes priority). ``None`` (default): no
+    effect on any other style; using ``'PCA_1D_10ex_ISR'`` without this set
+    and without an explicit ``'PCA'`` raises (see ``default_styles``).
+
+    **Real pitfall, found while smoke-testing this wiring**: the basis
+    (``isr_pca_basis.build_isr_pca_basis``) must be built on the *same*
+    altitude grid the cycle's actual ``EDPSamples`` ends up using --
+    ``cfg.altitude_grid`` only when building fresh; a precomputed
+    ``edp_samples_path`` file's *own* altitude grid otherwise, which can
+    silently differ (e.g. a coarse test grid saved earlier). A mismatch
+    raises deep inside ``Parameterization.EDP2PCA_1D`` ("density and PCA
+    dimensions are inconsistent") -- the same class of gotcha as this
+    project's documented 17-vs-82-level and ``radius_km``-vs-
+    ``grid_radius_deg`` mismatches (see ``Documentation/Assimilation_Cycle_README.md``)."""
+    isr_range_percentile: float = 0.0
+    """Passed through to ``isr_comparison``'s cycle-wide-range plots:
+    ``0.0`` (default) shades the literal min-max range of ISR profiles
+    over the cycle's window; a value in ``(0, 50)`` shades the
+    ``[p, 100-p]`` percentile band instead (less sensitive to a single
+    outlier scan, at the cost of no longer being a literal bound)."""
 
     # --- Output (Section 4.7/4.14) ---
     output_dir: str | Path | None = None
@@ -251,6 +429,14 @@ class CycleConfig:
             raise ValueError("altitude_grid must be 1-D")
         if self.obs_sources not in ("RO", "IGS", "both"):
             raise ValueError(f"obs_sources must be 'RO', 'IGS', or 'both', got {self.obs_sources!r}")
+        if not isinstance(self.additional_isr_file_paths, dict):
+            raise ValueError("additional_isr_file_paths must be a dict of tag -> path")
+        for tag in self.additional_isr_file_paths:
+            tag = str(tag)
+            if not tag or any(ch in tag for ch in "/\\"):
+                raise ValueError(
+                    "additional_isr_file_paths keys must be non-empty filename-safe tags"
+                )
         if self.batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         if self.max_tec_per_batch is not None and self.max_tec_per_batch < 1:
@@ -261,6 +447,10 @@ class CycleConfig:
             raise ValueError("diagonal_boost_vertical_scale_km must be > 0")
         if self.diagonal_boost_horizontal_scale_km <= 0:
             raise ValueError("diagonal_boost_horizontal_scale_km must be > 0")
+        if self.diagonal_boost_taper_end_km <= self.diagonal_boost_taper_start_km:
+            raise ValueError("diagonal_boost_taper_end_km must be > diagonal_boost_taper_start_km")
+        if not 0.0 <= self.diagonal_boost_taper_floor <= 1.0:
+            raise ValueError("diagonal_boost_taper_floor must be in [0, 1]")
 
     @property
     def resolved_grid_radius_deg(self) -> float:
