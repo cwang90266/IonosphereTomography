@@ -606,7 +606,7 @@ def parser_builder() -> argparse.ArgumentParser:
     parser.add_argument("--ro-pattern", default="podTc2*_*_nc")
     parser.add_argument("--roi-center-lat", type=float, default=DEFAULT_TRO_LAT)
     parser.add_argument("--roi-center-lon", type=float, default=DEFAULT_TRO_LON)
-    parser.add_argument("--roi-radius-km", type=float, default=2500.0)
+    parser.add_argument("--roi-radius-km", type=float, default=2000.0)
     parser.add_argument("--ro-bin-minutes", type=int, default=30)
     parser.add_argument("--local-timezone", default="Europe/Oslo")
     parser.add_argument("--plot-alt-min", type=float, default=80.0)

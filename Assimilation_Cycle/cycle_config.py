@@ -379,6 +379,19 @@ class CycleConfig:
     gates rather than the other way around, so it has no need for (and no
     dependency on) the topside extension used by the ISR-PCA
     parameterization style."""
+    additional_isr_file_paths: dict[str, str | Path] = field(default_factory=dict)
+    """Optional additional ISR validation files, keyed by a short output tag.
+
+    Each entry is processed by the exact same ``isr_comparison`` collector,
+    plotting, and pooled-RMSE routines used for ``isr_file_path``. For example,
+    ``{"svl": "/path/to/SVLISR2025_nonan.nc"}`` produces
+    ``<label>_svl_isr_comparison/...`` and
+    ``<label>_svl_isr_comparison_cross_style/...``.
+
+    ``isr_file_path`` remains the backward-compatible primary ISR and keeps
+    the historical untagged output names ``<label>_isr_comparison`` and
+    ``<label>_isr_comparison_cross_style``. An empty dict means no additional
+    ISR stations."""
     isr_pca_basis_path: str | Path | None = None
     """Path to a precomputed :class:`isr_pca_basis.IsrPcaBasis` netCDF
     (``isr_pca_basis.save_isr_pca_basis``'s output) -- supplies
@@ -416,6 +429,14 @@ class CycleConfig:
             raise ValueError("altitude_grid must be 1-D")
         if self.obs_sources not in ("RO", "IGS", "both"):
             raise ValueError(f"obs_sources must be 'RO', 'IGS', or 'both', got {self.obs_sources!r}")
+        if not isinstance(self.additional_isr_file_paths, dict):
+            raise ValueError("additional_isr_file_paths must be a dict of tag -> path")
+        for tag in self.additional_isr_file_paths:
+            tag = str(tag)
+            if not tag or any(ch in tag for ch in "/\\"):
+                raise ValueError(
+                    "additional_isr_file_paths keys must be non-empty filename-safe tags"
+                )
         if self.batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         if self.max_tec_per_batch is not None and self.max_tec_per_batch < 1:

@@ -57,6 +57,13 @@ class PackageResult:
     """style -> list[isr_comparison.BatchIsrMatch], populated only when
     ``cfg.isr_file_path`` was set (ISR_Integration_Plan.md Section 4.3);
     empty otherwise."""
+    isr_matches_by_tag_and_style: dict[str, dict[str, list]] = field(default_factory=dict)
+    """ISR output tag -> style -> list[BatchIsrMatch].
+
+    The empty-string tag is the backward-compatible primary
+    ``cfg.isr_file_path``; named tags come from
+    ``cfg.additional_isr_file_paths``.
+    """
 
 
 def _savefig(fig_or_ax_or_axes, path: Path) -> None:
@@ -155,8 +162,15 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     )
     edp_samples = ensemble_init.load_or_build_edp_samples(cfg)
 
-    # -- ISR comparison input (ISR_Integration_Plan.md Section 4.3), optional --
-    isr = isr_comparison.load_isr_dataset(cfg.isr_file_path) if cfg.isr_file_path is not None else None
+    # -- ISR comparison inputs (ISR_Integration_Plan.md Section 4.3), optional --
+    # The primary ISR keeps the historical untagged output naming. Additional
+    # stations use a caller-supplied short tag (e.g. "svl") but otherwise go
+    # through the exact same isr_comparison routines.
+    isr_by_tag: dict[str, Any] = {}
+    if cfg.isr_file_path is not None:
+        isr_by_tag[""] = isr_comparison.load_isr_dataset(cfg.isr_file_path)
+    for isr_tag, isr_path in cfg.additional_isr_file_paths.items():
+        isr_by_tag[str(isr_tag)] = isr_comparison.load_isr_dataset(isr_path)
 
     # -- Step 3: input-distribution plot, from the real ensemble's own
     #    sampling_parameters (see note above) -----------------------------
@@ -224,7 +238,11 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     cross_style_data: dict[tuple[int, str], dict[str, Any]] = {}
 
     results_by_style: dict[str, tuple[CycleResult, int, float]] = {}
+    # Backward-compatible primary-ISR matches plus the full multi-ISR mapping.
     isr_matches_by_style: dict[str, list] = {}
+    isr_matches_by_tag_and_style: dict[str, dict[str, list]] = {
+        tag: {} for tag in isr_by_tag
+    }
     for style, pes in parameterizations.items():
         ensemble_prior = EnsembleState.from_parameterized_edp_samples(pes)
         style_cfg = replace(
@@ -241,12 +259,17 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         )
         style_dir = out / f"{cfg.label}_{style}"
 
-        isr_collector = isr_comparison.IsrComparisonCollector(edp_samples, isr) if isr is not None else None
+        isr_collectors = {
+            tag: isr_comparison.IsrComparisonCollector(edp_samples, isr_dataset)
+            for tag, isr_dataset in isr_by_tag.items()
+        }
 
         def _on_batch(batch, obs_operator, ensemble_forecast, ensemble_analysis, outcome,
-                      _style_dir=style_dir, _style=style, _isr_collector=isr_collector):
-            if _isr_collector is not None:
-                _isr_collector.on_batch(batch, obs_operator, ensemble_forecast, ensemble_analysis, outcome)
+                      _style_dir=style_dir, _style=style, _isr_collectors=isr_collectors):
+            for _collector in _isr_collectors.values():
+                _collector.on_batch(
+                    batch, obs_operator, ensemble_forecast, ensemble_analysis, outcome
+                )
 
             ro_here = [(e, s) for e, s in batch.entry_ray_ranges if e.obs_type == "RO"]
             if not ro_here:
@@ -288,32 +311,57 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         _savefig(output.plot_igs_tec_scatter(batches, result, style_label=style),
                  style_dir / "igs_tec_scatter.png")
 
-        # -- Per-style ISR comparison (ISR_Integration_Plan.md Section 4.3,
-        #    Plot A/B + pooled RMSE), only when cfg.isr_file_path is set. --
-        if isr_collector is not None:
-            isr_matches_by_style[style] = isr_collector.matches
-            isr_dir = out / f"{cfg.label}_isr_comparison" / style
+        # -- Per-style ISR comparison for every configured ISR station. --
+        for isr_tag, isr_collector in isr_collectors.items():
+            isr_dataset = isr_by_tag[isr_tag]
+            isr_matches_by_tag_and_style[isr_tag][style] = isr_collector.matches
+            if isr_tag == "":
+                # Preserve PackageResult's historical primary-ISR field.
+                isr_matches_by_style[style] = isr_collector.matches
+
+            comparison_name = (
+                f"{cfg.label}_isr_comparison"
+                if isr_tag == ""
+                else f"{cfg.label}_{isr_tag}_isr_comparison"
+            )
+            isr_dir = out / comparison_name / style
             model_altitude = np.asarray(edp_samples.altitude)
 
             for match in isr_collector.matches:
                 _savefig(
                     isr_comparison.plot_isr_nearest_point_comparison(
-                        match, model_altitude, isr.altitude, station_name=isr.station.name, style=style,
+                        match,
+                        model_altitude,
+                        isr_dataset.altitude,
+                        station_name=isr_dataset.station.name,
+                        style=style,
                     ),
                     isr_dir / "nearest_point" / f"batch{match.batch_index:04d}.png",
                 )
+
             _savefig(
                 isr_comparison.plot_isr_range_comparison(
-                    isr_collector.matches, isr, cfg.start_time, cfg.end_time, model_altitude,
-                    percentile=cfg.isr_range_percentile, style=style,
+                    isr_collector.matches,
+                    isr_dataset,
+                    cfg.start_time,
+                    cfg.end_time,
+                    model_altitude,
+                    percentile=cfg.isr_range_percentile,
+                    style=style,
                 ),
                 isr_dir / "range_comparison.png",
             )
+
             rmse_df = isr_comparison.pooled_isr_rmse_by_altitude(
-                isr_collector.matches, model_altitude, isr.altitude,
+                isr_collector.matches,
+                model_altitude,
+                isr_dataset.altitude,
             )
             _save_csv(rmse_df, isr_dir / "pooled_rmse.csv")
-            _savefig(isr_comparison.plot_pooled_isr_rmse(rmse_df, style=style), isr_dir / "pooled_rmse.png")
+            _savefig(
+                isr_comparison.plot_pooled_isr_rmse(rmse_df, style=style),
+                isr_dir / "pooled_rmse.png",
+            )
 
         # Spatial distribution of the optimal (final analysis) EDP field,
         # at the same altitudes as Step 4's forecast/prior mean-density
@@ -372,47 +420,81 @@ def run_package(cfg: CycleConfig) -> PackageResult:
             out / f"{cfg.label}_cross_style_profiles" / f"batch{batch_index:04d}_{entry_label}.png",
         )
 
-    # -- Cross-style ISR comparison (ISR_Integration_Plan.md Section 4.3),
-    #    only when cfg.isr_file_path is set -------------------------------
-    if isr is not None and isr_matches_by_style:
-        isr_cross_dir = out / f"{cfg.label}_isr_comparison_cross_style"
+    # -- Cross-style ISR comparison for every configured ISR station. -----
+    for isr_tag, isr_dataset in isr_by_tag.items():
+        matches_by_style = isr_matches_by_tag_and_style.get(isr_tag, {})
+        if not matches_by_style:
+            continue
+
+        comparison_name = (
+            f"{cfg.label}_isr_comparison_cross_style"
+            if isr_tag == ""
+            else f"{cfg.label}_{isr_tag}_isr_comparison_cross_style"
+        )
+        isr_cross_dir = out / comparison_name
         model_altitude = np.asarray(edp_samples.altitude)
 
-        batch_indices = sorted({m.batch_index for ms in isr_matches_by_style.values() for m in ms})
+        batch_indices = sorted({
+            m.batch_index
+            for matches in matches_by_style.values()
+            for m in matches
+        })
         for batch_index in batch_indices:
             matches_for_batch = {
-                style: next((m for m in matches if m.batch_index == batch_index), None)
-                for style, matches in isr_matches_by_style.items()
+                style: next(
+                    (m for m in matches if m.batch_index == batch_index),
+                    None,
+                )
+                for style, matches in matches_by_style.items()
             }
-            matches_for_batch = {s: m for s, m in matches_for_batch.items() if m is not None}
+            matches_for_batch = {
+                s: m for s, m in matches_for_batch.items() if m is not None
+            }
             if not matches_for_batch:
                 continue
+
             _savefig(
                 isr_comparison.plot_isr_nearest_point_comparison_cross_style(
-                    matches_for_batch, model_altitude, isr.altitude, station_name=isr.station.name,
+                    matches_for_batch,
+                    model_altitude,
+                    isr_dataset.altitude,
+                    station_name=isr_dataset.station.name,
                 ),
                 isr_cross_dir / "nearest_point" / f"batch{batch_index:04d}.png",
             )
 
         _savefig(
             isr_comparison.plot_isr_range_comparison_cross_style(
-                isr_matches_by_style, isr, cfg.start_time, cfg.end_time, model_altitude,
+                matches_by_style,
+                isr_dataset,
+                cfg.start_time,
+                cfg.end_time,
+                model_altitude,
                 percentile=cfg.isr_range_percentile,
             ),
             isr_cross_dir / "range_comparison.png",
         )
+
         rmse_cross_df = isr_comparison.pooled_isr_rmse_by_altitude_cross_style(
-            isr_matches_by_style, model_altitude, isr.altitude,
+            matches_by_style,
+            model_altitude,
+            isr_dataset.altitude,
         )
         _save_csv(rmse_cross_df, isr_cross_dir / "pooled_rmse.csv")
-        _savefig(isr_comparison.plot_pooled_isr_rmse_cross_style(rmse_cross_df),
-                 isr_cross_dir / "pooled_rmse.png")
+        _savefig(
+            isr_comparison.plot_pooled_isr_rmse_cross_style(rmse_cross_df),
+            isr_cross_dir / "pooled_rmse.png",
+        )
 
     # -- Step 9: cross-style comparison ------------------------------------
     _savefig(output.plot_style_comparison_summary(results_by_style),
              out / f"{cfg.label}_style_comparison.png")
 
     return PackageResult(
-        output_dir=out, edp_samples=edp_samples, batches=batches, results_by_style=results_by_style,
+        output_dir=out,
+        edp_samples=edp_samples,
+        batches=batches,
+        results_by_style=results_by_style,
         isr_matches_by_style=isr_matches_by_style,
+        isr_matches_by_tag_and_style=isr_matches_by_tag_and_style,
     )
