@@ -11,8 +11,16 @@ Main additions per successful one-hour slot, per style:
        nearest Tromso ISR profile, nearest Svalbard ISR profile,
        title includes number of RO occultation profiles and TEC rays used.
   2) dual_isr_rmse_by_altitude.png
-       analysis error/RMSE-by-native-altitude-gate against Tromso (red)
-       and Svalbard (green). No extrapolation beyond each ISR's native gates.
+       analysis (solid) and forecast (dashed) error/RMSE-by-native-altitude-
+       gate against Tromso (red) and Svalbard (green). No extrapolation
+       beyond each ISR's native gates.
+
+  dual_isr_errors.csv (per hour) holds, for each style/condition/station
+  and native ISR gate: analysis_error_m3, forecast_error_m3, the matched
+  ISR profile time (isr_time_utc), and the Ne values behind both errors
+  (isr_ne_m3, forecast_ne_m3, analysis_ne_m3). The forecast is the prior
+  ensemble decoded at the station itself, so Svalbard gets its own
+  forecast-vs-analysis comparison, not only Tromso.
 
 Hours are assimilated only when BOTH conditions are met:
   - at least one in-hour ISR profile is available from Tromso or Svalbard;
@@ -35,8 +43,11 @@ Example:
         --start-hour 0 \
         --end-hour 24
 
-By default, large/cache intermediate artifacts are suppressed. To write
-all package artifacts, including the normally suppressed .dat/.pkl/.nc files:
+By default (--output scoring) the files Run_Scoring needs to rebuild and
+score a run are written -- *_edp_samples.nc, *_parameterized.nc and
+*_ensembles/ensemble_batch_*.nc (about 1.5 GB per hour folder) -- while the
+IRI cache files (.dat/.pkl) are suppressed. --output minimal suppresses all
+of these. To write all package artifacts, including the .dat/.pkl files:
 
     python run_hourly_all4styles_boost_compare.py \
         --date 2025-10-16 \
@@ -275,15 +286,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        choices=("minimal", "all"),
-        default="minimal",
+        choices=("scoring", "minimal", "all"),
+        default="scoring",
         help=(
             "Output policy for large/cache intermediate artifacts. "
-            "'minimal' (default) suppresses apf107.dat, ig_rz.dat, "
-            "*_iri_sample_inputs.pkl, *_edp_samples.nc, *_parameterized.nc, "
-            "and *_ensembles/ensemble_batch_*.nc. "
-            "'all' writes those artifacts too. Scientific figures, CSV summaries, "
-            "processed RO observations, and validation products are written in both modes."
+            "'scoring' (default) writes *_edp_samples.nc, *_parameterized.nc and "
+            "*_ensembles/ensemble_batch_*.nc -- the inputs Run_Scoring needs to "
+            "rebuild TEC residuals and full profiles (~1.5 GB per hour) -- and "
+            "suppresses apf107.dat, ig_rz.dat and *_iri_sample_inputs.pkl. "
+            "'minimal' suppresses all six (the run then cannot be rescored). "
+            "'all' writes all six. Scientific figures, CSV summaries, "
+            "processed RO observations, and validation products are written in every mode."
         ),
     )
     return parser.parse_args()
@@ -574,23 +587,24 @@ class _NoArtifactRunContext:
     (boosted reuses the exact no-boost base EDP in memory) while making
     heavy/cache artifacts optional.
 
-    output_mode="minimal" (default) suppresses:
-      - *_edp_samples.nc
-      - *_parameterized.nc
-      - *_ensembles/ensemble_batch_*.nc
+    output_mode="scoring" (default) writes the files Run_Scoring needs
+    (*_edp_samples.nc, *_parameterized.nc, *_ensembles/ensemble_batch_*.nc)
+    and suppresses the IRI cache files:
       - *_iri_sample_inputs.pkl
       - apf107.dat
       - ig_rz.dat
 
-    output_mode="all" writes those artifacts using the normal package paths.
+    output_mode="minimal" suppresses all six of the files above.
+
+    output_mode="all" writes all six using the normal package paths.
 
     In both modes the exact in-memory Parameterized_EDPSamples objects are
     captured so downstream ISR validation does not depend on reopening a
     parameterized netCDF file.
     """
 
-    def __init__(self, *, base_edp_samples=None, output_mode: str = "minimal"):
-        if output_mode not in {"minimal", "all"}:
+    def __init__(self, *, base_edp_samples=None, output_mode: str = "scoring"):
+        if output_mode not in {"scoring", "minimal", "all"}:
             raise ValueError(f"Unknown output_mode={output_mode!r}")
         self.base_edp_samples = base_edp_samples
         self.output_mode = output_mode
@@ -614,8 +628,10 @@ class _NoArtifactRunContext:
         orig_load_iri = self._orig_load_or_build_iri
         orig_save_parameterized = self._orig_save_parameterized
         captured = self.parameterizations
+        # Files Run_Scoring needs: written in "scoring" and "all".
+        save_scoring_files = output_mode in {"scoring", "all"}
 
-        if output_mode == "minimal":
+        if output_mode != "all":
             self._iri_tmpdir = tempfile.TemporaryDirectory(prefix="ionosphere_iri_")
             iri_tmpdir = self._iri_tmpdir.name
 
@@ -647,14 +663,14 @@ class _NoArtifactRunContext:
                         taper_floor=cfg.diagonal_boost_taper_floor,
                     )
 
-                if output_mode == "all" and cfg.edp_samples_output_path is not None:
+                if save_scoring_files and cfg.edp_samples_output_path is not None:
                     Path(cfg.edp_samples_output_path).parent.mkdir(
                         parents=True, exist_ok=True
                     )
                     edp.saveNetCDF(cfg.edp_samples_output_path)
                 return edp
 
-            if output_mode == "minimal":
+            if not save_scoring_files:
                 return orig_load(replace(cfg, edp_samples_output_path=None))
             return orig_load(cfg)
 
@@ -669,7 +685,7 @@ class _NoArtifactRunContext:
             if style is not None:
                 captured[str(style)] = pes
 
-            if output_mode == "all":
+            if save_scoring_files:
                 return orig_save_parameterized(pes, path)
             return None
 
@@ -679,7 +695,7 @@ class _NoArtifactRunContext:
         ensemble_init.load_or_build_edp_samples = _load_or_build_controlled_ab
         Parameterized_EDPSamples.saveNetCDF = _capture_parameterized
 
-        if output_mode == "minimal":
+        if not save_scoring_files:
             cycle_driver_module.save_ensemble_netcdf = _skip_ensemble_nc
 
         return self
@@ -918,24 +934,35 @@ def station_error_profile(
     analysis_profile: np.ndarray,
     isr,
     match,
+    forecast_profile: np.ndarray | None = None,
 ):
+    """Gate-wise |model - ISR| for the analysis (and the forecast, if given)
+    at one station, on the ISR's native gates."""
     if match is None:
         return None
     isr_time, isr_ne = match
-    a_mean = np.nanmean(analysis_profile, axis=-1)
-    model_at_isr = interp_log10(isr.altitude, model_altitude, a_mean)
-    valid = np.isfinite(model_at_isr) & np.isfinite(isr_ne)
-    error = np.full_like(isr.altitude, np.nan, dtype=float)
-    # With one model/ISR pair per hour, sqrt((model-ISR)^2) = absolute error.
-    # Across hourly windows these gate-wise errors are aggregated below.
-    error[valid] = np.abs(model_at_isr[valid] - isr_ne[valid])
-    return {
+
+    def _abs_error(profile):
+        mean = np.nanmean(profile, axis=-1)
+        model_at_isr = interp_log10(isr.altitude, model_altitude, mean)
+        valid = np.isfinite(model_at_isr) & np.isfinite(isr_ne)
+        error = np.full_like(isr.altitude, np.nan, dtype=float)
+        # With one model/ISR pair per hour, sqrt((model-ISR)^2) = absolute error.
+        # Across hourly windows these gate-wise errors are aggregated below.
+        error[valid] = np.abs(model_at_isr[valid] - isr_ne[valid])
+        return error, model_at_isr
+
+    error, model_at_isr = _abs_error(analysis_profile)
+    out = {
         "time": isr_time,
         "altitude_km": np.asarray(isr.altitude, dtype=float),
         "error_m3": error,
         "isr_ne_m3": np.asarray(isr_ne, dtype=float),
         "model_ne_m3": model_at_isr,
     }
+    if forecast_profile is not None:
+        out["forecast_error_m3"], out["forecast_ne_m3"] = _abs_error(forecast_profile)
+    return out
 
 
 
@@ -951,21 +978,24 @@ def plot_dual_isr_error(
 ):
     fig, ax = plt.subplots(figsize=(7, 9))
 
-    if tro_error is not None:
+    for code, err, color in (("TRO", tro_error, "red"), ("SVL", svl_error, "green")):
+        if err is None:
+            continue
         ax.plot(
-            tro_error["error_m3"], tro_error["altitude_km"],
-            ".-", color="red", markersize=4, label="TRO analysis RMSE/error",
+            err["error_m3"], err["altitude_km"],
+            ".-", color=color, markersize=4, label=f"{code} analysis RMSE/error",
         )
-    if svl_error is not None:
-        ax.plot(
-            svl_error["error_m3"], svl_error["altitude_km"],
-            ".-", color="green", markersize=4, label="SVL analysis RMSE/error",
-        )
+        if "forecast_error_m3" in err:
+            ax.plot(
+                err["forecast_error_m3"], err["altitude_km"],
+                ".--", color=color, alpha=0.5, markersize=3,
+                label=f"{code} forecast RMSE/error",
+            )
 
-    ax.set_xlabel(r"Analysis RMSE/error vs. ISR (m$^{-3}$)")
+    ax.set_xlabel(r"Forecast/analysis RMSE/error vs. ISR (m$^{-3}$)")
     ax.set_ylabel("Altitude (km)")
     ax.set_title(
-        f"{style} -- analysis error vs. TRO/SVL ISR\n"
+        f"{style} -- forecast/analysis error vs. TRO/SVL ISR\n"
         f"{hour_label(start, end)} | RO profiles={n_ro} | TEC rays={n_tec}"
     )
     ax.legend(loc="best", fontsize=8)
@@ -987,9 +1017,14 @@ def append_error_rows(
 ):
     if error_profile is None:
         return
-    for altitude, error in zip(
-        error_profile["altitude_km"], error_profile["error_m3"]
-    ):
+
+    def _value(key, i):
+        values = error_profile.get(key)
+        if values is None:
+            return np.nan
+        return float(values[i]) if np.isfinite(values[i]) else np.nan
+
+    for i, altitude in enumerate(error_profile["altitude_km"]):
         rows.append({
             "style": style,
             "condition": condition,
@@ -999,7 +1034,15 @@ def append_error_rows(
             "n_ro_profiles": n_ro,
             "n_tec_rays": n_tec,
             "altitude_km": float(altitude),
-            "analysis_error_m3": float(error) if np.isfinite(error) else np.nan,
+            "analysis_error_m3": _value("error_m3", i),
+            # Added columns: forecast error and the Ne values behind both
+            # errors, so forecast-vs-analysis gains (and relative errors) can
+            # be scored at every station without an offline rebuild.
+            "forecast_error_m3": _value("forecast_error_m3", i),
+            "isr_time_utc": pd.Timestamp(error_profile["time"]).isoformat(),
+            "isr_ne_m3": _value("isr_ne_m3", i),
+            "forecast_ne_m3": _value("forecast_ne_m3", i),
+            "analysis_ne_m3": _value("model_ne_m3", i),
         })
 
 
@@ -1706,10 +1749,12 @@ def main():
                     )
 
                     tro_error = station_error_profile(
-                        model_altitude, a_tro, tro, tro_match
+                        model_altitude, a_tro, tro, tro_match,
+                        forecast_profile=f_tro,
                     )
                     svl_error = station_error_profile(
-                        model_altitude, a_svl, svl, svl_match
+                        model_altitude, a_svl, svl, svl_match,
+                        forecast_profile=f_svl,
                     )
 
                     plot_dual_isr_error(
