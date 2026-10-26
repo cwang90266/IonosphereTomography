@@ -226,6 +226,10 @@ RO_KWARGS_TEMPLATE = {
     "fraction_required": 0.65,
     "min_valid_rays": 50,
     "max_rays_per_occultation": 200,
+    # Drop occultations whose TEC profile never reaches below this tangent
+    # altitude (truncated profile -> likely unstable received signal).
+    # Applied before the >=5 RO check, so it can change which hours run.
+    "max_lowest_tangent_alt_km": 400.0,
     "include_abel": True,
 }
 
