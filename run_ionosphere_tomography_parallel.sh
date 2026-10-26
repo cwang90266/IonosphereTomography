@@ -12,6 +12,8 @@
 set -euo pipefail
 
 # ---- Defaults --------------------------------------------------------------
+NICE=19
+LOGDIR="parallel_jobs_logs"
 JOBS=4
 SCRIPT="/home/knelson/src/IonosphereTomography/run_hourly_all4styles_boost_compare.py"
 PYTHON="${PYTHON:-python3}"
@@ -40,6 +42,8 @@ Options:
   -i          Hourly mode: split each window into one-hour jobs
               (e.g. "21-24" runs 21-22, 22-23 and 23-24)
   -l FILE     GNU Parallel job log file. Default: $JOBLOG
+  -L PATH     Directory to place logs from individual python script jobs
+  -N N        Niceness number (max = 19, negative requires sudo access)
   -n          Dry run: print the commands without executing them
   -h          Show this help
 
@@ -51,7 +55,7 @@ EOF
 die() { echo "Error: $*" >&2; exit 1; }
 
 # ---- Parse arguments -------------------------------------------------------
-while getopts ":s:e:H:j:p:l:inh" opt; do
+while getopts ":s:e:H:j:p:l:inNLh" opt; do
     case "$opt" in
         s) START_DATE="$OPTARG" ;;
         e) END_DATE="$OPTARG" ;;
@@ -61,6 +65,8 @@ while getopts ":s:e:H:j:p:l:inh" opt; do
         l) JOBLOG="$OPTARG" ;;
         i) HOURLY=1 ;;
         n) DRY_RUN="--dry-run" ;;
+        N) NICE="$OPTARG" ;;
+        L) LOGDIR="$OPTARG" ;;
         h) usage; exit 0 ;;
         :) die "Option -$OPTARG requires a value" ;;
         \?) die "Unknown option -$OPTARG (use -h for help)" ;;
@@ -73,6 +79,7 @@ command -v parallel >/dev/null 2>&1 || die "GNU parallel is not installed"
 [[ -n "$START_DATE" ]] || { usage; exit 1; }
 END_DATE="${END_DATE:-$START_DATE}"
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || die "-j must be a positive integer"
+[[ "$NICE" =~ ^([0-9]|1[0-9])$ ]] || die "-N must be 0-19"
 
 validate_date() {
     # Checks both the format and that it's a real calendar date (e.g. rejects 2026-02-30)
@@ -123,23 +130,23 @@ for d in "${dates[@]}"; do
         printf '%s %s\n' "$d" "$w"
     done
 done | sort -u > "$jobfile"
-echo "=== Stopping at writing jobfile ==="
-cat $jobfile
-exit 1
 
 total=$(wc -l < "$jobfile")
 echo "Running $total job(s) with up to $JOBS in parallel (log: $JOBLOG)" >&2
-exit 0
 
 # ---- Run -------------------------------------------------------------------
+mkdir -p "$LOGDIR"
+source Driver_Scripts/init_iri2020_env.sh
 set +e
 parallel $DRY_RUN \
+    --nice $NICE \
     -j "$JOBS" \
     --colsep ' ' \
     --joblog "$JOBLOG" \
     --tag \
     -a "$jobfile" \
-    "$PYTHON" "$SCRIPT" --date {1} --start-hour {2} --end-hour {3} --output "all"
+    pipenv run "$PYTHON" -u "$SCRIPT" --date {1} --start-hour {2} --end-hour {3} --output "all" \
+    '>' "$LOGDIR/ionosphere_tomography_ParallelRun_d{1}_s{2}HH-e{3}HH.log" '2>&1'
 status=$?
 set -e
 
