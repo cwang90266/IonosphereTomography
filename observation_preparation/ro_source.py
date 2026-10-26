@@ -237,6 +237,7 @@ def _build_clean_ro_entry(
     min_valid_rays: int,
     max_rays_per_occultation: int,
     *,
+    max_lowest_tangent_alt_km: float | None = 400.0,
     roi_mode: str = "tangent_point",
     center_lat: float | None = None,
     center_lon: float | None = None,
@@ -251,6 +252,13 @@ def _build_clean_ro_entry(
     parse_podTc2_nc_file() has already applied its file-level geometry QC.
     This function preserves the second-stage rules:
       finite TEC, TEC > 0, >= min_valid_rays, uniform stride decimation.
+
+    max_lowest_tangent_alt_km (default 400 km) additionally rejects an
+    occultation whose valid rays never reach below that tangent altitude:
+    a TEC profile truncated high up (e.g. stopping at ~500 km) is taken as
+    a sign of an unstable received signal. "Valid rays" are those left
+    after the TEC and (full_los) ROI checks, before decimation -- i.e. the
+    profile that would actually be assimilated. None disables the check.
 
     roi_mode="full_los" (Plan Section 5/10 step 3) additionally requires
     each individual ray's own LOS, below alt_limit_km, to be within
@@ -303,6 +311,17 @@ def _build_clean_ro_entry(
 
     if n_valid < int(min_valid_rays):
         info["reject_reason"] = "too_few_valid_rays"
+        return None, info
+
+    valid_tang = tang_km[valid]
+    lowest_tangent_km = (
+        float(np.nanmin(valid_tang)) if np.isfinite(valid_tang).any() else float("nan")
+    )
+    info["lowest_tangent_alt_km"] = lowest_tangent_km
+    if max_lowest_tangent_alt_km is not None and not (
+        lowest_tangent_km <= float(max_lowest_tangent_alt_km)
+    ):
+        info["reject_reason"] = "truncated_tec_profile"
         return None, info
 
     if n_valid > int(max_rays_per_occultation):
@@ -386,6 +405,7 @@ def prepare_ro_observations(
     selection_key: str | None = None,
     min_valid_rays: int = 50,
     max_rays_per_occultation: int = 200,
+    max_lowest_tangent_alt_km: float | None = 400.0,
     file_pattern: str = "*.0001_nc",
     include_abel: bool = True,
     return_report: bool = False,
@@ -406,7 +426,9 @@ def prepare_ro_observations(
        file-level geometry QC.
     5. Keep finite positive TEC only, and (roi_mode="full_los") rays whose
        own LOS satisfies the full-LOS ROI containment check.
-    6. Reject occultations with fewer than min_valid_rays.
+    6. Reject occultations with fewer than min_valid_rays, and those whose
+       valid rays never reach below max_lowest_tangent_alt_km (a TEC
+       profile truncated high up, taken as a sign of an unstable signal).
     7. Uniformly decimate to max_rays_per_occultation.
     8. If include_abel=True, run Lei-Abel inversion on the FULL parsed RO arc
        (not on the downsampled tomography rays) and attach the result as
@@ -438,6 +460,10 @@ def prepare_ro_observations(
     fraction_required : float, default 1.0
         Minimum fraction of each ray's sub-alt_limit_km LOS that must be
         within radius_km (Plan Section 8.2). 1.0 = every such point.
+    max_lowest_tangent_alt_km : float or None, default 400.0
+        Reject an occultation if the lowest tangent altitude of its valid
+        rays (after the TEC/ROI checks, before decimation) is above this
+        value (reject_reason "truncated_tec_profile"). None disables it.
 
     Returns
     -------
@@ -520,6 +546,7 @@ def prepare_ro_observations(
             label=label,
             min_valid_rays=min_valid_rays,
             max_rays_per_occultation=max_rays_per_occultation,
+            max_lowest_tangent_alt_km=max_lowest_tangent_alt_km,
             roi_mode=roi_mode,
             center_lat=center_lat,
             center_lon=center_lon,
@@ -592,6 +619,10 @@ def prepare_ro_observations(
         "n_abel_failed": int(n_abel_failed),
         "min_valid_rays": int(min_valid_rays),
         "max_rays_per_occultation": int(max_rays_per_occultation),
+        "max_lowest_tangent_alt_km": max_lowest_tangent_alt_km,
+        "n_truncated_tec_profile_reject": int(
+            sum(pf.get("reject_reason") == "truncated_tec_profile" for pf in per_file)
+        ),
         "max_occultations": max_occultations,
         "roi_mode": roi_mode,
         "alt_limit_km": alt_limit_km,
