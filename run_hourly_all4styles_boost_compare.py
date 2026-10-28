@@ -142,8 +142,8 @@ TRO_ISR_PCA_BASIS_FILE = ISR_DIR / "TROISR2025_nonan_pca_basis.nc"
 OUTPUT_ROOT = Path("/home/pin/Desktop/tomography_output")  # ===Edit here===
 
 # Three optional Edit here, the label name, the reference label name, and the run message.
-LABEL_OF_EACH_RUN = "test_new_criteria"  # label name
-REFERENCE_RUN_LABEL = "test_label"  #ref label name; set "" or None to disable IRI reuse
+LABEL_OF_EACH_RUN = "test_new_criteria"  # label name ===Edit here===
+REFERENCE_RUN_LABEL = ""  #ref label name; set "" or None to disable IRI reuse
 RUN_MESSAGE = "test 3000km, and all new criteria"  # ===Edit here===
 
 DEFAULT_STYLES = [
@@ -165,7 +165,7 @@ DEFAULT_HYPER_PARAMS = {
     "PCA_1D_10ex": {"retaining_threshold": 0.99999},
 }
 
-BOOST_AMPLITUDE = 0.35
+BOOST_AMPLITUDE = 0.3
 
 RUN_CONDITIONS = [
     {
@@ -188,7 +188,7 @@ RUN_CONDITIONS = [
 CENTER_LAT = 69.6
 CENTER_LON = 19.2
 
-ROI_RADIUS_KM = 2000.0
+ROI_RADIUS_KM = 2000.0 # === Edit here ===
 GRID_RADIUS_DEG = 18.0 * (ROI_RADIUS_KM / 2000.0)
 
 # Scale minimum RO count with ROI area.
