@@ -85,6 +85,33 @@ def test_only_valid_rays_count(fake_ray_tangent):
     assert info["reject_reason"] == "truncated_tec_profile"
 
 
+def _full_los(monkeypatch, in_roi: np.ndarray):
+    """roi_mode='full_los' with a stubbed per-ray ROI mask."""
+    monkeypatch.setattr(ro_source, "los_within_roi", lambda *a, **k: in_roi)
+    monkeypatch.setattr(ro_source, "mean_altitude_km", lambda leo: 580.0)
+    return dict(roi_mode="full_los", center_lat=69.6, center_lon=19.2, radius_km=2000.0)
+
+
+def test_roi_cut_does_not_count_as_truncation(fake_ray_tangent, monkeypatch):
+    """The measured profile reaches 20 km; only its in-ROI part stops at
+    ~500 km. The signal is fine, so the occultation is kept and only the
+    in-ROI rays are output."""
+    tangent = np.linspace(580.0, 20.0, 100)
+    in_roi = tangent >= 500.0
+    entry, info = _build(_occultation(tangent), fake_ray_tangent, **_full_los(monkeypatch, in_roi))
+    assert entry is not None
+    assert info["lowest_tangent_alt_km"] == pytest.approx(20.0)
+    assert entry["tangent_km"].min() >= 500.0
+
+
+def test_truncated_measured_profile_rejected_in_full_los(fake_ray_tangent, monkeypatch):
+    tangent = np.linspace(580.0, 450.0, 100)
+    in_roi = np.ones(100, dtype=bool)
+    entry, info = _build(_occultation(tangent), fake_ray_tangent, **_full_los(monkeypatch, in_roi))
+    assert entry is None
+    assert info["reject_reason"] == "truncated_tec_profile"
+
+
 def test_too_few_rays_reported_before_truncation(fake_ray_tangent):
     data = _occultation(np.linspace(580.0, 560.0, 5))
     entry, info = _build(data, fake_ray_tangent)

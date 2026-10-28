@@ -254,11 +254,13 @@ def _build_clean_ro_entry(
       finite TEC, TEC > 0, >= min_valid_rays, uniform stride decimation.
 
     max_lowest_tangent_alt_km (default 400 km) additionally rejects an
-    occultation whose valid rays never reach below that tangent altitude:
-    a TEC profile truncated high up (e.g. stopping at ~500 km) is taken as
-    a sign of an unstable received signal. "Valid rays" are those left
-    after the TEC and (full_los) ROI checks, before decimation -- i.e. the
-    profile that would actually be assimilated. None disables the check.
+    occultation whose measured TEC profile never reaches below that tangent
+    altitude: a profile truncated high up (e.g. stopping at ~500 km) is taken
+    as a sign of an unstable received signal. The check uses every ray with
+    finite, positive TEC, BEFORE the full_los ROI check -- rays dropped only
+    because their LOS leaves the ROI say nothing about signal stability, so
+    an occultation whose full profile reaches the E region is kept even if
+    its in-ROI part stops above the threshold. None disables the check.
 
     roi_mode="full_los" (Plan Section 5/10 step 3) additionally requires
     each individual ray's own LOS, below alt_limit_km, to be within
@@ -285,6 +287,12 @@ def _build_clean_ro_entry(
     )
 
     valid = np.isfinite(meas_tec) & (meas_tec > 0)
+    # Lowest tangent altitude of the measured profile, taken before the ROI
+    # check (see max_lowest_tangent_alt_km in the docstring).
+    measured_tang = tang_km[valid]
+    lowest_tangent_km = (
+        float(np.nanmin(measured_tang)) if np.isfinite(measured_tang).any() else float("nan")
+    )
 
     info = {
         "label": label,
@@ -313,10 +321,6 @@ def _build_clean_ro_entry(
         info["reject_reason"] = "too_few_valid_rays"
         return None, info
 
-    valid_tang = tang_km[valid]
-    lowest_tangent_km = (
-        float(np.nanmin(valid_tang)) if np.isfinite(valid_tang).any() else float("nan")
-    )
     info["lowest_tangent_alt_km"] = lowest_tangent_km
     if max_lowest_tangent_alt_km is not None and not (
         lowest_tangent_km <= float(max_lowest_tangent_alt_km)
@@ -427,8 +431,9 @@ def prepare_ro_observations(
     5. Keep finite positive TEC only, and (roi_mode="full_los") rays whose
        own LOS satisfies the full-LOS ROI containment check.
     6. Reject occultations with fewer than min_valid_rays, and those whose
-       valid rays never reach below max_lowest_tangent_alt_km (a TEC
-       profile truncated high up, taken as a sign of an unstable signal).
+       measured TEC profile (all finite positive-TEC rays, before the ROI
+       check) never reaches below max_lowest_tangent_alt_km -- a profile
+       truncated high up, taken as a sign of an unstable signal.
     7. Uniformly decimate to max_rays_per_occultation.
     8. If include_abel=True, run Lei-Abel inversion on the FULL parsed RO arc
        (not on the downsampled tomography rays) and attach the result as
@@ -461,9 +466,10 @@ def prepare_ro_observations(
         Minimum fraction of each ray's sub-alt_limit_km LOS that must be
         within radius_km (Plan Section 8.2). 1.0 = every such point.
     max_lowest_tangent_alt_km : float or None, default 400.0
-        Reject an occultation if the lowest tangent altitude of its valid
-        rays (after the TEC/ROI checks, before decimation) is above this
-        value (reject_reason "truncated_tec_profile"). None disables it.
+        Reject an occultation if the lowest tangent altitude of its measured
+        TEC profile (rays with finite, positive TEC, before the full_los ROI
+        check) is above this value (reject_reason "truncated_tec_profile").
+        None disables it.
 
     Returns
     -------
