@@ -1,0 +1,9 @@
+# Copy (1-way sync) data to Google Drive
+#nice rclone copy /home/pyxis/Test/2026-10-13_ionosphere_tomography IonosphereTomography:ionosphere/ --progress --include "t*"
+
+#nice rclone copy /home/pyxis/Test/2026-10-13_ionosphere_tomography/tomography_output IonosphereTomography:ionosphere/ --progress --filter "+ /tomography_output/**"  --filter "- /**"
+
+nice rclone copy /home/pyxis/Test/2026-10-13_ionosphere_tomography/tomography_output IonosphereTomography:ionosphere/tomography_output --progress
+
+# Browsing remote files
+nice rclone ncdu IonosphereTomography:
