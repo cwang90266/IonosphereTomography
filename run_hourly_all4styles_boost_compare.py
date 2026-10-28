@@ -11,16 +11,8 @@ Main additions per successful one-hour slot, per style:
        nearest Tromso ISR profile, nearest Svalbard ISR profile,
        title includes number of RO occultation profiles and TEC rays used.
   2) dual_isr_rmse_by_altitude.png
-       analysis (solid) and forecast (dashed) error/RMSE-by-native-altitude-
-       gate against Tromso (red) and Svalbard (green). No extrapolation
-       beyond each ISR's native gates.
-
-  dual_isr_errors.csv (per hour) holds, for each style/condition/station
-  and native ISR gate: analysis_error_m3, forecast_error_m3, the matched
-  ISR profile time (isr_time_utc), and the Ne values behind both errors
-  (isr_ne_m3, forecast_ne_m3, analysis_ne_m3). The forecast is the prior
-  ensemble decoded at the station itself, so Svalbard gets its own
-  forecast-vs-analysis comparison, not only Tromso.
+       analysis error/RMSE-by-native-altitude-gate against Tromso (red)
+       and Svalbard (green). No extrapolation beyond each ISR's native gates.
 
 Hours are assimilated only when BOTH conditions are met:
   - at least one in-hour ISR profile is available from Tromso or Svalbard;
@@ -43,11 +35,8 @@ Example:
         --start-hour 0 \
         --end-hour 24
 
-By default (--output scoring) the files Run_Scoring needs to rebuild and
-score a run are written -- *_edp_samples.nc, *_parameterized.nc and
-*_ensembles/ensemble_batch_*.nc (about 1.5 GB per hour folder) -- while the
-IRI cache files (.dat/.pkl) are suppressed. --output minimal suppresses all
-of these. To write all package artifacts, including the .dat/.pkl files:
+By default, large/cache intermediate artifacts are suppressed. To write
+all package artifacts, including the normally suppressed .dat/.pkl/.nc files:
 
     python run_hourly_all4styles_boost_compare.py \
         --date 2025-10-16 \
@@ -151,8 +140,11 @@ TRO_ISR_EXTENDED_FILE = ISR_DIR / "TROISR2025_nonan_extended.nc"
 TRO_ISR_PCA_BASIS_FILE = ISR_DIR / "TROISR2025_nonan_pca_basis.nc"
 
 OUTPUT_ROOT = Path("/home/pin/Desktop/tomography_output")  # ===Edit here===
-LABEL_OF_EACH_RUN = "boost035_obs3_taper400_700"  # label name
+
+# Three optional Edit here, the label name, the reference label name, and the run message.
+LABEL_OF_EACH_RUN = "test_new_criteria"  # label name
 REFERENCE_RUN_LABEL = "test_label"  #ref label name; set "" or None to disable IRI reuse
+RUN_MESSAGE = "test 3000km, and all new criteria"  # ===Edit here===
 
 DEFAULT_STYLES = [
     "ANCHOR",
@@ -195,19 +187,28 @@ RUN_CONDITIONS = [
 # Keep the same Tromso-centered tomography region used in the current run_test.
 CENTER_LAT = 69.6
 CENTER_LON = 19.2
+
 ROI_RADIUS_KM = 2000.0
-GRID_RADIUS_DEG = 18.0
+GRID_RADIUS_DEG = 18.0 * (ROI_RADIUS_KM / 2000.0)
+
+# Scale minimum RO count with ROI area.
+# 2000 km -> 5
+# 3000 km -> 11.25 -> floor -> 11
+# 4000 km -> 20
+MIN_RO_PROFILES = int(
+    np.floor(5.0 * (ROI_RADIUS_KM / 2000.0) ** 2)
+)
 
 N_ENSEMBLE = 2000
 MAX_TEC_PER_BATCH = 100_000
-OBS_SIGMA_TECU = 3.0
+OBS_SIGMA_TECU = 5.0
 ANALYSIS_RNG_SEED = 777
 
 # Diagonal covariance boost configuration.
 
 BOOST_TAPER_START_KM = 400.0
 BOOST_TAPER_END_KM = 700.0
-BOOST_TAPER_FLOOR = 1.0 / 7.0  # 0.142857..., so 0.35 * floor = 0.05
+BOOST_TAPER_FLOOR = 1.0/7.0  # 0.142857..., so 0.35 * floor = 0.05
 
 IRI_SPREAD_KWARGS = {
     "hour_sample_range": 3,
@@ -218,19 +219,14 @@ IRI_SPREAD_KWARGS = {
 }
 
 RO_KWARGS_TEMPLATE = {
-    # Updated develop behavior: retain individual RO rays only when at least
-    # 65% of the LOS below that occultation's mean LEO altitude lies inside
-    # the ROI.  alt_limit_km=None tells ro_source.py to derive the mean LEO
-    # altitude separately for each occultation.
     "roi_mode": "full_los",
     "alt_limit_km": None,
     "fraction_required": 0.65,
     "min_valid_rays": 50,
     "max_rays_per_occultation": 200,
-    # Drop occultations whose TEC profile never reaches below this tangent
-    # altitude (truncated profile -> likely unstable received signal).
-    # Applied before the >=5 RO check, so it can change which hours run.
     "max_lowest_tangent_alt_km": 400.0,
+    "require_dcb_flags": True,
+    "duplicate_time_tolerance_s": 30.0,
     "include_abel": True,
 }
 
@@ -286,17 +282,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        choices=("scoring", "minimal", "all"),
-        default="scoring",
+        choices=("minimal", "all"),
+        default="minimal",
         help=(
             "Output policy for large/cache intermediate artifacts. "
-            "'scoring' (default) writes *_edp_samples.nc, *_parameterized.nc and "
-            "*_ensembles/ensemble_batch_*.nc -- the inputs Run_Scoring needs to "
-            "rebuild TEC residuals and full profiles (~1.5 GB per hour) -- and "
-            "suppresses apf107.dat, ig_rz.dat and *_iri_sample_inputs.pkl. "
-            "'minimal' suppresses all six (the run then cannot be rescored). "
-            "'all' writes all six. Scientific figures, CSV summaries, "
-            "processed RO observations, and validation products are written in every mode."
+            "'minimal' (default) suppresses apf107.dat, ig_rz.dat, "
+            "*_iri_sample_inputs.pkl, *_edp_samples.nc, *_parameterized.nc, "
+            "and *_ensembles/ensemble_batch_*.nc. "
+            "'all' writes those artifacts too. Scientific figures, CSV summaries, "
+            "processed RO observations, and validation products are written in both modes."
         ),
     )
     return parser.parse_args()
@@ -587,24 +581,23 @@ class _NoArtifactRunContext:
     (boosted reuses the exact no-boost base EDP in memory) while making
     heavy/cache artifacts optional.
 
-    output_mode="scoring" (default) writes the files Run_Scoring needs
-    (*_edp_samples.nc, *_parameterized.nc, *_ensembles/ensemble_batch_*.nc)
-    and suppresses the IRI cache files:
+    output_mode="minimal" (default) suppresses:
+      - *_edp_samples.nc
+      - *_parameterized.nc
+      - *_ensembles/ensemble_batch_*.nc
       - *_iri_sample_inputs.pkl
       - apf107.dat
       - ig_rz.dat
 
-    output_mode="minimal" suppresses all six of the files above.
-
-    output_mode="all" writes all six using the normal package paths.
+    output_mode="all" writes those artifacts using the normal package paths.
 
     In both modes the exact in-memory Parameterized_EDPSamples objects are
     captured so downstream ISR validation does not depend on reopening a
     parameterized netCDF file.
     """
 
-    def __init__(self, *, base_edp_samples=None, output_mode: str = "scoring"):
-        if output_mode not in {"scoring", "minimal", "all"}:
+    def __init__(self, *, base_edp_samples=None, output_mode: str = "minimal"):
+        if output_mode not in {"minimal", "all"}:
             raise ValueError(f"Unknown output_mode={output_mode!r}")
         self.base_edp_samples = base_edp_samples
         self.output_mode = output_mode
@@ -628,10 +621,8 @@ class _NoArtifactRunContext:
         orig_load_iri = self._orig_load_or_build_iri
         orig_save_parameterized = self._orig_save_parameterized
         captured = self.parameterizations
-        # Files Run_Scoring needs: written in "scoring" and "all".
-        save_scoring_files = output_mode in {"scoring", "all"}
 
-        if output_mode != "all":
+        if output_mode == "minimal":
             self._iri_tmpdir = tempfile.TemporaryDirectory(prefix="ionosphere_iri_")
             iri_tmpdir = self._iri_tmpdir.name
 
@@ -663,14 +654,14 @@ class _NoArtifactRunContext:
                         taper_floor=cfg.diagonal_boost_taper_floor,
                     )
 
-                if save_scoring_files and cfg.edp_samples_output_path is not None:
+                if output_mode == "all" and cfg.edp_samples_output_path is not None:
                     Path(cfg.edp_samples_output_path).parent.mkdir(
                         parents=True, exist_ok=True
                     )
                     edp.saveNetCDF(cfg.edp_samples_output_path)
                 return edp
 
-            if not save_scoring_files:
+            if output_mode == "minimal":
                 return orig_load(replace(cfg, edp_samples_output_path=None))
             return orig_load(cfg)
 
@@ -685,7 +676,7 @@ class _NoArtifactRunContext:
             if style is not None:
                 captured[str(style)] = pes
 
-            if save_scoring_files:
+            if output_mode == "all":
                 return orig_save_parameterized(pes, path)
             return None
 
@@ -695,7 +686,7 @@ class _NoArtifactRunContext:
         ensemble_init.load_or_build_edp_samples = _load_or_build_controlled_ab
         Parameterized_EDPSamples.saveNetCDF = _capture_parameterized
 
-        if not save_scoring_files:
+        if output_mode == "minimal":
             cycle_driver_module.save_ensemble_netcdf = _skip_ensemble_nc
 
         return self
@@ -934,35 +925,24 @@ def station_error_profile(
     analysis_profile: np.ndarray,
     isr,
     match,
-    forecast_profile: np.ndarray | None = None,
 ):
-    """Gate-wise |model - ISR| for the analysis (and the forecast, if given)
-    at one station, on the ISR's native gates."""
     if match is None:
         return None
     isr_time, isr_ne = match
-
-    def _abs_error(profile):
-        mean = np.nanmean(profile, axis=-1)
-        model_at_isr = interp_log10(isr.altitude, model_altitude, mean)
-        valid = np.isfinite(model_at_isr) & np.isfinite(isr_ne)
-        error = np.full_like(isr.altitude, np.nan, dtype=float)
-        # With one model/ISR pair per hour, sqrt((model-ISR)^2) = absolute error.
-        # Across hourly windows these gate-wise errors are aggregated below.
-        error[valid] = np.abs(model_at_isr[valid] - isr_ne[valid])
-        return error, model_at_isr
-
-    error, model_at_isr = _abs_error(analysis_profile)
-    out = {
+    a_mean = np.nanmean(analysis_profile, axis=-1)
+    model_at_isr = interp_log10(isr.altitude, model_altitude, a_mean)
+    valid = np.isfinite(model_at_isr) & np.isfinite(isr_ne)
+    error = np.full_like(isr.altitude, np.nan, dtype=float)
+    # With one model/ISR pair per hour, sqrt((model-ISR)^2) = absolute error.
+    # Across hourly windows these gate-wise errors are aggregated below.
+    error[valid] = np.abs(model_at_isr[valid] - isr_ne[valid])
+    return {
         "time": isr_time,
         "altitude_km": np.asarray(isr.altitude, dtype=float),
         "error_m3": error,
         "isr_ne_m3": np.asarray(isr_ne, dtype=float),
         "model_ne_m3": model_at_isr,
     }
-    if forecast_profile is not None:
-        out["forecast_error_m3"], out["forecast_ne_m3"] = _abs_error(forecast_profile)
-    return out
 
 
 
@@ -978,24 +958,21 @@ def plot_dual_isr_error(
 ):
     fig, ax = plt.subplots(figsize=(7, 9))
 
-    for code, err, color in (("TRO", tro_error, "red"), ("SVL", svl_error, "green")):
-        if err is None:
-            continue
+    if tro_error is not None:
         ax.plot(
-            err["error_m3"], err["altitude_km"],
-            ".-", color=color, markersize=4, label=f"{code} analysis RMSE/error",
+            tro_error["error_m3"], tro_error["altitude_km"],
+            ".-", color="red", markersize=4, label="TRO analysis RMSE/error",
         )
-        if "forecast_error_m3" in err:
-            ax.plot(
-                err["forecast_error_m3"], err["altitude_km"],
-                ".--", color=color, alpha=0.5, markersize=3,
-                label=f"{code} forecast RMSE/error",
-            )
+    if svl_error is not None:
+        ax.plot(
+            svl_error["error_m3"], svl_error["altitude_km"],
+            ".-", color="green", markersize=4, label="SVL analysis RMSE/error",
+        )
 
-    ax.set_xlabel(r"Forecast/analysis RMSE/error vs. ISR (m$^{-3}$)")
+    ax.set_xlabel(r"Analysis RMSE/error vs. ISR (m$^{-3}$)")
     ax.set_ylabel("Altitude (km)")
     ax.set_title(
-        f"{style} -- forecast/analysis error vs. TRO/SVL ISR\n"
+        f"{style} -- analysis error vs. TRO/SVL ISR\n"
         f"{hour_label(start, end)} | RO profiles={n_ro} | TEC rays={n_tec}"
     )
     ax.legend(loc="best", fontsize=8)
@@ -1017,14 +994,9 @@ def append_error_rows(
 ):
     if error_profile is None:
         return
-
-    def _value(key, i):
-        values = error_profile.get(key)
-        if values is None:
-            return np.nan
-        return float(values[i]) if np.isfinite(values[i]) else np.nan
-
-    for i, altitude in enumerate(error_profile["altitude_km"]):
+    for altitude, error in zip(
+        error_profile["altitude_km"], error_profile["error_m3"]
+    ):
         rows.append({
             "style": style,
             "condition": condition,
@@ -1034,15 +1006,7 @@ def append_error_rows(
             "n_ro_profiles": n_ro,
             "n_tec_rays": n_tec,
             "altitude_km": float(altitude),
-            "analysis_error_m3": _value("error_m3", i),
-            # Added columns: forecast error and the Ne values behind both
-            # errors, so forecast-vs-analysis gains (and relative errors) can
-            # be scored at every station without an offline rebuild.
-            "forecast_error_m3": _value("forecast_error_m3", i),
-            "isr_time_utc": pd.Timestamp(error_profile["time"]).isoformat(),
-            "isr_ne_m3": _value("isr_ne_m3", i),
-            "forecast_ne_m3": _value("forecast_ne_m3", i),
-            "analysis_ne_m3": _value("model_ne_m3", i),
+            "analysis_error_m3": float(error) if np.isfinite(error) else np.nan,
         })
 
 
@@ -1074,17 +1038,23 @@ def _run_settings_row(args: argparse.Namespace) -> dict:
         "center_lat": CENTER_LAT,
         "center_lon": CENTER_LON,
         "roi_radius_km": ROI_RADIUS_KM,
+        "grid_radius_deg": GRID_RADIUS_DEG,
+        "min_ro_profiles": MIN_RO_PROFILES,
         "n_ensemble": int(args.n_ensemble),
         "obs_sigma_tecu": OBS_SIGMA_TECU,
-        "boost_le_400_km": _boost_amplitude_at_altitude(400.0),
-        "boost_500_km": _boost_amplitude_at_altitude(500.0),
-        "boost_600_km": _boost_amplitude_at_altitude(600.0),
-        "boost_ge_700_km": _boost_amplitude_at_altitude(700.0),
+        "boost_le_400_km": round(_boost_amplitude_at_altitude(400.0), 2),
+        "boost_500_km": round(_boost_amplitude_at_altitude(500.0), 2),
+        "boost_600_km": round(_boost_amplitude_at_altitude(600.0), 2),
+        "boost_ge_700_km": round(_boost_amplitude_at_altitude(700.0), 2),
         "roi_mode": RO_KWARGS_TEMPLATE["roi_mode"],
         "alt_limit_km": RO_KWARGS_TEMPLATE["alt_limit_km"],
         "fraction_required": RO_KWARGS_TEMPLATE["fraction_required"],
         "min_valid_rays": RO_KWARGS_TEMPLATE["min_valid_rays"],
         "max_rays_per_occultation": RO_KWARGS_TEMPLATE["max_rays_per_occultation"],
+        "max_lowest_tangent_alt_km": RO_KWARGS_TEMPLATE["max_lowest_tangent_alt_km"],
+        "require_dcb_flags": RO_KWARGS_TEMPLATE["require_dcb_flags"],
+        "duplicate_time_tolerance_s": RO_KWARGS_TEMPLATE["duplicate_time_tolerance_s"],
+        "run_message": RUN_MESSAGE,
     }
 
 
@@ -1137,7 +1107,7 @@ def update_each_run_setting_csv(args: argparse.Namespace) -> Path:
 
     setting_columns = [
         key for key in row
-        if key not in {"label_of_each_run", "run_time_mt"}
+        if key not in {"label_of_each_run", "run_time_mt", "run_message"}
     ]
 
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -1318,6 +1288,9 @@ def main():
     )
     print("Labeled output root  :", RUN_OUTPUT_ROOT)
     print("Run settings registry:", setting_csv_path)
+    print(f"ROI radius            : {ROI_RADIUS_KM:g} km")
+    print(f"Grid radius           : {GRID_RADIUS_DEG:g} deg")
+    print(f"Minimum accepted RO   : {MIN_RO_PROFILES}")
 
     isr_pca_basis_path = ensure_tro_isr_pca_basis(
         args.isr_pca_basis,
@@ -1378,7 +1351,10 @@ def main():
 
         print("\n" + "=" * 96)
         print(f"HOUR: {hour_label(start, end)}")
-        print(f"OUTPUT (only if RO >= 5 and ISR exists): {hour_dir}")
+        print(
+            f"OUTPUT (only if RO >= {MIN_RO_PROFILES} "
+            f"and ISR exists): {hour_dir}"
+        )
         print("=" * 96)
 
         if args.skip_existing and successful_summary_exists(hour_dir):
@@ -1409,7 +1385,7 @@ def main():
 
                 # Always count/QC RO first so the daily status CSV records RO
                 # availability for every requested hour, even if no ISR exists.
-                skipped_for_ro = (n_ro < 5 or n_tec == 0)
+                skipped_for_ro = (n_ro < MIN_RO_PROFILES or n_tec == 0)
 
                 # After RO precheck, determine whether either ISR has an Ne
                 # profile inside this same one-hour window.
@@ -1474,7 +1450,8 @@ def main():
                 if skipped_for_ro:
                     print(
                         f"SKIP: only {n_ro} accepted RO profiles "
-                        "(minimum required = 5); no hourly folder/files created."
+                        f"(minimum required = {MIN_RO_PROFILES}); "
+                        "no hourly folder/files created."
                     )
                     print(f"Daily RO/ISR status updated: {daily_status_path}")
                     continue
@@ -1749,12 +1726,10 @@ def main():
                     )
 
                     tro_error = station_error_profile(
-                        model_altitude, a_tro, tro, tro_match,
-                        forecast_profile=f_tro,
+                        model_altitude, a_tro, tro, tro_match
                     )
                     svl_error = station_error_profile(
-                        model_altitude, a_svl, svl, svl_match,
-                        forecast_profile=f_svl,
+                        model_altitude, a_svl, svl, svl_match
                     )
 
                     plot_dual_isr_error(

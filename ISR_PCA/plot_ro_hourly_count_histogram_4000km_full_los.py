@@ -1,101 +1,114 @@
 #!/usr/bin/env python3
-"""Plot a discrete histogram of RO occultation counts per UTC hour.
+"""Plot hourly accepted RO counts using the tomography RO precheck.
 
-Each RO NetCDF file counts as one occultation when:
-  1. its satellite is GN04, GN05, or YM08; and
-  2. its TEC-maximum tangent point is inside the circular ROI.
+Acceptance is identical to the current tomography RO preparation:
+  - radius_km = 4000
+  - grid_radius_deg = 36
+  - roi_mode = "full_los"
+  - alt_limit_km = None (mean LEO altitude derived per occultation)
+  - fraction_required = 0.65
+  - min_valid_rays = 50
+  - max_rays_per_occultation = 200
+  - include_abel = True
 
-Every UTC hour in the inclusive requested date range is retained. Therefore,
-hours containing no qualifying RO files contribute to the x=0 histogram bar.
+Every UTC hour in the requested date range is retained, including zero-count hours.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import re
-from dataclasses import dataclass
+import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
-import netCDF4
 import numpy as np
+
+REPO = Path("/home/pin/Desktop/IonosphereTomography-pin_dev")
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from Assimilation_Cycle.cycle_config import CycleConfig
+from Assimilation_Cycle import observation_stream
 
 
 DEFAULT_TRO_LAT = 69.5864
 DEFAULT_TRO_LON = 19.2272
 SATELLITES = ("GN-4", "GN-5", "Y-8")
-RO_DAY_DIRECTORY = re.compile(r"^(\d{4})\.(\d{3})$")
+
+ROI_RADIUS_KM = 3000.0
+GRID_RADIUS_DEG = 27.0
+MAX_TEC_PER_BATCH = 100_000
+OBS_SIGMA_TECU = 3.0
+
+RO_KWARGS_TEMPLATE = {
+    "roi_mode": "full_los",
+    "alt_limit_km": None,
+    "fraction_required": 0.65,
+    "min_valid_rays": 50,
+    "max_rays_per_occultation": 200,
+    "include_abel": True,
+}
 
 
-@dataclass(frozen=True)
-class RoEvent:
-    timestamp: datetime
-    latitude: float
-    longitude: float
-    satellite: str
+def ro_day_dir(ro_root: Path, day: date) -> Path:
+    return ro_root / f"{day.year}.{day.timetuple().tm_yday:03d}"
 
 
-def satellite_from_file(path: Path, leo_id: str = "") -> str | None:
-    name = path.name.upper().replace("-", "").replace("_", "")
-    if "GN04" in name or "GN4" in name:
+def unique_ro_entries(batches) -> list:
+    seen = set()
+    entries = []
+    for batch in batches:
+        for entry, _sl in batch.entry_ray_ranges:
+            if entry.obs_type != "RO":
+                continue
+            key = id(entry)
+            if key not in seen:
+                seen.add(key)
+                entries.append(entry)
+    return entries
+
+
+def satellite_from_entry(entry) -> str | None:
+    text = " ".join(
+        str(v) for v in (
+            getattr(entry, "label", ""),
+            getattr(entry, "rec_id", ""),
+            getattr(entry, "obs_source", ""),
+        )
+        if v is not None
+    ).upper().replace("-", "").replace("_", "")
+
+    if "GN04" in text or "GN4" in text:
         return "GN-4"
-    if "GN05" in name or "GN5" in name:
+    if "GN05" in text or "GN5" in text:
         return "GN-5"
-    if "YM08" in name or "YM8" in name or "Y08" in name or "Y8" in name:
+    if "YM08" in text or "YM8" in text or "Y08" in text:
         return "Y-8"
-
-    normalized = str(leo_id).strip().upper().replace("-", "")
-    return {
-        "GN04": "GN-4", "GN4": "GN-4", "4": "GN-4",
-        "GN05": "GN-5", "GN5": "GN-5", "5": "GN-5",
-        "YM08": "Y-8", "YM8": "Y-8", "Y08": "Y-8", "Y8": "Y-8", "8": "Y-8",
-    }.get(normalized)
+    return None
 
 
-def haversine_km(lat0: float, lon0: float, lat: float, lon: float) -> float:
-    radius_km = 6371.0
-    phi0, phi1 = np.deg2rad([lat0, lat])
-    dphi = phi1 - phi0
-    dlon = np.deg2rad(lon - lon0)
-    a = (
-        np.sin(dphi / 2.0) ** 2
-        + np.cos(phi0) * np.cos(phi1) * np.sin(dlon / 2.0) ** 2
+def make_precheck_cfg(start, end, ro_dir, center_lat, center_lon):
+    ro_kwargs = dict(RO_KWARGS_TEMPLATE)
+    ro_kwargs["podtc_dir"] = str(ro_dir)
+    return CycleConfig(
+        start_time=start.isoformat(),
+        end_time=end.isoformat(),
+        center_lat=center_lat,
+        center_lon=center_lon,
+        radius_km=ROI_RADIUS_KM,
+        grid_radius_deg=GRID_RADIUS_DEG,
+        grid_margin_km=0.0,
+        max_tec_per_batch=MAX_TEC_PER_BATCH,
+        obs_sigma=OBS_SIGMA_TECU,
+        obs_sources="RO",
+        ro_kwargs=ro_kwargs,
     )
-    a = float(np.clip(a, 0.0, 1.0))
-    return float(2.0 * radius_km * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a)))
-
-
-def read_ro_event(path: Path) -> RoEvent | None:
-    try:
-        with netCDF4.Dataset(path, "r") as dataset:
-            latitude = float(dataset.getncattr("lat_tecmax_tangent"))
-            longitude = float(dataset.getncattr("lon_tecmax_tangent"))
-            timestamp = datetime(
-                int(dataset.getncattr("year")),
-                int(dataset.getncattr("month")),
-                int(dataset.getncattr("day")),
-                int(dataset.getncattr("hour")),
-                int(dataset.getncattr("minute")),
-                int(float(dataset.getncattr("second"))),
-                tzinfo=timezone.utc,
-            )
-            leo_id = (
-                str(dataset.getncattr("leo_id"))
-                if "leo_id" in dataset.ncattrs() else ""
-            )
-        satellite = satellite_from_file(path, leo_id)
-        if satellite is None or not np.isfinite(latitude) or not np.isfinite(longitude):
-            return None
-        return RoEvent(timestamp, latitude, longitude, satellite)
-    except Exception:
-        return None
 
 
 def iter_dates(start_date: date, end_date: date):
@@ -105,85 +118,74 @@ def iter_dates(start_date: date, end_date: date):
         current += timedelta(days=1)
 
 
-def find_daily_folders(ro_dir: Path, requested_dates: list[date]) -> dict[date, list[Path]]:
-    """Locate YYYY.DDD folders first, before opening any RO files."""
-    wanted = {value.strftime("%Y.%j"): value for value in requested_dates}
-    found = {value: [] for value in requested_dates}
-
-    # Fast path for the normal layout: RO_ROOT/YYYY.DDD/files.
-    for folder_name, value in wanted.items():
-        direct = ro_dir / folder_name
-        if direct.is_dir():
-            found[value].append(direct)
-
-    missing_names = {
-        folder_name for folder_name, value in wanted.items() if not found[value]
-    }
-    if missing_names:
-        # Compatibility with an additional directory layer under RO_ROOT.
-        for folder in ro_dir.rglob("*"):
-            if not folder.is_dir() or folder.name not in missing_names:
-                continue
-            match = RO_DAY_DIRECTORY.fullmatch(folder.name)
-            if match is not None:
-                found[wanted[folder.name]].append(folder)
-    return found
-
-
 def count_hourly_ro(args: argparse.Namespace):
     requested_dates = list(iter_dates(args.start_date, args.end_date))
-    start = datetime.combine(args.start_date, datetime.min.time(), timezone.utc)
-    end = datetime.combine(
-        args.end_date + timedelta(days=1), datetime.min.time(), timezone.utc
+    start_all = datetime.combine(
+        args.start_date, datetime.min.time(), timezone.utc
     )
     n_hours = len(requested_dates) * 24
+
     total = np.zeros(n_hours, dtype=int)
     by_satellite = {
         satellite: np.zeros(n_hours, dtype=int) for satellite in SATELLITES
     }
 
-    folders_by_date = find_daily_folders(args.ro_dir, requested_dates)
-    examined = inside = outside = unreadable = 0
-    seen_paths: set[Path] = set()
-
-    for requested_date in requested_dates:
-        folders = folders_by_date[requested_date]
-        if not folders:
-            print(f"WARNING: no RO folder for {requested_date:%Y-%m-%d} "
-                  f"({requested_date:%Y.%j}); its 24 hours remain zero")
-            continue
-        for folder in folders:
-            for path in sorted(folder.glob(args.ro_pattern)):
-                resolved = path.resolve()
-                if resolved in seen_paths:
-                    continue
-                seen_paths.add(resolved)
-                examined += 1
-                event = read_ro_event(path)
-                if event is None:
-                    unreadable += 1
-                    continue
-                if not (start <= event.timestamp < end):
-                    continue
-                distance = haversine_km(
-                    args.roi_center_lat, args.roi_center_lon,
-                    event.latitude, event.longitude,
-                )
-                if distance > args.roi_radius_km:
-                    outside += 1
-                    continue
-                hour_index = int((event.timestamp - start).total_seconds() // 3600)
-                total[hour_index] += 1
-                by_satellite[event.satellite][hour_index] += 1
-                inside += 1
-
-    hour_starts = [start + timedelta(hours=index) for index in range(n_hours)]
-    return hour_starts, total, by_satellite, folders_by_date, {
-        "examined": examined,
-        "inside": inside,
-        "outside": outside,
-        "unreadable": unreadable,
+    stats = {
+        "processed_hours": 0,
+        "missing_hour_folders": 0,
+        "accepted_ro": 0,
+        "accepted_tec_rays": 0,
+        "failed_hours": 0,
     }
+
+    for hour_index in range(n_hours):
+        start = start_all + timedelta(hours=hour_index)
+        end = start + timedelta(hours=1)
+        folder = ro_day_dir(args.ro_dir, start.date())
+
+        if not folder.is_dir():
+            stats["missing_hour_folders"] += 1
+            print(
+                f"WARNING: no RO folder for {start:%Y-%m-%d} "
+                f"({start:%Y.%j}); {start:%H}:00 remains zero"
+            )
+            continue
+
+        cfg = make_precheck_cfg(
+            start, end, folder,
+            args.roi_center_lat, args.roi_center_lon,
+        )
+
+        try:
+            batches = observation_stream.assemble(cfg)
+        except Exception as exc:
+            stats["failed_hours"] += 1
+            print(f"WARNING: {start:%Y-%m-%d %H}:00 failed: {exc}")
+            continue
+
+        entries = unique_ro_entries(batches)
+        n_ro = len(entries)
+        n_tec = int(sum(len(batch.y_obs) for batch in batches))
+
+        total[hour_index] = n_ro
+        stats["processed_hours"] += 1
+        stats["accepted_ro"] += n_ro
+        stats["accepted_tec_rays"] += n_tec
+
+        for entry in entries:
+            satellite = satellite_from_entry(entry)
+            if satellite in by_satellite:
+                by_satellite[satellite][hour_index] += 1
+
+        print(
+            f"{start:%Y-%m-%d %H}:00 UTC | "
+            f"accepted RO={n_ro:2d} | TEC rays={n_tec:4d}"
+        )
+
+    hour_starts = [
+        start_all + timedelta(hours=index) for index in range(n_hours)
+    ]
+    return hour_starts, total, by_satellite, stats
 
 
 def save_hourly_csv(
@@ -238,10 +240,11 @@ def plot_histogram(
     axis.set_xlim(-0.6, maximum + 0.6)
     axis.set_ylim(bottom=0)
     axis.yaxis.set_major_locator(MaxNLocator(integer=True))
-    axis.set_xlabel("Number of RO occultations in one UTC hour", fontsize=args.font_size)
+    axis.set_xlabel("Number of accepted RO occultations in one UTC hour", fontsize=args.font_size)
     axis.set_ylabel("Number of one-hour intervals", fontsize=args.font_size)
     axis.set_title(
-        f"Hourly RO availability inside {args.roi_radius_km:g}-km ROI\n"
+        f"Hourly RO availability inside {ROI_RADIUS_KM:g}-km ROI "
+        f"(65% full-LOS criterion)\n"
         f"{args.start_date.isoformat()} through {args.end_date.isoformat()} UTC",
         fontsize=args.title_font_size,
     )
@@ -259,7 +262,8 @@ def plot_histogram(
     axis.text(
         0.99, 0.97,
         f"ROI center: {args.roi_center_lat:.4f}°, {args.roi_center_lon:.4f}° | "
-        f"Hours: {hourly_total.size} | RO files in ROI: {int(hourly_total.sum())}",
+        f"Grid radius: {GRID_RADIUS_DEG:g}° | Hours: {hourly_total.size} | "
+        f"Accepted RO: {int(hourly_total.sum())}",
         transform=axis.transAxes, ha="right", va="top",
         fontsize=args.annotation_font_size,
         bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "0.75"},
@@ -278,7 +282,7 @@ def plot_histogram(
     time_axis.set_xlim(-0.6, maximum + 0.6)
     time_axis.set_ylim(-0.5, 24.5)
     time_axis.set_yticks(np.arange(0, 25, 2))
-    time_axis.set_xlabel("Number of RO occultations in one UTC hour", fontsize=args.font_size)
+    time_axis.set_xlabel("Number of accepted RO occultations in one UTC hour", fontsize=args.font_size)
     time_axis.set_ylabel(f"Local hour ({args.local_timezone})", fontsize=args.font_size)
     time_axis.set_title(
         "Local-time occurrence of each hourly-count bin",
@@ -298,10 +302,8 @@ def parser_builder() -> argparse.ArgumentParser:
     parser.add_argument("--end-date", type=date.fromisoformat, required=True)
     parser.add_argument("--output-figure", type=Path, required=True)
     parser.add_argument("--output-csv", type=Path)
-    parser.add_argument("--ro-pattern", default="podTc2*_*_nc")
     parser.add_argument("--roi-center-lat", type=float, default=DEFAULT_TRO_LAT)
     parser.add_argument("--roi-center-lon", type=float, default=DEFAULT_TRO_LON)
-    parser.add_argument("--roi-radius-km", type=float, default=2000.0)
     parser.add_argument("--local-timezone", default="Europe/Oslo")
     parser.add_argument("--font-size", type=float, default=16.0)
     parser.add_argument("--title-font-size", type=float, default=18.0)
@@ -316,8 +318,6 @@ def validate_args(args: argparse.Namespace) -> None:
         raise FileNotFoundError(args.ro_dir)
     if args.end_date < args.start_date:
         raise ValueError("--end-date must be on or after --start-date")
-    if args.roi_radius_km <= 0:
-        raise ValueError("--roi-radius-km must be positive")
     if min(
         args.font_size, args.title_font_size,
         args.tick_font_size, args.annotation_font_size,
@@ -339,15 +339,24 @@ def main() -> None:
             ZoneInfo(args.local_timezone),
         )
 
-    found_days = sum(bool(day_folders) for day_folders in folders.values())
-    print(f"Requested UTC days: {len(folders)}; daily folders found: {found_days}")
+    print()
+    print("RO acceptance settings:")
+    print(f"  ROI radius             : {ROI_RADIUS_KM:g} km")
+    print(f"  Grid radius            : {GRID_RADIUS_DEG:g} deg")
+    print(f"  ROI mode               : {RO_KWARGS_TEMPLATE['roi_mode']}")
+    print(f"  LOS fraction required  : {RO_KWARGS_TEMPLATE['fraction_required']}")
+    print("  Altitude limit         : auto mean LEO altitude per occultation")
+    print(f"  Minimum valid rays     : {RO_KWARGS_TEMPLATE['min_valid_rays']}")
+    print(f"  Max rays / occultation : {RO_KWARGS_TEMPLATE['max_rays_per_occultation']}")
+    print()
     print(f"Hourly intervals represented: {len(total)}")
-    print(f"RO files examined: {stats['examined']}")
-    print(f"RO files inside ROI: {stats['inside']}")
-    print(f"RO files outside ROI: {stats['outside']}")
-    print(f"Unreadable/unsupported files: {stats['unreadable']}")
-    print(f"Hours with zero RO: {int(np.count_nonzero(total == 0))}")
-    print("Inside ROI by satellite: " + ", ".join(
+    print(f"Hours processed successfully: {stats['processed_hours']}")
+    print(f"Hours missing RO folder:      {stats['missing_hour_folders']}")
+    print(f"Hours failed:                 {stats['failed_hours']}")
+    print(f"Accepted RO occultations:     {stats['accepted_ro']}")
+    print(f"Accepted TEC rays:            {stats['accepted_tec_rays']}")
+    print(f"Hours with zero accepted RO:  {int(np.count_nonzero(total == 0))}")
+    print("Accepted RO by satellite: " + ", ".join(
         f"{satellite}={int(values.sum())}"
         for satellite, values in by_satellite.items()
     ))

@@ -51,6 +51,26 @@ def _read_ro_metadata(file_path: Path) -> dict[str, Any] | None:
                 "leo_id": str(nc.getncattr("leo_id")) if "leo_id" in nc.ncattrs() else "",
                 "conid": str(nc.getncattr("conid")) if "conid" in nc.ncattrs() else "",
                 "prn_id": str(nc.getncattr("prn_id")) if "prn_id" in nc.ncattrs() else "",
+                # Product-level quality / duplicate-selection metadata.  These
+                # are read here (rather than waiting for the full parser) so
+                # files that will never be used can be rejected cheaply before
+                # loading full ray arrays, running LOS checks, or Abel inversion.
+                "start_time": (
+                    float(nc.getncattr("start_time"))
+                    if "start_time" in nc.ncattrs() else np.nan
+                ),
+                "leveling_err": (
+                    float(nc.getncattr("leveling_err"))
+                    if "leveling_err" in nc.ncattrs() else np.nan
+                ),
+                "leodcb_flag": (
+                    int(nc.getncattr("leodcb_flag"))
+                    if "leodcb_flag" in nc.ncattrs() else -1
+                ),
+                "gpsdcb_flag": (
+                    int(nc.getncattr("gpsdcb_flag"))
+                    if "gpsdcb_flag" in nc.ncattrs() else -1
+                ),
             }
     except Exception:
         return None
@@ -74,6 +94,7 @@ def scan_ro_metadata(
             columns=[
                 "filename", "full_path", "date", "lat", "lon",
                 "leo_id", "conid", "prn_id",
+                "start_time", "leveling_err", "leodcb_flag", "gpsdcb_flag",
             ]
         )
 
@@ -135,6 +156,162 @@ def filter_ro_metadata(
         keep &= dates.to_numpy() < np.datetime64(end)
 
     return metadata.loc[keep].sort_values("date").reset_index(drop=True)
+
+
+
+def filter_ro_dcb_quality(
+    metadata: pd.DataFrame,
+    *,
+    require_dcb_flags: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Apply PlanetiQ DCB-flag QC at the lightweight metadata stage.
+
+    When ``require_dcb_flags`` is True, an RO file is eligible only when both
+    global attributes satisfy ``leodcb_flag == 1`` and ``gpsdcb_flag == 1``.
+    Missing flags are read as -1 by :func:`_read_ro_metadata` and therefore
+    fail the same criterion instead of being silently accepted.
+
+    Returns
+    -------
+    kept, rejected : pandas.DataFrame
+        ``rejected`` preserves the original metadata and adds
+        ``reject_reason='invalid_dcb_flag'`` for provenance/reporting.
+    """
+    if metadata.empty or not require_dcb_flags:
+        return metadata.copy().reset_index(drop=True), metadata.iloc[0:0].copy()
+
+    good = (
+        (pd.to_numeric(metadata["leodcb_flag"], errors="coerce") == 1)
+        & (pd.to_numeric(metadata["gpsdcb_flag"], errors="coerce") == 1)
+    )
+
+    kept = metadata.loc[good].copy().reset_index(drop=True)
+    rejected = metadata.loc[~good].copy()
+    if not rejected.empty:
+        rejected["reject_reason"] = "invalid_dcb_flag"
+    return kept, rejected.reset_index(drop=True)
+
+
+def deduplicate_ro_metadata(
+    metadata: pd.DataFrame,
+    *,
+    time_tolerance_s: float = 30.0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Remove near-duplicate RO products before full file parsing.
+
+    Files are candidates for the same physical occultation when they have the
+    same LEO receiver (``leo_id``), the same GNSS transmitter
+    (``conid`` + ``prn_id``), and belong to one time-connected cluster whose
+    consecutive start times are no more than ``time_tolerance_s`` apart.
+
+    Exactly one file is kept per duplicate cluster: the member with the
+    smallest finite ``leveling_err``.  There is deliberately *no* absolute
+    leveling-error threshold here; ``leveling_err`` is only used to choose the
+    preferred representative and thereby avoid giving one physical RO event
+    duplicate weight in the assimilation.  If every member has non-finite
+    ``leveling_err``, the earliest file is kept deterministically.
+
+    Returns
+    -------
+    kept, rejected : pandas.DataFrame
+        Rejected rows include ``reject_reason``, ``duplicate_kept_filename``,
+        ``time_separation_s``, and ``kept_leveling_err``.
+    """
+    if metadata.empty:
+        return metadata.copy().reset_index(drop=True), metadata.iloc[0:0].copy()
+
+    tol = float(time_tolerance_s)
+    if tol < 0:
+        raise ValueError("time_tolerance_s must be >= 0")
+
+    work = metadata.copy()
+    # Prefer the product's exact GPS-second start_time.  Fall back to the
+    # timestamp assembled from year/month/day/hour/minute/second only if the
+    # attribute is absent/non-finite.
+    start_numeric = pd.to_numeric(work.get("start_time"), errors="coerce")
+    fallback = pd.to_datetime(work["date"]).astype("int64") / 1e9
+    work["_dedup_time_s"] = start_numeric.where(np.isfinite(start_numeric), fallback)
+
+    keep_indices: list[int] = []
+    rejected_rows: list[dict[str, Any]] = []
+
+    group_cols = ["leo_id", "conid", "prn_id"]
+    for _, group in work.groupby(group_cols, sort=False, dropna=False):
+        group = group.sort_values(["_dedup_time_s", "filename"]).copy()
+        indices = list(group.index)
+        if not indices:
+            continue
+
+        # Build transitive time-connected clusters.  Example: 0, 18, 35 s
+        # with a 30-s tolerance is one cluster because each consecutive gap
+        # is <= 30 s, rather than two independent pairwise comparisons.
+        clusters: list[list[int]] = [[indices[0]]]
+        for idx in indices[1:]:
+            prev_idx = clusters[-1][-1]
+            dt = float(work.loc[idx, "_dedup_time_s"] - work.loc[prev_idx, "_dedup_time_s"])
+            if dt <= tol:
+                clusters[-1].append(idx)
+            else:
+                clusters.append([idx])
+
+        for cluster in clusters:
+            if len(cluster) == 1:
+                keep_indices.append(cluster[0])
+                continue
+
+            cluster_df = work.loc[cluster].copy()
+            leveling = pd.to_numeric(cluster_df["leveling_err"], errors="coerce")
+            finite = np.isfinite(leveling.to_numpy(dtype=float))
+            if finite.any():
+                finite_df = cluster_df.loc[finite].copy()
+                finite_df["_leveling_numeric"] = pd.to_numeric(
+                    finite_df["leveling_err"], errors="coerce"
+                )
+                # Stable tie-break: smaller leveling_err, then earlier time,
+                # then filename for deterministic behavior.
+                kept_idx = finite_df.sort_values(
+                    ["_leveling_numeric", "_dedup_time_s", "filename"]
+                ).index[0]
+            else:
+                kept_idx = cluster_df.sort_values(
+                    ["_dedup_time_s", "filename"]
+                ).index[0]
+
+            keep_indices.append(int(kept_idx))
+            kept_row = work.loc[kept_idx]
+            kept_err = float(kept_row["leveling_err"]) if np.isfinite(
+                pd.to_numeric(pd.Series([kept_row["leveling_err"]]), errors="coerce").iloc[0]
+            ) else np.nan
+
+            for idx in cluster:
+                if idx == kept_idx:
+                    continue
+                row = work.loc[idx]
+                rec = row.drop(labels=["_dedup_time_s"]).to_dict()
+                rec.update({
+                    "reject_reason": "duplicate_higher_leveling_err",
+                    "duplicate_kept_filename": str(kept_row["filename"]),
+                    "time_separation_s": abs(
+                        float(row["_dedup_time_s"] - kept_row["_dedup_time_s"])
+                    ),
+                    "kept_leveling_err": kept_err,
+                })
+                rejected_rows.append(rec)
+
+    kept = work.loc[sorted(set(keep_indices))].copy()
+    kept = kept.drop(columns=["_dedup_time_s"]).sort_values("date").reset_index(drop=True)
+
+    if rejected_rows:
+        rejected = pd.DataFrame(rejected_rows).sort_values("date").reset_index(drop=True)
+    else:
+        rejected = metadata.iloc[0:0].copy()
+        for col in (
+            "reject_reason", "duplicate_kept_filename",
+            "time_separation_s", "kept_leveling_err",
+        ):
+            rejected[col] = pd.Series(dtype="object")
+
+    return kept, rejected
 
 
 def select_arcs_by_count_bin(
@@ -410,6 +587,8 @@ def prepare_ro_observations(
     min_valid_rays: int = 50,
     max_rays_per_occultation: int = 200,
     max_lowest_tangent_alt_km: float | None = 400.0,
+    require_dcb_flags: bool = True,
+    duplicate_time_tolerance_s: float = 30.0,
     file_pattern: str = "*.0001_nc",
     include_abel: bool = True,
     return_report: bool = False,
@@ -424,18 +603,22 @@ def prepare_ro_observations(
     1. Scan lightweight netCDF metadata.
     2. Filter by [start_time, end_time), and by ROI (roi_mode="tangent_point"
        only -- see roi_mode below).
-    3. Optionally subsample the number of occultations using the project's
+    3. Apply product-level metadata QC: require leodcb_flag==1 and
+       gpsdcb_flag==1 (when require_dcb_flags=True), then collapse same-LEO /
+       same-GNSS near-duplicate products within duplicate_time_tolerance_s to
+       the one having the smallest leveling_err.
+    4. Optionally subsample the number of occultations using the project's
        select_arcs_by_count_bin() routine.
-    4. Parse each selected podTc2 file. The parser performs the existing
+    5. Parse each selected podTc2 file. The parser performs the existing
        file-level geometry QC.
-    5. Keep finite positive TEC only, and (roi_mode="full_los") rays whose
+    6. Keep finite positive TEC only, and (roi_mode="full_los") rays whose
        own LOS satisfies the full-LOS ROI containment check.
-    6. Reject occultations with fewer than min_valid_rays, and those whose
+    7. Reject occultations with fewer than min_valid_rays, and those whose
        measured TEC profile (all finite positive-TEC rays, before the ROI
        check) never reaches below max_lowest_tangent_alt_km -- a profile
        truncated high up, taken as a sign of an unstable signal.
-    7. Uniformly decimate to max_rays_per_occultation.
-    8. If include_abel=True, run Lei-Abel inversion on the FULL parsed RO arc
+    8. Uniformly decimate to max_rays_per_occultation.
+    9. If include_abel=True, run Lei-Abel inversion on the FULL parsed RO arc
        (not on the downsampled tomography rays) and attach the result as
        entry["abel"].
 
@@ -470,6 +653,14 @@ def prepare_ro_observations(
         TEC profile (rays with finite, positive TEC, before the full_los ROI
         check) is above this value (reject_reason "truncated_tec_profile").
         None disables it.
+    require_dcb_flags : bool, default True
+        Require both product-level global attributes ``leodcb_flag`` and
+        ``gpsdcb_flag`` to equal 1 before an RO file can be used.
+    duplicate_time_tolerance_s : float, default 30.0
+        Same-LEO, same-GNSS files in one time-connected cluster with
+        consecutive start times no more than this many seconds apart are
+        treated as duplicate products of one physical occultation. Only the
+        file with the smallest leveling_err is retained.
 
     Returns
     -------
@@ -498,6 +689,19 @@ def prepare_ro_observations(
         end_time=end_time,
         apply_geo_filter=apply_geo_filter,
     )
+    n_after_roi_time_filter = int(len(metadata_selected))
+
+    metadata_selected, dcb_rejected = filter_ro_dcb_quality(
+        metadata_selected,
+        require_dcb_flags=require_dcb_flags,
+    )
+    n_after_dcb_filter = int(len(metadata_selected))
+
+    metadata_selected, duplicate_rejected = deduplicate_ro_metadata(
+        metadata_selected,
+        time_tolerance_s=duplicate_time_tolerance_s,
+    )
+    n_after_duplicate_filter = int(len(metadata_selected))
 
     if selection_key is None:
         if start_time is not None and end_time is not None:
@@ -605,17 +809,13 @@ def prepare_ro_observations(
         "source": "RO_podTc2",
         "podtc_dir": str(podtc_dir),
         "n_files_scanned": int(len(metadata_all)),
-        "n_files_after_roi_time_filter": int(
-            len(filter_ro_metadata(
-                metadata_all,
-                center_lat=center_lat,
-                center_lon=center_lon,
-                radius_km=radius_km,
-                start_time=start_time,
-                end_time=end_time,
-                apply_geo_filter=apply_geo_filter,
-            ))
-        ),
+        "n_files_after_roi_time_filter": n_after_roi_time_filter,
+        "require_dcb_flags": bool(require_dcb_flags),
+        "n_files_after_dcb_filter": n_after_dcb_filter,
+        "n_dcb_flag_reject": int(len(dcb_rejected)),
+        "duplicate_time_tolerance_s": float(duplicate_time_tolerance_s),
+        "n_files_after_duplicate_filter": n_after_duplicate_filter,
+        "n_duplicate_reject": int(len(duplicate_rejected)),
         "n_files_after_occultation_selection": int(len(metadata_selected)),
         "n_parser_reject": int(n_parser_reject),
         "n_clean_observations": int(len(observations)),
@@ -636,6 +836,8 @@ def prepare_ro_observations(
         "alt_limit_km_used_mean": alt_limit_km_for_metadata,
         "fraction_required": float(fraction_required),
         "per_file": per_file,
+        "metadata_dcb_rejected": dcb_rejected.to_dict("records"),
+        "metadata_duplicate_rejected": duplicate_rejected.to_dict("records"),
         "metadata_selected": metadata_selected.to_dict("records"),
     }
 

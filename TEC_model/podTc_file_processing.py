@@ -111,8 +111,8 @@ def parse_podTc2_nc_file(file_path):
         attr_list = [
             'start_time', 'conid', 'prn_id', 'leo_id', 'obs1', 'obs2',
             'lat_tecmax_tangent', 'lon_tecmax_tangent', 'slta_tecmax_tangent',
-            'leveling_err', 'leodcb', 'gpsdcb', 'year', 'month', 'day',
-            'hour', 'minute', 'second'
+            'leveling_err', 'leodcb_flag', 'leodcb', 'gpsdcb_flag', 'gpsdcb',
+            'year', 'month', 'day', 'hour', 'minute', 'second'
         ]
         for attr in attr_list:
             podTc2_data[attr] = nc.getncattr(attr)
