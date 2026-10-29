@@ -139,12 +139,13 @@ SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
 TRO_ISR_EXTENDED_FILE = ISR_DIR / "TROISR2025_nonan_extended.nc"
 TRO_ISR_PCA_BASIS_FILE = ISR_DIR / "TROISR2025_nonan_pca_basis.nc"
 
-OUTPUT_ROOT = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/tomography_output") # =Edit here=
+OUTPUT_ROOT = Path("/mnt/tmp-sbem-ionosphere-tomography/tomography_output") # ===Edit here===
+#OUTPUT_ROOT = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/tomography_output") # =Edit here=
 
 # Three optional Edit here, the label name, the reference label name, and the run message.
-LABEL_OF_EACH_RUN = "test_new_criteria"  # label name ===Edit here===
+LABEL_OF_EACH_RUN = "oct2025_ROI2000kmRadius_0p3Boost"  # label name ===Edit here===
 REFERENCE_RUN_LABEL = ""  #ref label name; set "" or None to disable IRI reuse
-RUN_MESSAGE = "test 3000km, and all new criteria"  # ===Edit here===
+RUN_MESSAGE = "Run 2025-10-14 through 2025-10-17 hourly with ROI radius = 2000 km and 0.3 boost"  # ===Edit here===
 
 DEFAULT_STYLES = [
     "ANCHOR",
