@@ -125,6 +125,19 @@ SCRIPT="$(abspath "$SCRIPT")"
 LOGDIR="$(abspath "$LOGDIR")"
 JOBLOG="$(abspath "$JOBLOG")"
 
+# Run a frozen copy of the Python script. Each job reads the script when it
+# STARTS, so editing LABEL_OF_EACH_RUN or other settings while this run is
+# queued would otherwise change jobs that have not started yet, and mix them
+# into another run's output folder.
+# (Modules imported from the repo are not frozen; don't edit them mid-run.)
+if [[ -z "$DRY_RUN" ]]; then
+    mkdir -p "$LOGDIR"
+    SNAPSHOT="$LOGDIR/$(basename "$SCRIPT" .py)${LABEL:+_$LABEL}_$(date -u +%Y%m%dT%H%M%SZ)_$$.py"
+    cp -p "$SCRIPT" "$SNAPSHOT"
+    echo "Running frozen copy of the script: $SNAPSHOT" >&2
+    SCRIPT="$SNAPSHOT"
+fi
+
 validate_date() {
     # Checks both the format and that it's a real calendar date (e.g. rejects 2026-02-30).
     # UTC avoids failures in time zones where local midnight doesn't exist on DST days.
@@ -149,6 +162,7 @@ done
 HOURS="${HOURS//[[:space:]]/}"
 hour_re='^([01][0-9]|2[0-4])$'
 windows=()
+declare -A hour_owner=()   # hour -> window that already covers it
 IFS=',' read -ra raw_ranges <<< "$HOURS"
 for r in "${raw_ranges[@]}"; do
     IFS='-' read -r sh eh <<< "$r"
@@ -157,6 +171,17 @@ for r in "${raw_ranges[@]}"; do
     e=$(( 10#$eh ))
     (( s <= 23 )) || die "Start hour must be 00-23 in window: '$r'"
     (( e > s ))   || die "End hour must be greater than start hour in window: '$r'"
+
+    # Without -i, overlapping windows (e.g. "00-12,10-14") become separate
+    # jobs that run the same hours at the same time and write the same files.
+    # 'sort -u' below only removes exact duplicates, so reject overlaps here.
+    if [[ -z "$HOURLY" ]]; then
+        for (( h = s; h < e; h++ )); do
+            [[ -z "${hour_owner[$h]:-}" ]] ||
+                die "Hour window '$r' overlaps '${hour_owner[$h]}' at hour $(printf '%02d' "$h")"
+            hour_owner[$h]="$r"
+        done
+    fi
 
     if [[ -n "$HOURLY" ]]; then
         for (( h = s; h < e; h++ )); do

@@ -80,7 +80,10 @@ from __future__ import annotations
 # EDPSamples IRI execution uses tempfile.TemporaryDirectory() for scratch files.
 
 import argparse
+import contextlib
 import csv
+import fcntl
+import os
 import gc
 import shutil
 import subprocess
@@ -143,9 +146,9 @@ OUTPUT_ROOT = Path("/mnt/tmp-sbem-ionosphere-tomography/tomography_output") # ==
 #OUTPUT_ROOT = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/tomography_output") # =Edit here=
 
 # Three optional Edit here, the label name, the reference label name, and the run message.
-LABEL_OF_EACH_RUN = "oct2025_ROI2000kmRadius_0p3Boost"  # label name ===Edit here===
+LABEL_OF_EACH_RUN = "oct2025_ROI4000kmRadius_0p3Boost"  # label name ===Edit here===
 REFERENCE_RUN_LABEL = ""  #ref label name; set "" or None to disable IRI reuse
-RUN_MESSAGE = "Run 2025-10-14 through 2025-10-17 hourly with ROI radius = 2000 km and 0.3 boost"  # ===Edit here===
+RUN_MESSAGE = "Run 2025-10-14 through 2025-10-17 hourly with ROI radius = 4000 km and 0.3 boost"  # ===Edit here===
 
 DEFAULT_STYLES = [
     "ANCHOR",
@@ -189,7 +192,7 @@ RUN_CONDITIONS = [
 CENTER_LAT = 69.6
 CENTER_LON = 19.2
 
-ROI_RADIUS_KM = 2000.0 # === Edit here ===
+ROI_RADIUS_KM = 4000.0 # === Edit here ===
 GRID_RADIUS_DEG = 18.0 * (ROI_RADIUS_KM / 2000.0)
 
 # Scale minimum RO count with ROI area.
@@ -236,6 +239,70 @@ RO_KWARGS_TEMPLATE = {
 # =============================================================================
 # Helpers
 # =============================================================================
+
+# =============================================================================
+# Concurrency helpers (many copies of this script run at once under
+# GNU parallel, all writing under the same OUTPUT_ROOT)
+# =============================================================================
+
+# Locks live on a LOCAL filesystem: flock() is unreliable on NFS/CIFS mounts
+# such as OUTPUT_ROOT. All jobs must run on the same host for these to work.
+LOCK_ROOT = Path(
+    os.environ.get("TOMO_LOCK_DIR", "/tmp/ionosphere_tomography_locks")
+)
+
+
+def _open_lock(name: str):
+    LOCK_ROOT.mkdir(parents=True, exist_ok=True)
+    return open(LOCK_ROOT / f"{name}.lock", "a")
+
+
+@contextlib.contextmanager
+def file_lock(name: str):
+    """Blocking exclusive lock, for short read-modify-write sections."""
+    fh = _open_lock(name)
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+    finally:
+        fh.close()  # closing releases the lock
+
+
+def try_hour_lock(name: str):
+    """Non-blocking lock. Returns an open handle (keep it!) or None if taken."""
+    fh = _open_lock(name)
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        return None
+    return fh
+
+
+def release_lock(fh) -> None:
+    if fh is not None:
+        fh.close()
+
+
+def atomic_write(write_fn, path) -> None:
+    """
+    Call write_fn(tmp_path) and rename the result onto path, so readers never
+    see a half-written file and an existing file is never truncated in place.
+    The temp file sits in the same directory, so os.replace() is atomic.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.stem}.{os.getpid()}.tmp{path.suffix}")
+    try:
+        write_fn(str(tmp))
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def atomic_to_csv(df: pd.DataFrame, path) -> None:
+    atomic_write(lambda t: df.to_csv(t, index=False), path)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -412,7 +479,7 @@ def save_canonical_hour_edp(
     # Directly refresh this label/hour's canonical cache with the exact
     # unboosted base ensemble used by this run. Reusing the same run label
     # after changing setup therefore cannot leave a stale cache behind.
-    edp_samples.saveNetCDF(str(path))
+    atomic_write(edp_samples.saveNetCDF, path)
 
     return path
 
@@ -659,7 +726,7 @@ class _NoArtifactRunContext:
                     Path(cfg.edp_samples_output_path).parent.mkdir(
                         parents=True, exist_ok=True
                     )
-                    edp.saveNetCDF(cfg.edp_samples_output_path)
+                    atomic_write(edp.saveNetCDF, cfg.edp_samples_output_path)
                 return edp
 
             if output_mode == "minimal":
@@ -678,7 +745,9 @@ class _NoArtifactRunContext:
                 captured[str(style)] = pes
 
             if output_mode == "all":
-                return orig_save_parameterized(pes, path)
+                return atomic_write(
+                    lambda t: orig_save_parameterized(pes, t), path
+                )
             return None
 
         def _skip_ensemble_nc(*args, **kwargs):
@@ -1113,6 +1182,13 @@ def update_each_run_setting_csv(args: argparse.Namespace) -> Path:
 
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
+    # Every parallel job updates this one file: serialize the whole
+    # read-modify-write, or concurrent jobs silently drop each other's rows.
+    with file_lock("each_run_setting"):
+        return _update_each_run_setting_csv_locked(path, row, setting_columns)
+
+
+def _update_each_run_setting_csv_locked(path, row, setting_columns) -> Path:
     if path.exists():
         try:
             df = pd.read_csv(path)
@@ -1164,7 +1240,7 @@ def update_each_run_setting_csv(args: argparse.Namespace) -> Path:
         c for c in df.columns if c not in row
     ]
     df = df[ordered]
-    df.to_csv(path, index=False)
+    atomic_to_csv(df, path)
     return path
 
 
@@ -1195,6 +1271,12 @@ def save_daily_ro_status(rows: list[dict], day: datetime, run_output_root: Path)
 
     run_output_root.mkdir(parents=True, exist_ok=True)
 
+    # One daily file is shared by every hourly job for that date.
+    with file_lock(f"status_{run_output_root.name}_{day:%Y-%m-%d}"):
+        return _save_daily_ro_status_locked(path, new_df)
+
+
+def _save_daily_ro_status_locked(path: Path, new_df: pd.DataFrame) -> Path:
     if path.exists():
         try:
             old_df = pd.read_csv(path)
@@ -1225,7 +1307,7 @@ def save_daily_ro_status(rows: list[dict], day: datetime, run_output_root: Path)
         kind="stable",
     ).reset_index(drop=True)
 
-    combined.to_csv(path, index=False)
+    atomic_to_csv(combined, path)
     return path
 
 
@@ -1293,14 +1375,17 @@ def main():
     print(f"Grid radius           : {GRID_RADIUS_DEG:g} deg")
     print(f"Minimum accepted RO   : {MIN_RO_PROFILES}")
 
-    isr_pca_basis_path = ensure_tro_isr_pca_basis(
-        args.isr_pca_basis,
-        args.styles,
-        rebuild_basis=args.rebuild_tro_pca_basis,
-    )
-    hyper_params_by_style = build_hyper_params_by_style(
-        args.styles, isr_pca_basis_path
-    )
+    # The first job builds the shared TRO extension/PCA basis if missing;
+    # the others wait here and then reuse the finished files.
+    with file_lock("tro_isr_pca_basis"):
+        isr_pca_basis_path = ensure_tro_isr_pca_basis(
+            args.isr_pca_basis,
+            args.styles,
+            rebuild_basis=args.rebuild_tro_pca_basis,
+        )
+        hyper_params_by_style = build_hyper_params_by_style(
+            args.styles, isr_pca_basis_path
+        )
 
     if isr_pca_basis_path is not None:
         print("ISR-derived PCA basis:", isr_pca_basis_path)
@@ -1343,12 +1428,27 @@ def main():
     mode_timing_rows: list[dict] = []
     daily_ro_status_rows: list[dict] = []
     total_t0 = time.perf_counter()
+    hour_lock = None
+    n_hours_locked_out = 0
 
     for hour in range(args.start_hour, args.end_hour):
         start = day + timedelta(hours=hour)
         end = start + timedelta(hours=1)
         folder = hour_folder_name(start, end)
         hour_dir = RUN_OUTPUT_ROOT / folder
+
+        # Only one process may work on a given label/hour at a time. Two
+        # processes on the same hour write the same files, which is what
+        # causes the PermissionError / FileNotFoundError collisions.
+        release_lock(hour_lock)
+        hour_lock = try_hour_lock(f"hour_{LABEL_OF_EACH_RUN}_{folder}")
+        if hour_lock is None:
+            n_hours_locked_out += 1
+            print(
+                f"SKIP {hour_label(start, end)}: another process is already "
+                f"running this hour for label {LABEL_OF_EACH_RUN!r}"
+            )
+            continue
 
         print("\n" + "=" * 96)
         print(f"HOUR: {hour_label(start, end)}")
@@ -1468,7 +1568,9 @@ def main():
 
                 hour_dir.mkdir(parents=True, exist_ok=True)
                 precomputed_ro = hour_dir / "accepted_ro_observations.nc"
-                shutil.copy2(precomputed_ro_tmp, precomputed_ro)
+                atomic_write(
+                    lambda t: shutil.copy2(precomputed_ro_tmp, t), precomputed_ro
+                )
 
             # -------------------------------------------------------------
             # 2. Resolve the base IRI ensemble for this hour.
@@ -1902,9 +2004,15 @@ def main():
     # Per-hour validation products are the only ISR error outputs; RO-bin aggregate
     # comparison products and their helper code have been removed.
 
+    release_lock(hour_lock)
+
     if mode_timing_rows:
-        pd.DataFrame(mode_timing_rows).to_csv(
-            RUN_OUTPUT_ROOT / f"{args.date}_mode_timing.csv", index=False
+        # Name by hour range: with one job per hour, a single per-date file
+        # would be overwritten by whichever job finished last.
+        atomic_to_csv(
+            pd.DataFrame(mode_timing_rows),
+            RUN_OUTPUT_ROOT
+            / f"{args.date}_{args.start_hour:02d}{args.end_hour:02d}_mode_timing.csv",
         )
 
     total_elapsed = time.perf_counter() - total_t0
@@ -1921,6 +2029,18 @@ def main():
     print("Output root:", RUN_OUTPUT_ROOT)
     print("Run settings registry:", setting_csv_path)
 
+    # Report trouble through the exit status so GNU parallel counts this job
+    # as failed and -r/-R can retry it. With --continue-on-error the script
+    # used to exit 0 even when every hour failed.
+    n_failed = sum(1 for r in hourly_rows if r.get("status") == "failed")
+    if n_failed:
+        print(f"{n_failed} hour(s) failed")
+        return 1
+    if n_hours_locked_out:
+        print(f"{n_hours_locked_out} hour(s) skipped: locked by another process")
+        return 3
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
