@@ -11,6 +11,7 @@ Writes to ``--out-dir``:
   summary_isr_relative.csv  E/F relative error vs ISR, forecast and analysis, per run x station
   summary_peaks.csv         NmF2/hmF2 and NmE/hmE errors + E-peak detection counts
   summary_joint_success.csv TEC-fit x ISR-agreement classification
+  summary_correction.csv    under- vs over-correction of the forecast toward ISR
   summary_predictors.csv    Spearman rho of skill against RO count, overlap, spread reduction
 
 Metric definitions
@@ -35,6 +36,15 @@ Peak parameters (one retrieval for ISR, forecast and analysis, all on the
   range means "no peak". NmF2/hmF2 search >= E top; NmE/hmE search the E
   region and additionally require NmE >= --e-valley-ratio x the minimum Ne
   between the peak and --e-valley-top-km (a real valley above the E peak).
+
+Correction direction (per region, on ISR gates, in log10 Ne): the increment
+  a - f against the needed correction i - f, at gates where |i - f| >=
+  --min-departure-dex. Per gate, k = (a - f) / (i - f): k < 0 wrong
+  direction, 0 <= k <= 1 under-correction (analysis between forecast and
+  ISR), k > 1 over-correction (ISR between forecast and analysis); the
+  frac_* columns are the share of gates in each class. ``gain`` = least-
+  squares k over the region, sum((a-f)(i-f)) / sum((i-f)^2): 1 is ideal,
+  < 1 suggests a smaller obs sigma could help, > 1 a larger one.
 
 Joint success: TEC RMS <= --tec-ok-sigma x obs sigma, AND F relative error
   below the forecast's, AND E relative error not above the forecast's by
@@ -161,6 +171,20 @@ def hourly_metrics(npz_path: Path, isr: dict, a) -> list[dict]:
                     for reg, (lo, hi) in regions.items():
                         m = (ia >= lo) & (ia < hi) & np.isfinite(rel)
                         r[f"rel_{tag}_{reg}"] = float(np.mean(rel[m])) if m.any() else np.nan
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    lf, la, li = (np.log10(np.where(profs[t] > 0, profs[t], np.nan)) for t in "fai")
+                need, inc = li - lf, la - lf
+                for reg, (lo, hi) in regions.items():
+                    m = (ia >= lo) & (ia < hi) & np.isfinite(need) & np.isfinite(inc)
+                    m &= np.abs(need) >= a.min_departure_dex
+                    r[f"n_gates_{reg}"] = int(m.sum())
+                    if not m.any():
+                        continue
+                    k = inc[m] / need[m]
+                    r[f"gain_{reg}"] = float(np.sum(inc[m] * need[m]) / np.sum(need[m] ** 2))
+                    r[f"frac_wrong_{reg}"] = float(np.mean(k < 0))
+                    r[f"frac_under_{reg}"] = float(np.mean((k >= 0) & (k <= 1)))
+                    r[f"frac_over_{reg}"] = float(np.mean(k > 1))
                 for tag, p in profs.items():
                     r[f"NmF2_{tag}"], r[f"hmF2_{tag}"] = retrieve_peak(ia, p, a.e_top_km, a.f_top_km)
                     r[f"NmE_{tag}"], r[f"hmE_{tag}"] = retrieve_peak(
@@ -239,6 +263,21 @@ def summaries(d: pd.DataFrame, a) -> dict[str, pd.DataFrame]:
     rows = []
     for (st, sty, cond), grp in s.groupby(["station"] + keys):
         for reg in "EF":
+            g_reg = grp[f"gain_{reg}"].dropna()
+            rows.append(dict(
+                station=st, style=sty, condition=cond, region=reg, n_hours=len(g_reg),
+                gain_median=g_reg.median(), gain_q25=g_reg.quantile(0.25), gain_q75=g_reg.quantile(0.75),
+                hours_wrong=int((g_reg < 0).sum()), hours_under=int(((g_reg >= 0) & (g_reg <= 1)).sum()),
+                hours_over=int((g_reg > 1).sum()),
+                frac_wrong_median=grp[f"frac_wrong_{reg}"].median(),
+                frac_under_median=grp[f"frac_under_{reg}"].median(),
+                frac_over_median=grp[f"frac_over_{reg}"].median(),
+            ))
+    out["summary_correction"] = pd.DataFrame(rows)
+
+    rows = []
+    for (st, sty, cond), grp in s.groupby(["station"] + keys):
+        for reg in "EF":
             gain = np.log(grp[f"rel_a_{reg}"] / grp[f"rel_f_{reg}"])
             r = dict(station=st, style=sty, condition=cond, region=reg, n_hours=int(gain.notna().sum()))
             for name, col in [("n_ro", "n_ro"), ("n_rays", "n_rays"), ("overlap", f"overlap_{reg}"),
@@ -266,6 +305,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--f-split-km", type=float, default=400.0, help="bottomside/topside split for ray classes")
     p.add_argument("--e-valley-top-km", type=float, default=200.0)
     p.add_argument("--e-valley-ratio", type=float, default=1.1)
+    p.add_argument("--min-departure-dex", type=float, default=0.02,
+                   help="correction classes skip gates where |log10(ISR/forecast)| is below this")
     return p.parse_args()
 
 
