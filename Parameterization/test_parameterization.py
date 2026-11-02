@@ -269,6 +269,62 @@ class TestAnchorJacobian:
             f"(max {err.max():.4g} at altitude {altitude_full_span[np.argmax(err)]:.1f} km)"
         )
 
+    @pytest.mark.parametrize("label", ["log10_NmF2", "log10_NmE", "B1"])
+    def test_bounded_and_matches_fd_when_nme_exceeds_nmf2(self, altitude_full_span, single_anchor_params, label):
+        """
+        Regression: with NmE >= NmF2 the h_ST bisection pins h_ST at hmF2
+        (x_ST == 0, so d ln f/dx == 0 there) and the implicit-derivative
+        terms used to divide by a 1e-30 guard, giving entries ~1e30x the
+        profile's own peak density -- enough to overflow the Kalman gain
+        on real data (2025-10-16 09-10 UTC, ROI 4000 km).
+        """
+        p = single_anchor_params.copy()
+        p[6] = p[0] + 0.5                       # log10_NmE > log10_NmF2
+        k = P.ANCHOR_PARAM_LABELS.index(label)
+        eps = _ANCHOR_FD_EPS[label]
+
+        Ne, dNe_dP = P._ne_profile_derivatives(altitude_full_span, p, partial=True)
+        assert np.all(np.isfinite(dNe_dP))
+        assert np.abs(dNe_dP).max() < 100.0 * Ne.max()
+
+        p_plus = p.copy(); p_plus[k] += eps
+        p_minus = p.copy(); p_minus[k] -= eps
+        fd = (P._ne_profile_derivatives(altitude_full_span, p_plus, partial=False)
+              - P._ne_profile_derivatives(altitude_full_span, p_minus, partial=False)) / (2 * eps)
+        err = relative_error(dNe_dP[:, k], fd, floor=1.0)
+        assert np.percentile(err, 99) < 0.01
+
+    def test_bounded_across_default_bounds(self, altitude_full_span):
+        rng = np.random.default_rng(0)
+        lo = np.array([P.ANCHOR_DEFAULT_BOUNDS[k][0] for k in P.ANCHOR_PARAM_LABELS])
+        hi = np.array([P.ANCHOR_DEFAULT_BOUNDS[k][1] for k in P.ANCHOR_PARAM_LABELS])
+        params = lo[:, None] + (hi - lo)[:, None] * rng.random((8, 500))
+        Ne, dNe_dP = P._ne_profile_derivatives(altitude_full_span, params, partial=True)
+        assert np.all(np.isfinite(dNe_dP))
+        ratio = np.abs(dNe_dP).max(axis=(0, 1)) / np.maximum(Ne.max(axis=0), 1.0)
+        assert ratio.max() < 1e6
+
+
+class TestAnchorBoundsClipping:
+    def test_density_and_jacobian_evaluated_inside_bounds(self, altitude_full_span, single_anchor_params):
+        """Assimilation steps can leave the fit bounds; the ANCHOR style
+        evaluates at the bound-projected point."""
+        ep = P.EDP_Parameterization(style="ANCHOR", hyper_params=None)
+        out = single_anchor_params.copy()
+        out[5] = -3.0                           # B1 below its 0.5 lower bound
+        out[0] = 20.0                           # log10_NmF2 above its 13.0 upper bound
+        projected = out.copy()
+        projected[5] = P.ANCHOR_DEFAULT_BOUNDS["B1"][0]
+        projected[0] = P.ANCHOR_DEFAULT_BOUNDS["log10_NmF2"][1]
+
+        np.testing.assert_allclose(
+            ep.get_density(out, alt=altitude_full_span),
+            P._ne_profile_derivatives(altitude_full_span, projected, partial=False),
+        )
+        _, jac = ep.get_Jacobian(out, alt=altitude_full_span)
+        _, jac_ref = P._ne_profile_derivatives(altitude_full_span, projected, partial=True)
+        np.testing.assert_allclose(jac, jac_ref)
+
 
 # ===========================================================================
 # ANCHOR region boundaries / bisection

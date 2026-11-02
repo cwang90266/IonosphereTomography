@@ -115,6 +115,9 @@ _I_LOG_NMF2, _I_HMF2, _I_H0, _I_GAMMA, _I_B0, _I_B1, _I_LOG_NME, _I_HME = range(
 # Fixed model constants (kept identical to the original derivation).
 _R_TOPSIDE: float = 100.0   # Topside shape parameter (IRI default)
 _H_E_KM: float = 15.0       # E-layer scale height (km)
+# h_ST implicit-derivative guards (see _ne_profile_derivatives).
+_HST_PINNED_X: float = 1e-12  # x_ST at/below this == h_ST pinned at hmF2 (NmE >= NmF2)
+_MIN_ABS_LDF: float = 1e-3    # floor on |d ln f / dx| at x_ST off the pin
 
 
 def _find_hst_bisection(NmF2, hmF2, B0, B1, NmE, n_iter: int = 60):
@@ -386,9 +389,21 @@ def _ne_profile_derivatives(
             tanh_xST = float(np.tanh(min(x_ST_v, 700.0)))
             ldf_xST = float((-B1 * xST_pow ** (B1 - 1.0) - tanh_xST)
                             if x_ST_v > 1e-30 else -tanh_xST)
-            safe_ldf_xST = ldf_xST if abs(ldf_xST) > 1e-30 else -1e-30
             log_xST = float(np.log(max(xST_pow, 1e-30)))
-            hst_b1_coeff = xST_pow ** B1 * log_xST / safe_ldf_xST
+            # When NmE >= NmF2 the bisection has no root in x > 0 and h_ST
+            # is pinned at hmF2 (x_ST == 0), so ldf(x_ST) == 0 and the
+            # implicit-function derivatives below are undefined. The forward
+            # model's h_ST is then constant in NmF2/NmE/B0/B1, so their true
+            # derivative is 0 -- dividing by a 1e-30 guard instead produced
+            # ~1e30x-too-large Jacobian entries that overflowed the Kalman
+            # gain (real-data failure, 2025-10-16 09-10 UTC, ROI 4000 km).
+            # Off the pin, |ldf| is still floored so h_ST's sensitivity stays
+            # bounded as NmE approaches NmF2 from below.
+            if x_ST_v <= _HST_PINNED_X:
+                inv_ldf_xST = 0.0
+            else:
+                inv_ldf_xST = 1.0 / min(ldf_xST, -_MIN_ABS_LDF)
+            hst_b1_coeff = xST_pow ** B1 * log_xST * inv_ldf_xST
 
             Ne_A, ldf_A, x_A, xp_A, lx_A = _bs_quantities(h_i)
             dNeA = np.zeros((ANCHOR_N_STATE, len(h_i)))
@@ -399,10 +414,10 @@ def _ne_profile_derivatives(
 
             Ne_B, ldf_B, x_B, xp_B, lx_B = _bs_quantities(h_eff_i)
             dNeB = np.zeros((ANCHOR_N_STATE, len(h_i)))
-            dNeB[_I_LOG_NMF2] = Ne_B * np.log(10.0) * (1.0 - ldf_B / safe_ldf_xST)
+            dNeB[_I_LOG_NMF2] = Ne_B * np.log(10.0) * (1.0 - ldf_B * inv_ldf_xST)
             dNeB[_I_B0] = Ne_B * ldf_B * (x_ST_v - x_B) / (B0 + 1e-9)
             dNeB[_I_B1] = Ne_B * (ldf_B * hst_b1_coeff - xp_B ** B1 * lx_B)
-            dNeB[_I_LOG_NME] = Ne_B * np.log(10.0) * ldf_B / safe_ldf_xST
+            dNeB[_I_LOG_NME] = Ne_B * np.log(10.0) * ldf_B * inv_ldf_xST
             dNeB[_I_HME] = Ne_B * ldf_B * (-1.0 / (B0 + 1e-9))
 
             D = h_ST - hmE + 1e-9
@@ -414,8 +429,8 @@ def _ne_profile_derivatives(
             dhST[_I_HMF2] = 1.0
             dhST[_I_B0] = -x_ST_v
             dhST[_I_B1] = -B0 * hst_b1_coeff
-            dhST[_I_LOG_NMF2] = B0 * np.log(10.0) / safe_ldf_xST
-            dhST[_I_LOG_NME] = -B0 * np.log(10.0) / safe_ldf_xST
+            dhST[_I_LOG_NMF2] = B0 * np.log(10.0) * inv_ldf_xST
+            dhST[_I_LOG_NME] = -B0 * np.log(10.0) * inv_ldf_xST
 
             dt_dtheta = np.zeros((ANCHOR_N_STATE, len(h_i)))
             for k in (_I_LOG_NMF2, _I_HMF2, _I_B0, _I_B1, _I_LOG_NME):
@@ -1151,11 +1166,21 @@ class EDP_Parameterization:
                 jacobian=lambda p, alt: ('diagonal', Jacobian_density_10ex(p, minlog10Density=mld)),
             )
         if style == 'ANCHOR':
+            # Assimilation updates are unconstrained, so a Gauss-Newton step
+            # or analysis member can leave the fit bounds; evaluate the model
+            # (and its Jacobian, at the same projected point) inside them.
+            lo = np.array([hyper_params[k][0] for k in ANCHOR_PARAM_LABELS])
+            hi = np.array([hyper_params[k][1] for k in ANCHOR_PARAM_LABELS])
+
+            def _clip(p):
+                shape = (ANCHOR_N_STATE,) + (1,) * (p.ndim - 1)
+                return np.clip(p, lo.reshape(shape), hi.reshape(shape))
+
             def _jacobian(p, alt):
-                _, dNe_dP = _ne_profile_derivatives(alt, p, partial=True)
+                _, dNe_dP = _ne_profile_derivatives(alt, _clip(p), partial=True)
                 return ('per_point', dNe_dP)
             return ParameterizationSpec(
-                to_density=lambda p, alt: _ne_profile_derivatives(alt, p, partial=False),
+                to_density=lambda p, alt: _ne_profile_derivatives(alt, _clip(p), partial=False),
                 to_parameter=lambda d, alt: _fit_iri_params_ensemble(d, alt, hyper_params),
                 jacobian=_jacobian,
                 needs_altitude=True,

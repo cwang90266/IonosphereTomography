@@ -111,6 +111,10 @@ class AnalysisDiagnostics:
     residual_norm_history: list[float] = field(default_factory=list)
     alpha_history: list[float] = field(default_factory=list)
     center_source_history: list[str] = field(default_factory=list)   # "mean" | "ensemble_member" | "gauss_newton"
+    stopped_nonfinite_linearization: bool = False
+    """True when the Gauss-Newton loop stopped early because the
+    linearized operator at the current iterate was non-finite/overflowing;
+    the final gain then uses the last usable linearization."""
     K_mean: np.ndarray | None = None
     x_mean_a: np.ndarray | None = None
     """The analysis mean from the (deterministic) gain-based correction,
@@ -121,12 +125,19 @@ class AnalysisDiagnostics:
     use this field when a noise-free point estimate is wanted."""
 
 
+_MAX_ABS_Y_LIN = 1e100
+
+
 def _residual_norm(y_obs: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.linalg.norm(y_obs - y_pred))
 
 
 def _best_ensemble_analog(y_obs: np.ndarray, Y_f: np.ndarray) -> tuple[int, float]:
     dist = np.linalg.norm(y_obs[:, np.newaxis] - Y_f, axis=0)
+    # np.argmin returns the index of a NaN if one is present, which would
+    # pick a diverged member (inf density -> NaN TEC) as the linearization
+    # point and blow up the Jacobian; rank non-finite members last instead.
+    dist = np.where(np.isfinite(dist), dist, np.inf)
     i_star = int(np.argmin(dist))
     return i_star, float(dist[i_star])
 
@@ -210,8 +221,25 @@ class AnalysisEngine:
             x_i_current, y_i_current = x_i, y_i
             W_hat = None
             for it in range(config.max_iterations):
-                W_hat = obs_operator.linearized(x_i_current)
-                Y_lin = W_hat @ S                            # linearized ensemble anomalies
+                W_try = obs_operator.linearized(x_i_current)
+                with np.errstate(over="ignore", invalid="ignore"):
+                    Y_lin = W_try @ S                        # linearized ensemble anomalies
+                # Y_lin @ Y_lin.T in kalman_gain overflows float64 long
+                # before Y_lin itself does; bound |Y_lin| well below that.
+                if not (np.isfinite(Y_lin).all() and np.abs(Y_lin).max(initial=0.0) < _MAX_ABS_Y_LIN):
+                    # Non-finite linearization at this iterate (e.g. a
+                    # parameterization singularity): stop at the current
+                    # point and build the final gain from the last usable
+                    # linearization rather than fail the whole cycle.
+                    diag.stopped_nonfinite_linearization = True
+                    if W_hat is None:
+                        raise FloatingPointError(
+                            "AnalysisEngine.analyze: linearized observation "
+                            "operator is non-finite at the initial center; "
+                            "check the prior ensemble/parameterization."
+                        )
+                    break
+                W_hat = W_try
                 K_i, _ = kalman_gain(S, Y_lin, R, localization=config.localization)
 
                 pseudo_residual = (y_obs - y_i_current) + W_hat @ (x_i_current - x_p)
