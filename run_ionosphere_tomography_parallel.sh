@@ -26,6 +26,7 @@ JOBLOG="ionosphere_tomography_parallel_jobs.log"
 DRY_RUN=""
 HOURLY=""
 RETRIES=0
+MEM_INTERVAL=1200
 MAX_RETRIES=10
 RESUME=""
 LABEL=""
@@ -59,6 +60,9 @@ Options:
   -N N        Niceness, 0 to 19. Default: $NICE
   -r N        Retry each failed job up to N more times, 0 to $MAX_RETRIES. Default: $RETRIES
   -R          Resume: rerun only jobs that failed or never ran, per the job log
+  -m SECS     Record total memory of all jobs every SECS seconds, 0 to disable.
+              Written to JOBLOG_memory.tsv; the peak is printed at the end.
+              Default: $MEM_INTERVAL
   -n          Dry run: print the commands without executing them
   -h          Show this help
 
@@ -79,7 +83,7 @@ abspath() {
 }
 
 # ---- Parse arguments -------------------------------------------------------
-while getopts ":s:e:H:j:p:l:L:N:r:t:inRh" opt; do
+while getopts ":s:e:H:j:p:l:L:N:r:t:m:inRh" opt; do
     case "$opt" in
         s) START_DATE="$OPTARG" ;;
         e) END_DATE="$OPTARG" ;;
@@ -94,6 +98,7 @@ while getopts ":s:e:H:j:p:l:L:N:r:t:inRh" opt; do
         L) LOGDIR="$OPTARG" ;;
         r) RETRIES="$OPTARG" ;;
         R) RESUME=1 ;;
+        m) MEM_INTERVAL="$OPTARG" ;;
         h) usage; exit 0 ;;
         :) die "Option -$OPTARG requires a value" ;;
         \?) die "Unknown option -$OPTARG (use -h for help)" ;;
@@ -119,6 +124,7 @@ if [[ -n "$LABEL" ]]; then
     [[ -n "$JOBLOG_SET" ]] || JOBLOG="ionosphere_tomography_parallel_jobs_${LABEL}.log"
 fi
 [[ "$NICE" =~ ^([0-9]|1[0-9])$ ]] || die "-N must be 0-19"
+[[ "$MEM_INTERVAL" =~ ^(0|[1-9][0-9]{0,3})$ ]] || die "-m must be an integer from 0 to 9999 seconds"
 
 # Resolve relative paths now, before we cd into PROJECT_DIR
 SCRIPT="$(abspath "$SCRIPT")"
@@ -196,7 +202,7 @@ done
 # ---- Build job list --------------------------------------------------------
 # Each line is "DATE START_HOUR END_HOUR"; duplicates from overlapping windows are removed.
 jobfile="$(mktemp)"
-trap 'rm -f "$jobfile"' EXIT
+trap 'rm -f "$jobfile"' EXIT   # extended below once the memory monitor exists
 for d in "${dates[@]}"; do
     for w in "${windows[@]}"; do
         printf '%s %s\n' "$d" "$w"
@@ -256,6 +262,72 @@ run_one() {
     "${cmd[@]}" > "$log" 2>&1
 }
 export -f run_one
+
+# ---- Memory monitor --------------------------------------------------------
+# Samples every process started by this script (GNU parallel, the bash
+# wrappers and the Python jobs, including their children), excluding the
+# monitor itself, and records the totals.
+#
+# PSS (proportional set size) is the number to watch: a page shared by N
+# processes (e.g. numpy/IRI libraries) counts 1/N towards each, so the PSS
+# total is what the jobs really occupy. Summing RSS counts shared pages
+# once per process and overstates the total.
+mem_sampler() {
+    local root=$1 out=$2 interval=$3
+    local self=$BASHPID t0=$SECONDS pids pss rss avail
+    set +e   # a process exiting mid-sample must not stop the monitor
+
+    printf 'time_utc\telapsed_s\tn_procs\ttotal_pss_MiB\ttotal_rss_MiB\tmem_available_MiB\n' > "$out"
+    while :; do
+        # Every descendant of $root whose ancestry doesn't pass through
+        # this monitor (which also excludes the ps/awk run below).
+        mapfile -t pids < <(ps -e -o pid=,ppid= | awk -v root="$root" -v skip="$self" '
+            { pp[$1] = $2 }
+            END {
+                for (p in pp) {
+                    q = p; ok = 0
+                    while (q != "" && q > 1) {
+                        if (q == skip) break
+                        if (q == root) { ok = 1; break }
+                        q = pp[q]
+                    }
+                    if (ok && p != root) print p
+                }
+            }')
+
+        read -r pss rss < <(
+            for p in "${pids[@]}"; do
+                cat "/proc/$p/smaps_rollup" 2>/dev/null
+            done | awk '/^Pss:/ { p += $2 } /^Rss:/ { r += $2 }
+                        END { printf "%.1f %.1f\n", p / 1024, r / 1024 }')
+        avail=$(awk '/^MemAvailable:/ { printf "%.1f", $2 / 1024 }' /proc/meminfo)
+
+        printf '%s\t%d\t%d\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" $(( SECONDS - t0 )) \
+            "${#pids[@]}" "$pss" "$rss" "$avail" >> "$out"
+        sleep "$interval"
+    done
+}
+
+MEM_PID=""
+stop_mem_sampler() {
+    [[ -n "$MEM_PID" ]] || return 0
+    # '|| true': under 'set -e', wait returning the killed monitor's
+    # status (143) would otherwise end this script
+    kill "$MEM_PID" 2>/dev/null || true
+    wait "$MEM_PID" 2>/dev/null || true
+    MEM_PID=""
+}
+
+mem_summary() {
+    [[ -s "$1" ]] || return 0
+    awk -F'\t' 'NR > 1 && $4 + 0 > peak { peak = $4 + 0; t = $1; n = $3; rss = $5; avail = $6 }
+        END {
+            if (peak > 0)
+                printf "Peak memory of all jobs: %.2f GiB PSS (%.2f GiB summed RSS) " \
+                       "at %s, %d processes, %.2f GiB still available. Samples: %s\n",
+                       peak / 1024, rss / 1024, t, n, avail / 1024, FILENAME
+        }' "$1" >&2
+}
 export PY_BIN SCRIPT LOGDIR DRY_RUN LABEL
 export PARALLEL_SHELL=bash
 
@@ -286,10 +358,23 @@ if [[ -z "$DRY_RUN" ]]; then
     [[ -n "$RESUME" ]] && par_args+=(--resume-failed)
 fi
 
+MEMLOG="${JOBLOG%.log}_memory.tsv"
+if [[ -z "$DRY_RUN" ]] && (( MEM_INTERVAL > 0 )); then
+    [[ -r /proc/self/smaps_rollup ]] ||
+        die "-m needs /proc/PID/smaps_rollup (Linux 4.14 or newer); use -m 0 to disable"
+    mem_sampler "$$" "$MEMLOG" "$MEM_INTERVAL" &
+    MEM_PID=$!
+    echo "Recording memory use every ${MEM_INTERVAL}s in $MEMLOG" >&2
+fi
+trap 'rm -f "$jobfile"; stop_mem_sampler' EXIT
+
 set +e
 parallel "${par_args[@]}" run_one {1} {2} {3}
 status=$?
 set -e
+
+stop_mem_sampler
+[[ -z "$DRY_RUN" ]] && (( MEM_INTERVAL > 0 )) && mem_summary "$MEMLOG"
 
 # GNU Parallel exit status: 0 = success, 1-100 = number of failed jobs,
 # 101 = more than 100 failed, anything else = parallel itself errored.
