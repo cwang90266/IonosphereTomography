@@ -206,3 +206,59 @@ def test_output_ensemble_shape_and_covariance_reduced_by_observation():
     _, S_a = ensemble_anomalies(result.X)
     # Assimilating an informative observation should shrink total spread.
     assert np.trace(S_a @ S_a.T) < np.trace(S_f @ S_f.T)
+
+
+def test_nearest_analog_skips_members_with_nonfinite_forecast():
+    """Regression: np.argmin returns the index of a NaN, so a diverged
+    member (NaN predicted obs) used to be chosen as the analog."""
+    from Ensemble_Kalman_Engine.analysis_engine import _best_ensemble_analog
+
+    y_obs = np.zeros(3)
+    Y_f = np.array([[5.0, np.nan, 0.1, np.inf],
+                    [5.0, 0.0, 0.1, 0.0],
+                    [5.0, 0.0, 0.1, 0.0]])
+    i_star, dist = _best_ensemble_analog(y_obs, Y_f)
+    assert i_star == 2
+    assert np.isfinite(dist)
+
+
+@dataclass
+class OverflowAfterFirstLinearization(CubicToyOperator):
+    """Cubic toy whose re-linearization overflows after the first call,
+    standing in for a parameterization singularity hit mid-iteration."""
+
+    n_calls: int = 0
+
+    def linearized(self, x: np.ndarray) -> np.ndarray:
+        self.n_calls += 1
+        W = super().linearized(x)
+        return W if self.n_calls == 1 else W * 1e200
+
+
+def test_iterated_stops_on_overflowing_linearization_instead_of_raising():
+    rng = np.random.default_rng(7)
+    n_state, n_obs, n_members = 5, 4, 60
+    op = OverflowAfterFirstLinearization(H=rng.standard_normal((n_obs, n_state)))
+    R = 0.05 * np.eye(n_obs)
+    ensemble = _make_ensemble(rng, n_state, n_members, mean=np.zeros(n_state), spread=1.0)
+    y_obs = rng.standard_normal(n_obs)
+
+    config = AnalysisConfig(linearization="iterated", centering="mean",
+                            convergence_tol=0.0, residual_rel_tol=-1.0,
+                            rng=np.random.default_rng(1))
+    result, diag = AnalysisEngine().analyze(ensemble, op, y_obs, R, config)
+
+    assert diag.stopped_nonfinite_linearization
+    assert np.all(np.isfinite(result.X))
+    assert np.all(np.isfinite(diag.K_mean))
+
+
+def test_iterated_raises_clearly_when_initial_linearization_overflows():
+    rng = np.random.default_rng(8)
+    n_state, n_obs, n_members = 5, 4, 60
+    op = OverflowAfterFirstLinearization(H=rng.standard_normal((n_obs, n_state)), n_calls=1)
+    ensemble = _make_ensemble(rng, n_state, n_members, mean=np.zeros(n_state), spread=1.0)
+
+    with pytest.raises(FloatingPointError):
+        AnalysisEngine().analyze(ensemble, op, rng.standard_normal(n_obs), 0.05 * np.eye(n_obs),
+                                 AnalysisConfig(linearization="iterated", centering="mean"))
