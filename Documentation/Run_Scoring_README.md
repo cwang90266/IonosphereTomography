@@ -140,6 +140,7 @@ as needed; no new extraction is required.
 | `--e-bottom-km`, `--e-top-km`, `--f-top-km` | 90, 150, 700 | E region = [90, 150) km, F region = [150, 700) km |
 | `--f-split-km` | 400 | Bottomside/topside split for the ray classes |
 | `--e-valley-top-km`, `--e-valley-ratio` | 200, 1.1 | E-peak acceptance test (§4.4) |
+| `--min-departure-dex` | 0.02 | Correction direction skips gates where the forecast is within this of ISR in log10 Ne (§4.7) |
 
 ## 4. Metric definitions
 
@@ -222,6 +223,29 @@ relative error) in each region. The table gives its Spearman ρ against:
 Negative ρ means more of the predictor goes with a larger improvement. With
 about 25 hours, only |ρ| ≥ 0.4 is significant at the 5% level.
 
+### 4.7 Correction direction
+
+Relative error says how far the analysis is from ISR, not whether the
+assimilation moved it the right way. At each ISR gate, in log10 Ne,
+
+    k = (analysis − forecast) / (ISR − forecast)
+
+is the fraction of the needed correction that the analysis delivers:
+
+- `k < 0`: wrong direction. The analysis moved away from ISR.
+- `0 ≤ k ≤ 1`: under-correction. The analysis lies between the forecast
+  and ISR. A smaller σ may help.
+- `k > 1`: over-correction. ISR lies between the forecast and the
+  analysis. A larger σ may help.
+
+Gates where |log10(ISR / forecast)| < 0.02 (about 5%) are skipped, since
+there is little to correct there. `frac_{wrong,under,over}_{E,F}` are the
+shares of gates in each class. `gain_{E,F}` is the least-squares k over the
+region, Σ(a−f)(i−f) / Σ(i−f)², and each hour is classed by its gain.
+
+σ changes how far the analysis moves, not which way. Wrong-direction hours
+therefore point to the prior, the basis or the data, not to σ.
+
 ## 5. Outputs
 
 ### 5.1 `<hour>.npz` (from the extraction)
@@ -245,6 +269,7 @@ about 25 hours, only |ρ| ≥ 0.4 is significant at the 5% level.
 | `summary_isr_relative.csv` | station × run | Median `rel_{f,a}_{E,F}_pct`, hours improved in E and F |
 | `summary_peaks.csv` | station × run | Median absolute NmF2 (%) and hmF2 (km) errors for forecast and analysis, biases, hours improved, E-peak detection counts, NmE/hmE errors where both ISR and analysis have a peak |
 | `summary_joint_success.csv` | station × run | `success`, `fits_tec_misses_isr`, `misses_tec_agrees_isr`, `misses_both` |
+| `summary_correction.csv` | station × run × region | Median and quartiles of `gain`, hours wrong / under / over, median `frac_{wrong,under,over}` |
 | `summary_predictors.csv` | station × run × region | `rho_n_ro`, `rho_n_rays`, `rho_overlap`, `rho_rays_crossing_column`, `rho_spread_reduction` |
 
 ## 6. Verification
