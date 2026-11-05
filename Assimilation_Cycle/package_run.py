@@ -38,10 +38,11 @@ except ImportError:
 import matplotlib.pyplot as plt
 
 from Ensemble_Kalman_Engine import EnsembleState
+from Ensemble_Kalman_Engine.analysis_engine import AnalysisConfig
 from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
 
 from .cycle_config import CycleConfig
-from . import iri_selection, ensemble_init, observation_stream, output, isr_comparison
+from . import iri_selection, ensemble_init, observation_stream, output, isr_comparison, impact_vectors
 from .isr_pca_basis import resolve_hyper_params_for_style
 from .cycle_driver import CycleResult, run_cycle
 
@@ -172,6 +173,22 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     for isr_tag, isr_path in cfg.additional_isr_file_paths.items():
         isr_by_tag[str(isr_tag)] = isr_comparison.load_isr_dataset(isr_path)
 
+    # -- Impact-vector query points (Impact_Vector_Plan.md Section 7/10),
+    #    optional -- explicit points plus, when a primary ISR file is
+    #    configured, that station's point added automatically. ----------
+    impact_vector_points: list[impact_vectors.QueryPoint] = []
+    if cfg.compute_impact_vectors:
+        model_altitude_for_iv = np.asarray(edp_samples.altitude, dtype=float)
+        for name, lat, lon in (cfg.impact_vector_query_points or []):
+            impact_vector_points.append(
+                impact_vectors.QueryPoint(name=str(name), lat=float(lat), lon=float(lon),
+                                           altitudes=model_altitude_for_iv)
+            )
+        if "" in isr_by_tag:
+            impact_vector_points.append(
+                impact_vectors.query_point_from_isr_station(isr_by_tag[""].station, edp_samples)
+            )
+
     # -- Step 3: input-distribution plot, from the real ensemble's own
     #    sampling_parameters (see note above) -----------------------------
     _savefig(output.plot_iri_input_distributions(edp_samples.sampling_parameters),
@@ -237,6 +254,94 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     # cross-style figure rather than conflating them.
     cross_style_data: dict[tuple[int, str], dict[str, Any]] = {}
 
+    # Same (batch_index, ...)-keyed cross-style collection, for the
+    # impact-vector ranking plot below -- keyed by query point name
+    # instead of entry label, since one figure compares every RO/IGS
+    # entry's impact at a given point, across styles.
+    impact_vector_cross_style_data: dict[tuple[int, str], dict[str, dict[str, np.ndarray]]] = {}
+
+    def _run_impact_vectors_for_batch(batch, obs_operator, ensemble_forecast, outcome,
+                                       style, style_dir, pes) -> None:
+        """Impact_Vector_Plan.md Section 7's diagnostic pass: a second,
+        ``centering="mean"``-forced ``analyze()`` call over this batch's
+        exact forecast ensemble/observations (``outcome.y_obs_used``,
+        matching whatever the production call actually assimilated,
+        including under OSSE substitution)/``R`` -- purely read-only,
+        never feeds back into the production analysis above, whose own
+        result this never sees."""
+        accumulator = impact_vectors.ImpactVectorAccumulator(
+            edp_samples, obs_operator, impact_vector_points, batch.entry_ray_ranges,
+        )
+        diag_driver = GeneralEnKFDriver(
+            style=style, hyper_params=pes.Parameterization.hyper_params,
+            config=AnalysisConfig.default_for_style(style, centering="mean"),
+        )
+        _, iv_diag = diag_driver.assimilate_one_cycle(
+            ensemble_forecast, obs_operator, outcome.y_obs_used, batch.R,
+            on_iteration=accumulator.on_iteration,
+        )
+        impacts = accumulator.finalize(iv_diag.alpha_history)
+
+        decoded_forecast_iv = None   # built lazily, only if an ISR-alignment plot below needs it
+        isr_dataset_primary = isr_by_tag.get("")
+
+        for qp in impact_vector_points:
+            impacts_by_ro = {
+                entry_label: profile
+                for (entry_label, point_name), profile in impacts.items()
+                if point_name == qp.name
+            }
+            if not impacts_by_ro:
+                continue   # this point had no matching entries in this particular batch
+
+            iv_dir = style_dir / "impact_vectors" / qp.name
+            batch_tag = f"batch{batch.batch_index:04d}"
+            _savefig(
+                impact_vectors.plot_impact_vector_heatmap(
+                    impacts_by_ro, qp.altitudes,
+                    title=f"{qp.name} impact vectors ({style}, batch {batch.batch_index})",
+                ),
+                iv_dir / f"{batch_tag}_heatmap.png",
+            )
+            _savefig(
+                impact_vectors.plot_impact_vector_ranking(
+                    impacts_by_ro,
+                    title=f"{qp.name} impact ranking ({style}, batch {batch.batch_index})",
+                ),
+                iv_dir / f"{batch_tag}_ranking.png",
+            )
+
+            impact_vector_cross_style_data.setdefault((batch.batch_index, qp.name), {})[style] = impacts_by_ro
+
+            if isr_dataset_primary is not None and qp.name == isr_dataset_primary.station.name:
+                mid = isr_comparison.batch_midpoint(batch)
+                nearest = isr_comparison.nearest_isr_profile(isr_dataset_primary, mid) if mid is not None else None
+                if nearest is not None:
+                    _, isr_density_nearest = nearest
+                    if decoded_forecast_iv is None:
+                        decoded_forecast_iv = obs_operator.decode(ensemble_forecast.to_param_shape())
+                    _, _, forecast_profile_pt, _ = output.resolve_edp_query_point_and_profiles(
+                        edp_samples, None, decoded_forecast_iv, decoded_forecast_iv,
+                        lat=qp.lat, lon=qp.lon,
+                    )
+                    forecast_profile_mean = forecast_profile_pt.mean(axis=1)
+                    _savefig(
+                        impact_vectors.plot_impact_vector_isr_alignment(
+                            impacts_by_ro, forecast_profile_mean, isr_density_nearest,
+                            isr_dataset_primary.altitude, qp.altitudes,
+                            title=f"{qp.name} ISR-alignment ranking ({style}, batch {batch.batch_index})",
+                        ),
+                        iv_dir / f"{batch_tag}_isr_alignment.png",
+                    )
+                    _savefig(
+                        impact_vectors.plot_impact_vector_isr_aligned_heatmap(
+                            impacts_by_ro, forecast_profile_mean, isr_density_nearest,
+                            isr_dataset_primary.altitude, qp.altitudes,
+                            title=f"{qp.name} ISR-aligned heatmap ({style}, batch {batch.batch_index})",
+                        ),
+                        iv_dir / f"{batch_tag}_isr_aligned_heatmap.png",
+                    )
+
     results_by_style: dict[str, tuple[CycleResult, int, float]] = {}
     # Backward-compatible primary-ISR matches plus the full multi-ISR mapping.
     isr_matches_by_style: dict[str, list] = {}
@@ -265,10 +370,15 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         }
 
         def _on_batch(batch, obs_operator, ensemble_forecast, ensemble_analysis, outcome,
-                      _style_dir=style_dir, _style=style, _isr_collectors=isr_collectors):
+                      _style_dir=style_dir, _style=style, _isr_collectors=isr_collectors, _pes=pes):
             for _collector in _isr_collectors.values():
                 _collector.on_batch(
                     batch, obs_operator, ensemble_forecast, ensemble_analysis, outcome
+                )
+
+            if cfg.compute_impact_vectors and impact_vector_points and batch.entry_ray_ranges:
+                _run_impact_vectors_for_batch(
+                    batch, obs_operator, ensemble_forecast, outcome, _style, _style_dir, _pes,
                 )
 
             ro_here = [(e, s) for e, s in batch.entry_ray_ranges if e.obs_type == "RO"]
@@ -418,6 +528,17 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                 boost_label=boost_label,
             ),
             out / f"{cfg.label}_cross_style_profiles" / f"batch{batch_index:04d}_{entry_label}.png",
+        )
+
+    # -- Cross-style impact-vector ranking (Impact_Vector_Plan.md Section 8),
+    #    only populated when cfg.compute_impact_vectors was set. -----------
+    for (batch_index, point_name), impacts_by_ro_by_style in impact_vector_cross_style_data.items():
+        _savefig(
+            impact_vectors.plot_impact_vector_ranking_cross_style(
+                impacts_by_ro_by_style,
+                title=f"{point_name} impact ranking, batch {batch_index} (all styles)",
+            ),
+            out / f"{cfg.label}_impact_vectors_cross_style" / point_name / f"batch{batch_index:04d}_ranking.png",
         )
 
     # -- Cross-style ISR comparison for every configured ISR station. -----

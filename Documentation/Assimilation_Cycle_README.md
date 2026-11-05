@@ -319,6 +319,19 @@ already run -- it has no dependency on the 4th style. See Section 9 for
 the full picture (both ISR use cases, the basis-build procedure, and a
 worked example).
 
+### Per-RO/IGS impact vectors (opt-in, default off)
+
+| field | default | meaning |
+|---|---|---|
+| `compute_impact_vectors` | `False` | `True` adds, per batch per style, a second `centering="mean"`-forced diagnostic analysis pass (one more full Gauss-Newton solve -- real added compute, the same cost class as the production analysis itself) purely to attribute the analysis change at each query point back to the individual RO/IGS entries that produced it. Never alters the production analysis. |
+| `impact_vector_query_points` | `None` | explicit `(name, lat, lon)` query points; altitudes are always the full model grid. `None`/empty is fine when `isr_file_path` is set (see below) and no additional points are wanted. |
+
+When `isr_file_path` is also set, that station's `(name, lat, lon)` is
+added to the query-point list automatically -- set
+`impact_vector_query_points` only for *additional* points, or when no
+ISR file is in use. See Section 11 for the full picture (what gets
+computed, the output artifacts, and a worked example).
+
 ### Reproducibility across styles/conditions
 
 | field | default | meaning |
@@ -659,6 +672,21 @@ all styles overlaid, under `foo_isr_comparison_cross_style/`:
 The `_cross_style` versions are the same three artifact types with every
 style overlaid in one figure/table instead of one style's own -- directly
 comparable to the per-style ones, same filenames, one directory up.
+
+**If `compute_impact_vectors` is set** (Section 11), each of the
+following also appears, per style under `foo_{style}/impact_vectors/{point_name}/`
+and once more, all styles overlaid, under `foo_impact_vectors_cross_style/{point_name}/`:
+
+```
+batchNNNN_heatmap.png          # RO/IGS entry x altitude, signed impact, diverging colormap
+batchNNNN_ranking.png          # bar chart, total |impact| per entry, largest first
+batchNNNN_isr_alignment.png    # only when point_name matches isr_file_path's station AND a nearby ISR profile exists -- signed projection onto the (ISR - forecast) direction, per entry
+batchNNNN_isr_aligned_heatmap.png   # same grid as the plain heatmap, recolored by alignment with ISR instead of raw impact sign
+```
+
+(the cross-style directory only ever has `batchNNNN_ranking.png` -- the
+ISR-alignment pair is per-style only, since it isn't a simple per-entry
+total that overlays cleanly across styles.)
 
 ## 5. Reusing this for a validation profile (future use, already supported)
 
@@ -1027,3 +1055,56 @@ this_script.py` (Section 1). Expect ~100 minutes for the no-boost run
 and ~85 minutes for the boosted run at this scale (Section 6) -- do a
 smoke test at small `n_ensemble` first if this is your first run against
 new data or a new region.
+
+## 11. Per-RO/IGS impact vectors (opt-in, default off)
+
+Full math/derivation lives in `Impact_Vector_Plan.md`; this section is
+just how to turn it on and what you get.
+
+**What it answers**: at one vertical-column query point (typically an
+ISR site), which RO/IGS entries actually drove the analysis EDP change
+there, and -- when a real ISR profile is available nearby in time --
+whether each entry's own contribution pushed the analysis *toward* or
+*away* from the real ISR-measured profile. This is a diagnostic,
+approximate decomposition (a `centering="mean"` companion pass, not a
+reconstruction of whatever centering the production run actually used --
+confirmed acceptable by the user, see the plan's Decision 1), scoped to
+one batch at a time (no cross-batch accumulation).
+
+**Cost**: real, not free -- one extra full Gauss-Newton solve per batch
+per style, the same cost class as the production analysis itself.
+Leave `compute_impact_vectors` off (the default) unless you actually
+want this output.
+
+**Minimal example**, building on Section 2's single-cycle setup:
+
+```python
+cfg = CycleConfig(
+    ...,
+    isr_file_path="/path/to/your_isr_file.nc",   # its station becomes a query point automatically
+    compute_impact_vectors=True,
+    # impact_vector_query_points=[("My extra site", 45.0, -75.0)],   # optional, additional points
+)
+result = run_package(cfg)
+```
+
+See Section 4's artifact list for exactly what gets written
+(`foo_{style}/impact_vectors/{point_name}/batchNNNN_*.png`, plus the
+cross-style ranking). Reading the plots:
+
+- **Heatmap/ranking**: entries ranked by total `|impact|` summed over
+  altitude -- directly "which RO/IGS entry mattered most here," no ISR
+  needed.
+- **ISR-alignment ranking/heatmap** (only when a query point's name
+  matches `isr_file_path`'s station and a real ISR profile exists near
+  that batch's midpoint): positive means that entry's own contribution
+  pushed the analysis toward the real ISR-measured profile over the
+  altitude band ISR actually covers; negative means away from it. A
+  large-magnitude entry in the plain ranking can still show up as
+  harmful here -- the two rankings answer different questions and are
+  meant to be read together.
+- **IGS entries routinely come back near-zero** at a single vertical
+  query point -- expected, not a bug: a column-integrated TEC ray has
+  far less leverage on one specific vertical profile than an RO whose
+  tangent point passes close to it (confirmed against real Tromsø data,
+  `Impact_Vector_Plan.md` Section 11 step 8).

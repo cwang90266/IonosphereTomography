@@ -35,6 +35,7 @@ cannot bias the reported covariance -- only the mean correction.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 import numpy as np
 
@@ -158,7 +159,30 @@ class AnalysisEngine:
         y_obs: np.ndarray,
         R: np.ndarray,
         config: AnalysisConfig | None = None,
+        on_iteration: Callable[[int, np.ndarray, np.ndarray, np.ndarray], None] | None = None,
     ) -> tuple[EnsembleState, AnalysisDiagnostics]:
+        """
+        ``on_iteration``, optional (default ``None``, zero behavior change
+        when omitted -- added for ``Impact_Vector_Plan.md``'s per-RO
+        impact-vector feature, the third deliberate exception to this
+        project's "no logic added to the survivor modules" rule):  called
+        once per accepted step -- once for the ``"linear"`` branch's single
+        shot, once per accepted Gauss-Newton iteration for ``"iterated"``
+        -- as ``on_iteration(iteration_index, x_before, K, r)`` where
+        ``x_before`` is the linearization point *before* this step's
+        update, ``K`` is the gain matrix used for this step (shape
+        ``(n_state, n_obs)``), and ``r`` is the residual this step's
+        update was computed from (``y_obs - y_i`` for the linear branch,
+        the Gauss-Newton ``pseudo_residual`` for the iterated branch) --
+        together, ``K @ r`` is exactly this step's contribution to the
+        state update, *before* any backtracking damping is applied (the
+        caller is responsible for any post-hoc reweighting across steps,
+        e.g. by ``AnalysisDiagnostics.alpha_history``, since a given
+        step's damping factor isn't knowable until later steps have also
+        run). This engine does not hold K/r for longer than one step at a
+        time -- the caller must consume (or copy) what it needs inside
+        the callback.
+        """
         if config is None:
             config = AnalysisConfig()
         rng = config.rng or np.random.default_rng()
@@ -190,7 +214,10 @@ class AnalysisEngine:
         if config.linearization == "linear":
             Y_mean, Y_anom = ensemble_anomalies(Y_f)
             K_final = kalman_gain(S, Y_anom, R, localization=config.localization)[0]
-            x_final = x_i + K_final @ (y_obs - y_i)
+            r_linear = y_obs - y_i
+            if on_iteration is not None:
+                on_iteration(0, x_i, K_final, r_linear)
+            x_final = x_i + K_final @ r_linear
             diag.n_iterations = 1
             diag.converged = True
 
@@ -298,6 +325,8 @@ class AnalysisEngine:
                 step_size = np.linalg.norm(x_candidate - x_i_current)
                 scale = max(np.linalg.norm(x_i_current), 1e-12)
                 prev_residual = diag.residual_norm_history[-1]
+                if on_iteration is not None:
+                    on_iteration(it, x_i_current, K_i, pseudo_residual)
                 x_i_current, y_i_current = x_candidate, y_candidate
                 diag.residual_norm_history.append(_residual_norm(y_obs, y_i_current))
                 diag.n_iterations = it + 1
