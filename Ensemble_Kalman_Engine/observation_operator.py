@@ -139,14 +139,27 @@ class GenericObservationOperator:
         ``(n_state,)`` -> ``W_hat = H_grid @ grad_E(x)``, shape
         ``(n_obs, n_state)``.
         """
-        param_vec = x.reshape(*self.param_shape)
-        jac_kind, jac_array = self.parameterization.get_Jacobian(
-            param_vec, alt=self._alt_arg()
-        )
+        jac_kind, jac_array = self.get_jacobian_array(x)
         return compose_observation_jacobian(
             self.H_grid, jac_array, self.param_shape,
             self.n_height, self.n_geo, jac_kind=jac_kind,
         )
+
+    def get_jacobian_array(self, x: np.ndarray) -> tuple[str, np.ndarray]:
+        """
+        The *un-composed* decode Jacobian at a single point ``x`` (shape
+        ``(n_state,)``) -- ``(kind, array)`` exactly as
+        ``EDP_Parameterization.get_Jacobian`` returns it, before
+        :func:`compose_observation_jacobian` combines it with any
+        particular left-hand operator. :meth:`linearized` composes it with
+        ``H_grid`` (the ray operator); `Assimilation_Cycle/impact_vectors.py`
+        (``Impact_Vector_Plan.md``) composes the *same* array with a query
+        point's interpolation-weight operator instead -- this method is the
+        shared entry point so that second use doesn't need to reach into
+        ``parameterization``/``_alt_arg`` directly.
+        """
+        param_vec = x.reshape(*self.param_shape)
+        return self.parameterization.get_Jacobian(param_vec, alt=self._alt_arg())
 
     @classmethod
     def from_edp_samples(

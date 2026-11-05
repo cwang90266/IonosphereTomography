@@ -253,6 +253,166 @@ def test_iterated_stops_on_overflowing_linearization_instead_of_raising():
     assert np.all(np.isfinite(diag.K_mean))
 
 
+class TestOnIterationHook:
+    """``Impact_Vector_Plan.md`` Section 6/11 step 2: a new, optional
+    per-iteration hook on ``analyze()`` -- the third deliberate exception
+    to this project's "no logic added to the survivor modules" rule, so
+    it needs its own explicit zero-regression proof (Section 9 test 4)
+    plus confirmation it reports exactly what the plan's decomposition
+    needs (Section 9 tests 2-3, folded in here since they're really
+    about what this hook reports, not about ``impact_vectors.py`` yet)."""
+
+    def test_fires_once_for_linear_branch_with_correct_values(self):
+        rng = np.random.default_rng(10)
+        n_state, n_obs, n_members = 5, 3, 100
+        H = rng.standard_normal((n_obs, n_state))
+        R = 0.05 * np.eye(n_obs)
+        op = LinearToyOperator(H=H)
+        ensemble = _make_ensemble(rng, n_state, n_members, mean=rng.standard_normal(n_state), spread=1.0)
+        y_obs = rng.standard_normal(n_obs)
+        config = AnalysisConfig(linearization="linear", centering="mean", rng=np.random.default_rng(1))
+
+        calls = []
+        result, diag = AnalysisEngine().analyze(
+            ensemble, op, y_obs, R, config,
+            on_iteration=lambda k, x_before, K, r: calls.append((k, x_before.copy(), K.copy(), r.copy())),
+        )
+
+        assert len(calls) == 1
+        k, x_before, K, r = calls[0]
+        assert k == 0
+        np.testing.assert_allclose(x_before, ensemble.X.mean(axis=1), atol=1e-10)
+        # K @ r is exactly this (only) step's contribution: x_before + K@r
+        # must reproduce the engine's own reported analysis mean.
+        np.testing.assert_allclose(x_before + K @ r, diag.x_mean_a, atol=1e-8)
+
+    def test_fires_once_per_accepted_iteration_for_iterated_branch(self):
+        rng = np.random.default_rng(11)
+        n_state, n_obs, n_members = 5, 4, 200
+        H = rng.standard_normal((n_obs, n_state)) * 0.5
+        R = 0.02 * np.eye(n_obs)
+        op = CubicToyOperator(H=H)
+        ensemble = _make_ensemble(rng, n_state, n_members, mean=np.zeros(n_state), spread=1.5)
+        y_obs = rng.standard_normal(n_obs)
+        config = AnalysisConfig(linearization="iterated", centering="mean", rng=np.random.default_rng(1))
+
+        calls = []
+        _, diag = AnalysisEngine().analyze(
+            ensemble, op, y_obs, R, config,
+            on_iteration=lambda k, x_before, K, r: calls.append(k),
+        )
+
+        assert len(calls) == diag.n_iterations
+        assert calls == list(range(diag.n_iterations))
+
+    def test_exactness_identity_reconstructs_final_state_via_decay_weights(self):
+        """``Impact_Vector_Plan.md`` Finding 3: the final accepted state's
+        deviation from the anchor is a *decay-weighted* sum of every
+        iteration's own ``K@r`` proposal (``w_k = alpha_k * prod_{m>k}
+        (1-alpha_m)``), not a flat sum -- confirmed directly against the
+        engine's own accepted trajectory (``centering="mean"``, so there
+        are no ``nearest_analog`` resets to break the identity)."""
+        rng = np.random.default_rng(12)
+        n_state, n_obs, n_members = 5, 4, 200
+        H = rng.standard_normal((n_obs, n_state)) * 0.5
+        R = 0.02 * np.eye(n_obs)
+        op = CubicToyOperator(H=H)
+        x_true = rng.standard_normal(n_state) * 2.0
+        ensemble = _make_ensemble(rng, n_state, n_members, mean=np.zeros(n_state), spread=2.0)
+        osse = generate_osse_observation(x_true, op, R, rng=np.random.default_rng(13))
+        config = AnalysisConfig(linearization="iterated", centering="mean", rng=np.random.default_rng(1))
+
+        calls = []
+        _, diag = AnalysisEngine().analyze(
+            ensemble, op, osse.y_obs, R, config,
+            on_iteration=lambda k, x_before, K, r: calls.append((x_before.copy(), K.copy(), r.copy())),
+        )
+
+        x_p = calls[0][0]
+        alphas = diag.alpha_history
+        J = len(calls)
+        assert len(alphas) == J
+
+        D = np.zeros(n_state)
+        for k in range(J):
+            decay = 1.0
+            for m in range(k + 1, J):
+                decay *= (1.0 - alphas[m])
+            w_k = alphas[k] * decay
+            _, K, r = calls[k]
+            D += w_k * (K @ r)
+
+        np.testing.assert_allclose(x_p + D, diag.x_mean_a, atol=1e-6, rtol=1e-6)
+
+    def test_damped_iteration_contribution_matches_weighted_formula_not_flat_sum(self):
+        """Specifically exercises a case with real backtracking damping
+        (alpha<1 on at least one iteration) -- Section 9 test 3, the part
+        a flat (unweighted) sum across iterations would get wrong."""
+        rng = np.random.default_rng(15)
+        n_state, n_obs, n_members = 4, 3, 150
+        H = rng.standard_normal((n_obs, n_state)) * 1.5
+        R = 0.01 * np.eye(n_obs)
+        op = CubicToyOperator(H=H)
+        x_true = rng.standard_normal(n_state) * 4.0   # far enough to force damping
+        ensemble = _make_ensemble(rng, n_state, n_members, mean=np.zeros(n_state), spread=3.0)
+        osse = generate_osse_observation(x_true, op, R, rng=np.random.default_rng(16))
+        config = AnalysisConfig(linearization="iterated", centering="mean", rng=np.random.default_rng(1))
+
+        calls = []
+        _, diag = AnalysisEngine().analyze(
+            ensemble, op, osse.y_obs, R, config,
+            on_iteration=lambda k, x_before, K, r: calls.append((x_before.copy(), K.copy(), r.copy())),
+        )
+        assert any(a < 1.0 for a in diag.alpha_history), (
+            "test setup didn't actually force damping -- adjust x_true/spread"
+        )
+
+        x_p = calls[0][0]
+        alphas = diag.alpha_history
+        J = len(calls)
+
+        D_weighted = np.zeros(n_state)
+        D_flat = np.zeros(n_state)
+        for k in range(J):
+            decay = 1.0
+            for m in range(k + 1, J):
+                decay *= (1.0 - alphas[m])
+            w_k = alphas[k] * decay
+            _, K, r = calls[k]
+            D_weighted += w_k * (K @ r)
+            D_flat += K @ r
+
+        np.testing.assert_allclose(x_p + D_weighted, diag.x_mean_a, atol=1e-6, rtol=1e-6)
+        assert not np.allclose(x_p + D_flat, diag.x_mean_a, atol=1e-3), (
+            "flat sum should NOT match once real damping occurred -- "
+            "if it does, the test setup isn't exercising damping meaningfully"
+        )
+
+    def test_omitting_hook_changes_nothing(self):
+        """Zero-regression (Section 9 test 4): the new ``on_iteration``
+        parameter, defaulted to ``None``, must not alter ``analyze()``'s
+        existing behavior at all -- passing it explicitly as ``None``
+        must reproduce byte-identical results to omitting it."""
+        rng = np.random.default_rng(14)
+        n_state, n_obs, n_members = 5, 4, 150
+        H = rng.standard_normal((n_obs, n_state))
+        R = 0.03 * np.eye(n_obs)
+        op = CubicToyOperator(H=H)
+        ensemble = _make_ensemble(rng, n_state, n_members, mean=np.zeros(n_state), spread=1.5)
+        y_obs = rng.standard_normal(n_obs)
+
+        config_a = AnalysisConfig(linearization="iterated", centering="nearest_analog", rng=np.random.default_rng(1))
+        config_b = AnalysisConfig(linearization="iterated", centering="nearest_analog", rng=np.random.default_rng(1))
+
+        result_a, diag_a = AnalysisEngine().analyze(ensemble, op, y_obs, R, config_a)
+        result_b, diag_b = AnalysisEngine().analyze(ensemble, op, y_obs, R, config_b, on_iteration=None)
+
+        np.testing.assert_array_equal(result_a.X, result_b.X)
+        assert diag_a.n_iterations == diag_b.n_iterations
+        assert diag_a.alpha_history == diag_b.alpha_history
+        assert diag_a.center_source_history == diag_b.center_source_history
+
+
 def test_iterated_raises_clearly_when_initial_linearization_overflows():
     rng = np.random.default_rng(8)
     n_state, n_obs, n_members = 5, 4, 60
