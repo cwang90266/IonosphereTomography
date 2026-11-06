@@ -123,12 +123,22 @@ class GeneralEnKFDriver:
         y_obs: np.ndarray,
         R: np.ndarray,
         perturbation: Perturbation | None = None,
+        on_iteration=None,
     ):
         """
         Run one assimilation cycle (plan Section 4's full diagram): the
         analysis engine handles the linear/iterated x mean/nearest_analog
         choice per ``self.config``; ``perturbation`` (5.3) is applied
         after, if given.
+
+        ``on_iteration``, optional: forwarded as-is to
+        ``AnalysisEngine.analyze`` (see its docstring) -- a pass-through,
+        not used by this method itself. Note this is a *different*,
+        deeper hook than ``cycle_driver.run_batch_loop``'s ``on_batch``:
+        ``on_batch`` fires once per batch, after this method already
+        returned, from information in its result; ``on_iteration`` must
+        reach inside a single ``analyze()`` call, since the per-iteration
+        gain/residual it reports don't survive past that call otherwise.
 
         Returns
         -------
@@ -140,7 +150,7 @@ class GeneralEnKFDriver:
         if perturbation is not None:
             from dataclasses import replace
             config = replace(config, perturbation=perturbation)
-        return AnalysisEngine().analyze(ensemble, obs_operator, y_obs, R, config)
+        return AnalysisEngine().analyze(ensemble, obs_operator, y_obs, R, config, on_iteration=on_iteration)
 
     def decode_to_edps(self, ensemble: EnsembleState, obs_operator: GenericObservationOperator) -> np.ndarray:
         """
