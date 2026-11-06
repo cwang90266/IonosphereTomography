@@ -327,6 +327,10 @@ def run_package(cfg: CycleConfig) -> PackageResult:
 
             impact_vector_cross_style_data.setdefault((batch.batch_index, qp.name), {})[style] = impacts_by_ro
 
+            forecast_profile_for_save = None
+            isr_density_for_save = None
+            isr_altitude_for_save = None
+
             if isr_dataset_primary is not None and qp.name == isr_dataset_primary.station.name:
                 mid = isr_comparison.batch_midpoint(batch)
                 nearest = isr_comparison.nearest_isr_profile(isr_dataset_primary, mid) if mid is not None else None
@@ -355,6 +359,21 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                         ),
                         iv_dir / f"{batch_tag}_isr_aligned_heatmap.png",
                     )
+                    forecast_profile_for_save = forecast_profile_mean
+                    isr_density_for_save = isr_density_nearest
+                    isr_altitude_for_save = isr_dataset_primary.altitude
+
+            # Persist the raw per-entry profiles (plan: user request
+            # 2026-11-06) -- a later plotting-only change can regenerate
+            # every plot above straight from this file, via
+            # impact_vectors.replot_impact_vectors_from_saved /
+            # replot_impact_vectors_tree, with no pipeline rerun at all.
+            impact_vectors.save_impact_vectors(
+                iv_dir / f"{batch_tag}_data.nc", impacts_by_ro, qp.altitudes,
+                style=style, batch_index=batch.batch_index, query_point_name=qp.name,
+                forecast_profile=forecast_profile_for_save,
+                isr_density=isr_density_for_save, isr_altitude=isr_altitude_for_save,
+            )
 
     results_by_style: dict[str, tuple[CycleResult, int, float]] = {}
     # Backward-compatible primary-ISR matches plus the full multi-ISR mapping.

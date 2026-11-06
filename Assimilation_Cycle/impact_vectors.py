@@ -43,9 +43,11 @@ mesh-lookup-is-altitude-independent shortcut
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+import xarray as xr
 
 try:
     import matplotlib
@@ -225,6 +227,182 @@ class ImpactVectorAccumulator:
 
 
 # ===========================================================================
+# Persistence (user request, 2026-11-06): the diagnostic pass that
+# produces ``impacts_by_ro`` is a real extra Gauss-Newton solve (hours,
+# at full scale) -- a plotting-only change (a new ranking metric,
+# recolored heatmap, relabeled axis, ...) should never need to rerun
+# that pass just to see the new picture. ``save_impact_vectors`` persists
+# everything one query point's worth of plots needs (the raw per-entry
+# profiles plus, when available, the ISR-alignment plots' own inputs);
+# ``load_impact_vectors``/``replot_impact_vectors_from_saved`` read it
+# back and regenerate every plot from the saved numbers alone, with no
+# pipeline involved. ``replot_impact_vectors_tree`` does this for every
+# saved file under an existing run's output directory in one call.
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class SavedImpactVectors:
+    impacts_by_ro: dict[str, np.ndarray]
+    altitude: np.ndarray
+    forecast_profile: np.ndarray | None
+    isr_density: np.ndarray | None
+    isr_altitude: np.ndarray | None
+    style: str | None
+    batch_index: int | None
+    query_point_name: str | None
+
+
+def save_impact_vectors(
+    path: str | Path, impacts_by_ro: dict[str, np.ndarray], altitude: np.ndarray, *,
+    style: str | None = None, batch_index: int | None = None, query_point_name: str | None = None,
+    forecast_profile: np.ndarray | None = None,
+    isr_density: np.ndarray | None = None, isr_altitude: np.ndarray | None = None,
+) -> Path:
+    """Saves one query point's worth of one batch's impact-vector data
+    (matching the convention ``ensemble_io.save_ensemble_netcdf`` already
+    uses in this package: ``xarray``-to-netCDF, metadata as attrs).
+    ``forecast_profile``/``isr_density``/``isr_altitude`` are optional --
+    only present for an ISR-station query point -- and omitted from the
+    file entirely (not written as empty/NaN) when not supplied, so
+    :func:`load_impact_vectors` can tell "no ISR data for this point"
+    apart from "ISR data that happens to be all zero"."""
+    labels = list(impacts_by_ro.keys())
+    n_alt = len(np.asarray(altitude))
+    M = (np.stack([np.asarray(impacts_by_ro[label], dtype=float) for label in labels], axis=0)
+         if labels else np.zeros((0, n_alt)))
+
+    data_vars: dict[str, Any] = {"impact": (("entry", "altitude"), M)}
+    coords: dict[str, Any] = {"entry": labels, "altitude": np.asarray(altitude, dtype=float)}
+    if forecast_profile is not None:
+        data_vars["forecast_profile"] = (("altitude",), np.asarray(forecast_profile, dtype=float))
+    if isr_density is not None and isr_altitude is not None:
+        data_vars["isr_density"] = (("isr_altitude",), np.asarray(isr_density, dtype=float))
+        coords["isr_altitude"] = np.asarray(isr_altitude, dtype=float)
+
+    ds = xr.Dataset(data_vars=data_vars, coords=coords)
+    if style is not None:
+        ds.attrs["style"] = style
+    if batch_index is not None:
+        ds.attrs["batch_index"] = int(batch_index)
+    if query_point_name is not None:
+        ds.attrs["query_point_name"] = query_point_name
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(path)
+    return path
+
+
+def load_impact_vectors(path: str | Path) -> SavedImpactVectors:
+    """Loads a file :func:`save_impact_vectors` wrote. ``forecast_profile``/
+    ``isr_density``/``isr_altitude`` come back ``None`` when the file was
+    saved without them (a non-ISR query point), not as zero-filled
+    arrays."""
+    with xr.open_dataset(path) as ds:
+        ds.load()
+        labels = [str(x) for x in ds["entry"].values]
+        M = np.asarray(ds["impact"].values)
+        impacts_by_ro = {label: M[i] for i, label in enumerate(labels)}
+        altitude = np.asarray(ds["altitude"].values)
+        forecast_profile = np.asarray(ds["forecast_profile"].values) if "forecast_profile" in ds else None
+        isr_density = np.asarray(ds["isr_density"].values) if "isr_density" in ds else None
+        isr_altitude = np.asarray(ds["isr_altitude"].values) if "isr_altitude" in ds else None
+        style = ds.attrs.get("style")
+        batch_index = int(ds.attrs["batch_index"]) if "batch_index" in ds.attrs else None
+        query_point_name = ds.attrs.get("query_point_name")
+
+    return SavedImpactVectors(
+        impacts_by_ro=impacts_by_ro, altitude=altitude, forecast_profile=forecast_profile,
+        isr_density=isr_density, isr_altitude=isr_altitude,
+        style=style, batch_index=batch_index, query_point_name=query_point_name,
+    )
+
+
+def _save_fig(fig_or_ax, path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig = fig_or_ax.figure if hasattr(fig_or_ax, "figure") else fig_or_ax
+    fig.savefig(path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def replot_impact_vectors_from_saved(
+    path: str | Path, out_dir: str | Path, *, file_prefix: str | None = None, title_suffix: str | None = None,
+) -> list[Path]:
+    """Regenerates every plot ``package_run.py``'s per-batch impact-vector
+    helper would have produced, straight from a file :func:`save_impact_vectors`
+    wrote -- no diagnostic Gauss-Newton pass, no ensemble, no pipeline at
+    all, just the saved numbers replotted. This is the actual point of
+    persisting them: a plotting-only change should cost seconds, not the
+    hours the original diagnostic pass took at full scale."""
+    saved = load_impact_vectors(path)
+    out_dir = Path(out_dir)
+    prefix = file_prefix if file_prefix is not None else "impact_vectors"
+    name = saved.query_point_name or "query point"
+    suffix = f" ({title_suffix})" if title_suffix else ""
+    written: list[Path] = []
+
+    written.append(_save_fig(
+        plot_impact_vector_heatmap(saved.impacts_by_ro, saved.altitude, title=f"{name} impact vectors{suffix}"),
+        out_dir / f"{prefix}_heatmap.png",
+    ))
+    written.append(_save_fig(
+        plot_impact_vector_ranking(saved.impacts_by_ro, title=f"{name} impact ranking{suffix}"),
+        out_dir / f"{prefix}_ranking.png",
+    ))
+    written.append(_save_fig(
+        plot_impact_vector_ranking_relative_to_norm(
+            saved.impacts_by_ro, title=f"{name} impact ranking, relative to total change{suffix}",
+        ),
+        out_dir / f"{prefix}_ranking_relative_norm.png",
+    ))
+    written.append(_save_fig(
+        plot_impact_vector_ranking_relative_to_local_change(
+            saved.impacts_by_ro, saved.altitude,
+            title=f"{name} impact ranking, relative to local change{suffix}",
+        ),
+        out_dir / f"{prefix}_ranking_relative_local.png",
+    ))
+
+    if saved.forecast_profile is not None and saved.isr_density is not None and saved.isr_altitude is not None:
+        written.append(_save_fig(
+            plot_impact_vector_isr_alignment(
+                saved.impacts_by_ro, saved.forecast_profile, saved.isr_density, saved.isr_altitude, saved.altitude,
+                title=f"{name} ISR-alignment ranking{suffix}",
+            ),
+            out_dir / f"{prefix}_isr_alignment.png",
+        ))
+        written.append(_save_fig(
+            plot_impact_vector_isr_aligned_heatmap(
+                saved.impacts_by_ro, saved.forecast_profile, saved.isr_density, saved.isr_altitude, saved.altitude,
+                title=f"{name} ISR-aligned heatmap{suffix}",
+            ),
+            out_dir / f"{prefix}_isr_aligned_heatmap.png",
+        ))
+
+    return written
+
+
+def replot_impact_vectors_tree(root: str | Path) -> list[Path]:
+    """Convenience batch entry point: finds every ``*_data.nc`` file
+    :func:`save_impact_vectors` wrote under ``root`` (e.g. one of the
+    ``*_frac65_v2`` run directories) and regenerates its plots in place,
+    without touching the assimilation pipeline at all."""
+    root = Path(root)
+    written: list[Path] = []
+    for data_path in sorted(root.rglob("*_data.nc")):
+        saved = load_impact_vectors(data_path)
+        file_prefix = data_path.name[: -len("_data.nc")]
+        title_bits = [b for b in (saved.style, f"batch {saved.batch_index}" if saved.batch_index is not None else None) if b]
+        title_suffix = ", ".join(title_bits) if title_bits else None
+        written.extend(replot_impact_vectors_from_saved(
+            data_path, data_path.parent, file_prefix=file_prefix, title_suffix=title_suffix,
+        ))
+    return written
+
+
+# ===========================================================================
 # Output / visualization (plan Section 8). ``impacts_by_ro`` throughout is
 # ``{ro_label: (n_altitude,) impact profile}`` -- one query point's worth
 # of ``ImpactVectorAccumulator.finalize()`` output, already sliced down to
@@ -355,7 +533,7 @@ def plot_impact_vector_ranking_relative_to_local_change(
     floor = floor_frac * (float(np.abs(total).max()) or 1.0)
     mask = np.abs(total) >= floor
     weight = mask.astype(float)
-    denom = float(np.trapz(weight, altitude))
+    denom = float(np.trapezoid(weight, altitude))
 
     def _score(label: str) -> float:
         if denom == 0.0:
@@ -363,7 +541,7 @@ def plot_impact_vector_ranking_relative_to_local_change(
         contrib = np.asarray(impacts_by_ro[label], dtype=float)
         ratio = np.zeros_like(total)
         ratio[mask] = contrib[mask] / total[mask]
-        return float(np.trapz(np.abs(ratio) * weight, altitude) / denom)
+        return float(np.trapezoid(np.abs(ratio) * weight, altitude) / denom)
 
     labels = sorted(impacts_by_ro, key=lambda label: -_score(label))
     fractions = [100.0 * _score(label) for label in labels]
@@ -466,16 +644,29 @@ def rank_by_isr_alignment(
     ISR-correction direction (:func:`isr_correction_direction`), masked
     to the ISR instrument's own altitude coverage -- positive means that
     RO pushed the analysis *toward* the ISR-measured profile over the
-    covered band, negative means *away* from it. Returns
-    ``{ro_label: {"projection": signed scalar, "total_abs_impact": plain magnitude}}``
-    -- both reported together so "large but unhelpful" and "small but
-    unhelpful" stay distinguishable (plan Section 8)."""
+    covered band, negative means *away* from it. Also reports ``cosine``,
+    the same projection normalized by ``||impact||_2 * ||d||_2`` (both
+    norms over the same masked band) -- bounded to ``[-1, 1]`` regardless
+    of either vector's scale, so it is comparable across ROs, query
+    points, styles and batches the way the raw ``projection`` (whose
+    scale depends on both the entry's own magnitude and ISR's) is not.
+    Returns ``{ro_label: {"projection": signed scalar, "cosine": signed
+    scalar in [-1, 1], "total_abs_impact": plain magnitude}}`` -- all
+    three reported together so "large but unhelpful", "small but
+    unhelpful", and "well-aligned but small" stay distinguishable (plan
+    Section 8)."""
     d, mask = isr_correction_direction(forecast_profile, isr_density, isr_altitude, model_altitude)
+    d_norm = float(np.linalg.norm(d)) or 1.0
     result: dict[str, dict[str, float]] = {}
     for label, profile in impacts_by_ro.items():
         profile = np.asarray(profile, dtype=float)
-        projection = float(np.sum(np.where(mask, profile, 0.0) * d))
-        result[label] = {"projection": projection, "total_abs_impact": _total_abs_impact(profile)}
+        masked_profile = np.where(mask, profile, 0.0)
+        projection = float(np.sum(masked_profile * d))
+        profile_norm = float(np.linalg.norm(masked_profile)) or 1.0
+        cosine = projection / (profile_norm * d_norm)
+        result[label] = {
+            "projection": projection, "cosine": cosine, "total_abs_impact": _total_abs_impact(profile),
+        }
     return result
 
 
@@ -484,20 +675,25 @@ def plot_impact_vector_isr_alignment(
     isr_density: np.ndarray, isr_altitude: np.ndarray, model_altitude: np.ndarray, *,
     ax=None, figsize=(6, 6), title: str | None = None,
 ):
-    """Bar chart of :func:`rank_by_isr_alignment`'s signed ``projection``
-    per RO, ranked most-positive (most helpful toward ISR truth) to
-    most-negative (most harmful) -- diverging color by sign."""
+    """Bar chart of :func:`rank_by_isr_alignment`'s ``cosine`` (projection
+    normalized by ``||impact|| * ||d||``, bounded to ``[-1, 1]``) per RO,
+    ranked most-positive (most helpful toward ISR truth) to most-negative
+    (most harmful) -- diverging color by sign. Using ``cosine`` rather
+    than the raw ``projection`` keeps the bar lengths directly comparable
+    across ROs regardless of how large any one entry's own impact
+    happens to be (plan Section 8, 2026-11-06 follow-up)."""
     ranked = rank_by_isr_alignment(impacts_by_ro, forecast_profile, isr_density, isr_altitude, model_altitude)
-    labels = sorted(ranked, key=lambda label: -ranked[label]["projection"])
-    projections = [ranked[label]["projection"] for label in labels]
-    colors = ["#c0392b" if p >= 0 else "#2980b9" for p in projections]
+    labels = sorted(ranked, key=lambda label: -ranked[label]["cosine"])
+    cosines = [ranked[label]["cosine"] for label in labels]
+    colors = ["#c0392b" if c >= 0 else "#2980b9" for c in cosines]
 
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
-    ax.barh(labels, projections, color=colors)
+    ax.barh(labels, cosines, color=colors)
     ax.axvline(0.0, color="black", linewidth=0.8)
+    ax.set_xlim(-1.0, 1.0)
     ax.invert_yaxis()
-    ax.set_xlabel("Impact projected onto (ISR - forecast) direction\n(positive = toward ISR, negative = away)")
+    ax.set_xlabel("Cosine similarity: impact vs. (ISR - forecast) direction\n(+1 = fully toward ISR, -1 = fully away)")
     ax.set_title(title or "RO impact, ranked by alignment with ISR")
     return ax
 
@@ -521,7 +717,7 @@ def plot_impact_vector_isr_aligned_heatmap(
     sign_d = np.where(mask, np.sign(d), 0.0)
 
     ranked = rank_by_isr_alignment(impacts_by_ro, forecast_profile, isr_density, isr_altitude, model_altitude)
-    labels = sorted(impacts_by_ro, key=lambda label: -ranked[label]["projection"])
+    labels = sorted(impacts_by_ro, key=lambda label: -ranked[label]["cosine"])
 
     aligned = {}
     for label in labels:

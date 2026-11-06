@@ -41,6 +41,7 @@ from Assimilation_Cycle.impact_vectors import (
     plot_impact_vector_heatmap, plot_impact_vector_ranking, plot_impact_vector_ranking_cross_style,
     isr_correction_direction, rank_by_isr_alignment,
     plot_impact_vector_isr_alignment, plot_impact_vector_isr_aligned_heatmap,
+    save_impact_vectors, load_impact_vectors, replot_impact_vectors_from_saved, replot_impact_vectors_tree,
 )
 
 
@@ -384,6 +385,22 @@ class TestIsrAlignment:
         expected_mixed = 0.1e10 * 0.2e10 - 0.1e10 * 0.2e10 - 0.1e10 * 0.2e10 + 0.1e10 * 0.2e10
         np.testing.assert_allclose(ranked["RO_MIXED"]["projection"], expected_mixed, rtol=1e-6)
 
+    def test_cosine_is_bounded_and_exact_for_parallel_or_orthogonal_impacts(self):
+        """RO_TOWARD/RO_AWAY are exactly proportional to ``d`` (``+-0.5*d``)
+        -- cosine similarity for a vector with itself (or its negation)
+        is exactly +-1 regardless of either vector's scale, unlike the
+        raw ``projection`` whose magnitude depends on both. RO_MIXED is
+        exactly orthogonal to ``d`` (its projection is 0), so its cosine
+        is exactly 0 too."""
+        ranked = rank_by_isr_alignment(
+            self._impacts(), self.forecast_profile, self.isr_density, self.isr_altitude, self.model_altitude,
+        )
+        np.testing.assert_allclose(ranked["RO_TOWARD"]["cosine"], 1.0, rtol=1e-6)
+        np.testing.assert_allclose(ranked["RO_AWAY"]["cosine"], -1.0, rtol=1e-6)
+        np.testing.assert_allclose(ranked["RO_MIXED"]["cosine"], 0.0, atol=1e-12)
+        for key in ranked:
+            assert -1.0 - 1e-9 <= ranked[key]["cosine"] <= 1.0 + 1e-9
+
     def test_alignment_ranking_plot_orders_most_helpful_first(self):
         import matplotlib.pyplot as plt
         ax = plot_impact_vector_isr_alignment(
@@ -392,6 +409,21 @@ class TestIsrAlignment:
         labels = [t.get_text() for t in ax.get_yticklabels()]
         assert labels[0] == "RO_TOWARD"
         assert labels[-1] == "RO_AWAY"
+        plt.close("all")
+
+    def test_alignment_ranking_plot_bars_are_cosine_not_raw_projection(self):
+        """Bar lengths must be the bounded ``cosine`` metric (exactly
+        +-1 here), not the raw ``projection`` (which would be +-0.1e20
+        for these inputs) -- confirms the 2026-11-06 switch actually
+        took effect in the plotted values, not just in ``rank_by_isr_alignment``'s
+        returned dict."""
+        import matplotlib.pyplot as plt
+        ax = plot_impact_vector_isr_alignment(
+            self._impacts(), self.forecast_profile, self.isr_density, self.isr_altitude, self.model_altitude,
+        )
+        widths = [abs(patch.get_width()) for patch in ax.patches]
+        assert all(w <= 1.0 + 1e-9 for w in widths)
+        assert max(widths) == pytest.approx(1.0, rel=1e-6)
         plt.close("all")
 
     def test_aligned_heatmap_per_cell_values_match_sign_recoloring_exactly(self):
@@ -427,4 +459,89 @@ class TestIsrAlignment:
         M = np.ma.getmaskarray(mesh.get_array()).reshape(1, 6)
         assert M[0, 0] and M[0, -1]          # 50km, 900km: masked (outside coverage)
         assert not M[0, 1:5].any()           # 100..400km: not masked
+        plt.close("all")
+
+
+class TestSaveLoadReplotImpactVectors:
+    """The point of persisting these at all (user request, 2026-11-06):
+    a plotting-only change should regenerate every plot straight from a
+    saved file, with no diagnostic pass/ensemble/pipeline involved."""
+
+    altitude = np.array([100.0, 200.0, 300.0, 400.0])
+    impacts_by_ro = {"RO_A": np.array([1.0, 2.0, -1.0, 0.5]), "RO_B": np.array([-0.5, 0.0, 1.0, 2.0])}
+
+    def test_round_trip_without_isr_data_preserves_impacts_and_leaves_isr_fields_none(self, tmp_path):
+        path = save_impact_vectors(
+            tmp_path / "batch0000_data.nc", self.impacts_by_ro, self.altitude,
+            style="ANCHOR", batch_index=0, query_point_name="My Site",
+        )
+        saved = load_impact_vectors(path)
+        assert saved.style == "ANCHOR"
+        assert saved.batch_index == 0
+        assert saved.query_point_name == "My Site"
+        assert set(saved.impacts_by_ro) == set(self.impacts_by_ro)
+        for label in self.impacts_by_ro:
+            np.testing.assert_allclose(saved.impacts_by_ro[label], self.impacts_by_ro[label])
+        np.testing.assert_allclose(saved.altitude, self.altitude)
+        assert saved.forecast_profile is None
+        assert saved.isr_density is None
+        assert saved.isr_altitude is None
+
+    def test_round_trip_with_isr_data_preserves_it_exactly(self, tmp_path):
+        forecast_profile = np.array([1.0e10, 1.1e10, 1.2e10, 1.0e10])
+        isr_density = np.array([1.05e10, 1.25e10])
+        isr_altitude = np.array([150.0, 350.0])
+        path = save_impact_vectors(
+            tmp_path / "batch0000_data.nc", self.impacts_by_ro, self.altitude,
+            forecast_profile=forecast_profile, isr_density=isr_density, isr_altitude=isr_altitude,
+        )
+        saved = load_impact_vectors(path)
+        np.testing.assert_allclose(saved.forecast_profile, forecast_profile)
+        np.testing.assert_allclose(saved.isr_density, isr_density)
+        np.testing.assert_allclose(saved.isr_altitude, isr_altitude)
+
+    def test_replot_from_saved_without_isr_data_writes_only_the_four_non_isr_plots(self, tmp_path):
+        import matplotlib.pyplot as plt
+        data_path = save_impact_vectors(
+            tmp_path / "batch0000_data.nc", self.impacts_by_ro, self.altitude, query_point_name="My Site",
+        )
+        written = replot_impact_vectors_from_saved(data_path, tmp_path, file_prefix="batch0000")
+        names = {p.name for p in written}
+        assert names == {
+            "batch0000_heatmap.png", "batch0000_ranking.png",
+            "batch0000_ranking_relative_norm.png", "batch0000_ranking_relative_local.png",
+        }
+        for p in written:
+            assert p.exists() and p.stat().st_size > 0
+        plt.close("all")
+
+    def test_replot_from_saved_with_isr_data_also_writes_the_two_isr_plots(self, tmp_path):
+        import matplotlib.pyplot as plt
+        data_path = save_impact_vectors(
+            tmp_path / "batch0000_data.nc", self.impacts_by_ro, self.altitude, query_point_name="My Site",
+            forecast_profile=np.array([1.0e10, 1.1e10, 1.2e10, 1.0e10]),
+            isr_density=np.array([1.05e10, 1.25e10]), isr_altitude=np.array([150.0, 350.0]),
+        )
+        written = replot_impact_vectors_from_saved(data_path, tmp_path, file_prefix="batch0000")
+        names = {p.name for p in written}
+        assert "batch0000_isr_alignment.png" in names
+        assert "batch0000_isr_aligned_heatmap.png" in names
+        plt.close("all")
+
+    def test_replot_tree_finds_and_regenerates_every_saved_file_under_root(self, tmp_path):
+        import matplotlib.pyplot as plt
+        (tmp_path / "ANCHOR" / "impact_vectors" / "Site A").mkdir(parents=True)
+        (tmp_path / "PCA_1D_10ex" / "impact_vectors" / "Site A").mkdir(parents=True)
+        save_impact_vectors(
+            tmp_path / "ANCHOR" / "impact_vectors" / "Site A" / "batch0000_data.nc",
+            self.impacts_by_ro, self.altitude, style="ANCHOR", batch_index=0, query_point_name="Site A",
+        )
+        save_impact_vectors(
+            tmp_path / "PCA_1D_10ex" / "impact_vectors" / "Site A" / "batch0000_data.nc",
+            self.impacts_by_ro, self.altitude, style="PCA_1D_10ex", batch_index=0, query_point_name="Site A",
+        )
+        written = replot_impact_vectors_tree(tmp_path)
+        assert len(written) == 8   # 4 non-ISR plots x 2 saved files
+        assert (tmp_path / "ANCHOR" / "impact_vectors" / "Site A" / "batch0000_ranking.png").exists()
+        assert (tmp_path / "PCA_1D_10ex" / "impact_vectors" / "Site A" / "batch0000_ranking.png").exists()
         plt.close("all")
