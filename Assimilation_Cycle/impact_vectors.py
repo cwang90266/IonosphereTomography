@@ -304,6 +304,82 @@ def plot_impact_vector_ranking(
     return ax
 
 
+def _total_change_profile(impacts_by_ro: dict[str, np.ndarray]) -> np.ndarray:
+    """The additive reconstruction of the actual (diagnostic-pass)
+    analysis change at this query point: summing every RO/IGS entry's
+    own contribution recovers the total change, since the decomposition
+    in :class:`ImpactVectorAccumulator` is additive by construction
+    (plan Section 3)."""
+    profiles = [np.asarray(p, dtype=float) for p in impacts_by_ro.values()]
+    return np.sum(profiles, axis=0) if profiles else np.array([])
+
+
+def plot_impact_vector_ranking_relative_to_norm(
+    impacts_by_ro: dict[str, np.ndarray], *, ax=None, figsize=(6, 6), title: str | None = None,
+):
+    """Same ranking as :func:`plot_impact_vector_ranking`, but as a
+    fraction (%) of ``||total change||_2`` instead of raw m^-3 --
+    unitless, so magnitudes become comparable across query points,
+    styles, and batches regardless of how large the overall analysis
+    correction happened to be at this particular point."""
+    total = _total_change_profile(impacts_by_ro)
+    total_norm = float(np.linalg.norm(total)) or 1.0
+    labels = sorted(impacts_by_ro, key=lambda label: -float(np.linalg.norm(impacts_by_ro[label])))
+    fractions = [100.0 * float(np.linalg.norm(impacts_by_ro[label])) / total_norm for label in labels]
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+    ax.barh(labels, fractions, color="C0")
+    ax.invert_yaxis()
+    ax.set_xlabel(r"$\|\mathrm{impact}\|_2 \,/\, \|\mathrm{total\ EDP\ change}\|_2$ (%)")
+    ax.set_title(title or "RO impact ranking, relative to total change norm")
+    return ax
+
+
+def plot_impact_vector_ranking_relative_to_local_change(
+    impacts_by_ro: dict[str, np.ndarray], altitude: np.ndarray, *,
+    floor_frac: float = 0.05, ax=None, figsize=(6, 6), title: str | None = None,
+):
+    """A second, altitude-resolved relative metric: at every altitude
+    ``h`` where the total change is resolvable (``|total(h)| >=
+    floor_frac * max|total|`` -- guards against dividing by near-zero
+    where the analysis barely moved at all), the local fraction
+    ``contrib_ell(h) / total(h)`` is computed, then altitude-weighted
+    (trapezoidal) averaged over that span into one number per RO/IGS
+    entry. Unlike :func:`plot_impact_vector_ranking_relative_to_norm`
+    (one global denominator), this rewards an entry that dominates the
+    change within even a narrow altitude band, not only one with the
+    largest overall-column impact."""
+    altitude = np.asarray(altitude, dtype=float)
+    total = _total_change_profile(impacts_by_ro)
+    floor = floor_frac * (float(np.abs(total).max()) or 1.0)
+    mask = np.abs(total) >= floor
+    weight = mask.astype(float)
+    denom = float(np.trapz(weight, altitude))
+
+    def _score(label: str) -> float:
+        if denom == 0.0:
+            return 0.0
+        contrib = np.asarray(impacts_by_ro[label], dtype=float)
+        ratio = np.zeros_like(total)
+        ratio[mask] = contrib[mask] / total[mask]
+        return float(np.trapz(np.abs(ratio) * weight, altitude) / denom)
+
+    labels = sorted(impacts_by_ro, key=lambda label: -_score(label))
+    fractions = [100.0 * _score(label) for label in labels]
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+    ax.barh(labels, fractions, color="C0")
+    ax.invert_yaxis()
+    ax.set_xlabel(
+        "Altitude-mean |local impact / local total change| (%),\n"
+        f"over altitudes where |total change| >= {floor_frac:.0%} of its column max"
+    )
+    ax.set_title(title or "RO impact ranking, relative to local change")
+    return ax
+
+
 def plot_impact_vector_ranking_cross_style(
     impacts_by_ro_by_style: dict[str, dict[str, np.ndarray]], *,
     ax=None, figsize=(8, 6), title: str | None = None,
