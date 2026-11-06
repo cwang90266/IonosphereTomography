@@ -319,11 +319,11 @@ already run -- it has no dependency on the 4th style. See Section 9 for
 the full picture (both ISR use cases, the basis-build procedure, and a
 worked example).
 
-### Per-RO/IGS impact vectors (opt-in, default off)
+### Per-RO/IGS impact vectors (on by default)
 
 | field | default | meaning |
 |---|---|---|
-| `compute_impact_vectors` | `False` | `True` adds, per batch per style, a second `centering="mean"`-forced diagnostic analysis pass (one more full Gauss-Newton solve -- real added compute, the same cost class as the production analysis itself) purely to attribute the analysis change at each query point back to the individual RO/IGS entries that produced it. Never alters the production analysis. |
+| `compute_impact_vectors` | `True` | adds, per batch per style, a second `centering="mean"`-forced diagnostic analysis pass (one more full Gauss-Newton solve -- real added compute, the same cost class as the production analysis itself) purely to attribute the analysis change at each query point back to the individual RO/IGS entries that produced it. Never alters the production analysis. Note this only does anything (and only costs anything) when there's at least one query point -- i.e. `isr_file_path` is set, or `impact_vector_query_points` is non-empty; otherwise it's a no-op even when `True`. Set `False` to skip the extra pass even when a query point is configured. |
 | `impact_vector_query_points` | `None` | explicit `(name, lat, lon)` query points; altitudes are always the full model grid. `None`/empty is fine when `isr_file_path` is set (see below) and no additional points are wanted. |
 
 When `isr_file_path` is also set, that station's `(name, lat, lon)` is
@@ -1056,7 +1056,7 @@ and ~85 minutes for the boosted run at this scale (Section 6) -- do a
 smoke test at small `n_ensemble` first if this is your first run against
 new data or a new region.
 
-## 11. Per-RO/IGS impact vectors (opt-in, default off)
+## 11. Per-RO/IGS impact vectors (on by default)
 
 Full math/derivation lives in `Impact_Vector_Plan.md`; this section is
 just how to turn it on and what you get.
@@ -1072,9 +1072,12 @@ confirmed acceptable by the user, see the plan's Decision 1), scoped to
 one batch at a time (no cross-batch accumulation).
 
 **Cost**: real, not free -- one extra full Gauss-Newton solve per batch
-per style, the same cost class as the production analysis itself.
-Leave `compute_impact_vectors` off (the default) unless you actually
-want this output.
+per style, the same cost class as the production analysis itself --
+but only incurred when there's at least one query point configured
+(`isr_file_path` set, or `impact_vector_query_points` non-empty); with
+neither, `compute_impact_vectors=True` (the default) is a no-op. Set
+`compute_impact_vectors=False` to skip the extra pass even when a
+query point is configured.
 
 **Minimal example**, building on Section 2's single-cycle setup:
 
@@ -1082,7 +1085,7 @@ want this output.
 cfg = CycleConfig(
     ...,
     isr_file_path="/path/to/your_isr_file.nc",   # its station becomes a query point automatically
-    compute_impact_vectors=True,
+    # compute_impact_vectors=True is already the default
     # impact_vector_query_points=[("My extra site", 45.0, -75.0)],   # optional, additional points
 )
 result = run_package(cfg)

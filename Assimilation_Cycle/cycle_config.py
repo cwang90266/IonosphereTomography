@@ -420,19 +420,22 @@ class CycleConfig:
     ``[p, 100-p]`` percentile band instead (less sensitive to a single
     outlier scan, at the cost of no longer being a literal bound)."""
 
-    # --- Per-RO/IGS impact vectors (opt-in; Impact_Vector_Plan.md Section 10) ---
-    compute_impact_vectors: bool = False
-    """``False`` (default): no behavior change, no extra compute. ``True``
-    adds, per batch per style, a second ``centering="mean"``-forced
-    diagnostic ``AnalysisEngine.analyze()`` pass over the exact same
-    forecast ensemble/observations/``R`` the production batch already
-    used (one more full Gauss-Newton solve -- the same cost class as the
-    production analysis itself, not a multiplier on everything else --
-    see ``Impact_Vector_Plan.md`` Section 7), purely to attribute the
-    analysis change at each configured query point back to the individual
-    RO/IGS entries that produced it. That pass's own result is discarded
-    except for what ``impact_vectors.ImpactVectorAccumulator`` extracts
-    from it -- it never alters the production analysis."""
+    # --- Per-RO/IGS impact vectors (on by default; Impact_Vector_Plan.md Section 10) ---
+    compute_impact_vectors: bool = True
+    """``True`` (default): adds, per batch per style, a second
+    ``centering="mean"``-forced diagnostic ``AnalysisEngine.analyze()``
+    pass over the exact same forecast ensemble/observations/``R`` the
+    production batch already used (one more full Gauss-Newton solve --
+    the same cost class as the production analysis itself, not a
+    multiplier on everything else -- see ``Impact_Vector_Plan.md``
+    Section 7), purely to attribute the analysis change at each
+    configured query point back to the individual RO/IGS entries that
+    produced it. That pass's own result is discarded except for what
+    ``impact_vectors.ImpactVectorAccumulator`` extracts from it -- it
+    never alters the production analysis. Set ``False`` to skip this
+    extra pass entirely (no behavior change, no extra compute) -- e.g.
+    for a quick run with no query points configured and no ISR file, or
+    when minimizing wall time matters more than the attribution plots."""
     impact_vector_query_points: list[tuple[str, float, float]] | None = None
     """Explicit ``(name, lat, lon)`` query points for the impact-vector
     feature above (altitudes default to ``edp_samples.altitude``, the
