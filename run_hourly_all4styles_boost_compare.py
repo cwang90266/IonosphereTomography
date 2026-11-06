@@ -3,20 +3,15 @@
 """
 Run one-hour RO-only assimilation windows over a requested UTC interval,
 with a cached reference-run IRI ensemble when available (otherwise a fresh IRI2020 ensemble), preserving run_package's
-normal outputs and using its native multi-ISR comparison products for Tromso + Svalbard.
+normal outputs and automatically selecting ISR validation stations that lie inside the current ROI.
 
-Main additions per successful one-hour slot, per style:
-  1) dual_isr_ne_comparison.png
-       forecast mean +/-1 std, analysis mean +/-1 std,
-       nearest Tromso ISR profile, nearest Svalbard ISR profile,
-       title includes number of RO occultation profiles and TEC rays used.
-  2) dual_isr_rmse_by_altitude.png
-       analysis error/RMSE-by-native-altitude-gate against Tromso (red)
-       and Svalbard (green). No extrapolation beyond each ISR's native gates.
+For each hour, ISR validation stations are selected automatically from
+TRO/SVL/MIL based on whether the station lies inside the configured ROI.
+Only stations with an in-hour ISR profile are used for that hour.
 
 Hours are assimilated only when BOTH conditions are met:
-  - at least one in-hour ISR profile is available from Tromso or Svalbard;
-  - at least 5 accepted RO occultation profiles are available.
+  - at least one active ISR station has an in-hour profile;
+  - the scaled minimum number of accepted RO occultation profiles is available.
 
 Skipped hours leave no hourly tomography folder. The daily status CSV keeps
 one cumulative row per requested hour, including RO counts, ISR availability,
@@ -61,7 +56,7 @@ The default run compares ALL FOUR parameterization styles:
 
 and, for every style, BOTH covariance conditions:
   - no_boost
-  - boosted (diagonal boost amplitude=0.35 in log10-density space)
+  - boosted (diagonal boost amplitude set by BOOST_AMPLITUDE)
 
 Therefore every successful one-hour slot runs 8 filter cases total.
 
@@ -80,10 +75,7 @@ from __future__ import annotations
 # EDPSamples IRI execution uses tempfile.TemporaryDirectory() for scratch files.
 
 import argparse
-import contextlib
 import csv
-import fcntl
-import os
 import gc
 import shutil
 import subprocess
@@ -104,11 +96,36 @@ import pandas as pd
 
 
 # =============================================================================
-# Repository / fixed project paths
+# USER CONFIGURATION
+# === EDIT HERE ONLY ===
 # =============================================================================
 
-REPO = Path("/home/knelson/src/IonosphereTomography")  # ===Edit here===
-# Four "Edit here" in total, no trailing "/"
+# Project / data paths. I made it to match the server branch you have, please check if they're correct
+REPO = Path("/home/knelson/src/IonosphereTomography")  # === Edit here ===
+RO_ROOT = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/podTc2")  # === Edit here ===
+ISR_DIR = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/ISR_data")  # === Edit here ===
+OUTPUT_ROOT = Path("/mnt/tmp-sbem-ionosphere-tomography/tomography_output")  # === Edit here ===
+
+# Tomography center: switch between "MIL", "TRO", and "SVL". center lat lon will auto update below yo!
+CENTER_SITE = "MIL"  # === Edit here ===  switch between MIL/TRO/SVL
+
+# Campaign date range used in LABEL_OF_EACH_RUN and RUN_MESSAGE.Example below becomes "oct1417_2025".
+RUN_DATE_RANGE = ("2025-08-25", "2025-08-29")  # === Edit here ===
+
+# Observation ROI radius, also dynamic to run label and message
+ROI_RADIUS_KM = 2000.0  # === Edit here ===
+
+# Diagonal covariance boost amplitude. Example 0.3 becomes "Op3Boost" in the label.
+BOOST_AMPLITUDE = 0.3  # === Edit here ===
+
+# Optional reference-run label for reusing the exact hourly IRI ensemble.
+# Set "" or None to disable reference-IRI reuse.
+REFERENCE_RUN_LABEL = ""  # === Edit here ===
+
+
+# =============================================================================
+# Derived configuration -- Don't need to edit for normal runs
+# =============================================================================
 
 for _p in (
     REPO,
@@ -132,23 +149,94 @@ from Ensemble_Kalman_Engine import EnsembleState
 from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
 
 
-RO_ROOT = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/podTc2")  # ===Edit here===
-ISR_DIR = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/ISR_data")  # ===Edit here===
+# Center coordinates are selected only from CENTER_SITE above.
+CENTER_COORDS = {
+    "MIL": (42.6195, -71.4917),  # Millstone Hill
+    "TRO": (69.6000, 19.2000),   # Tromso
+    "SVL": (78.1530, 16.0290),   # Svalbard
+}
+
+CENTER_SITE = str(CENTER_SITE).strip().upper()
+if CENTER_SITE not in CENTER_COORDS:
+    raise ValueError(
+        f"CENTER_SITE must be one of {sorted(CENTER_COORDS)}, got {CENTER_SITE!r}"
+    )
+
+CENTER_LAT, CENTER_LON = CENTER_COORDS[CENTER_SITE]
+
+
+def _run_range_tag(date_range: tuple[str, str]) -> str:
+    """Convert ('2025-10-14','2025-10-17') -> 'oct1417_2025'."""
+    if len(date_range) != 2:
+        raise ValueError("RUN_DATE_RANGE must contain exactly (start_date, end_date)")
+
+    start = datetime.strptime(str(date_range[0]), "%Y-%m-%d")
+    end = datetime.strptime(str(date_range[1]), "%Y-%m-%d")
+
+    if end < start:
+        raise ValueError("RUN_DATE_RANGE end date must be >= start date")
+
+    mon1 = start.strftime("%b").lower()
+    mon2 = end.strftime("%b").lower()
+
+    if start.year == end.year and start.month == end.month:
+        return f"{mon1}{start.day:02d}{end.day:02d}_{start.year}"
+
+    if start.year == end.year:
+        return f"{mon1}{start.day:02d}{mon2}{end.day:02d}_{start.year}"
+
+    return (
+        f"{mon1}{start.day:02d}_{start.year}_"
+        f"{mon2}{end.day:02d}_{end.year}"
+    )
+
+
+def _boost_tag(amplitude: float) -> str:
+    """
+    Compact label form requested for the run name:
+      0.3  -> Op3
+      0.35 -> Op35
+      1.2  -> 1p2
+    """
+    value = f"{float(amplitude):g}"
+    if value.startswith("0."):
+        return "Op" + value[2:]
+    return value.replace(".", "p").replace("-", "m")
+
+
+RUN_RANGE_TAG = _run_range_tag(RUN_DATE_RANGE)
+BOOST_TAG = _boost_tag(BOOST_AMPLITUDE)
+
+# Example:
+#   MIL_oct1417_2025_ROI2000kmRadius_Op3Boost
+LABEL_OF_EACH_RUN = (
+    f"{CENTER_SITE}_{RUN_RANGE_TAG}_"
+    f"ROI{ROI_RADIUS_KM:g}kmRadius_{BOOST_TAG}Boost"
+)
+
+# Keep the run message synchronized automatically with the generated label.
+RUN_MESSAGE = LABEL_OF_EACH_RUN # ===Edit here (maybe not, Kevin)===
+# The run messges will just be label by default, if nothing special, can just leave it alone
+
+
 TRO_ISR_FILE = ISR_DIR / "TROISR2025_nonan.nc"
 SVL_ISR_FILE = ISR_DIR / "SVLISR2025_nonan.nc"
+MIL_ISR_FILE = ISR_DIR / "MILISR2025_nonan.nc"
+
+# All supported ISR validation inputs. The driver automatically uses only
+# stations whose site lies inside the current tomography ROI.
+ISR_FILES = {
+    "TRO": TRO_ISR_FILE,
+    "SVL": SVL_ISR_FILE,
+    "MIL": MIL_ISR_FILE,
+}
 
 # PCA_1D_10ex_ISR training artifacts.
-# ONLY Tromso feeds these files. Svalbard is validation-only.
+# IMPORTANT: this remains TRO-trained regardless of CENTER_SITE.
+# TRO/SVL/MIL selection above controls tomography center / validation only.
 TRO_ISR_EXTENDED_FILE = ISR_DIR / "TROISR2025_nonan_extended.nc"
 TRO_ISR_PCA_BASIS_FILE = ISR_DIR / "TROISR2025_nonan_pca_basis.nc"
 
-OUTPUT_ROOT = Path("/mnt/tmp-sbem-ionosphere-tomography/tomography_output") # ===Edit here===
-#OUTPUT_ROOT = Path("/home/pyxis/Test/2026-10-13_ionosphere_tomography/tomography_output") # =Edit here=
-
-# Three optional Edit here, the label name, the reference label name, and the run message.
-LABEL_OF_EACH_RUN = "oct2025_ROI4000kmRadius_0p3Boost"  # label name ===Edit here===
-REFERENCE_RUN_LABEL = ""  #ref label name; set "" or None to disable IRI reuse
-RUN_MESSAGE = "Run 2025-10-14 through 2025-10-17 hourly with ROI radius = 4000 km and 0.3 boost"  # ===Edit here===
 
 DEFAULT_STYLES = [
     "ANCHOR",
@@ -169,7 +257,6 @@ DEFAULT_HYPER_PARAMS = {
     "PCA_1D_10ex": {"retaining_threshold": 0.99999},
 }
 
-BOOST_AMPLITUDE = 0.3
 
 RUN_CONDITIONS = [
     {
@@ -188,11 +275,7 @@ RUN_CONDITIONS = [
     },
 ]
 
-# Keep the same Tromso-centered tomography region used in the current run_test.
-CENTER_LAT = 69.6
-CENTER_LON = 19.2
 
-ROI_RADIUS_KM = 4000.0 # === Edit here ===
 GRID_RADIUS_DEG = 18.0 * (ROI_RADIUS_KM / 2000.0)
 
 # Scale minimum RO count with ROI area.
@@ -209,10 +292,9 @@ OBS_SIGMA_TECU = 5.0
 ANALYSIS_RNG_SEED = 777
 
 # Diagonal covariance boost configuration.
-
 BOOST_TAPER_START_KM = 400.0
 BOOST_TAPER_END_KM = 700.0
-BOOST_TAPER_FLOOR = 1.0/7.0  # 0.142857..., so 0.35 * floor = 0.05
+BOOST_TAPER_FLOOR = 1.0/7.0
 
 IRI_SPREAD_KWARGS = {
     "hour_sample_range": 3,
@@ -239,70 +321,6 @@ RO_KWARGS_TEMPLATE = {
 # =============================================================================
 # Helpers
 # =============================================================================
-
-# =============================================================================
-# Concurrency helpers (many copies of this script run at once under
-# GNU parallel, all writing under the same OUTPUT_ROOT)
-# =============================================================================
-
-# Locks live on a LOCAL filesystem: flock() is unreliable on NFS/CIFS mounts
-# such as OUTPUT_ROOT. All jobs must run on the same host for these to work.
-LOCK_ROOT = Path(
-    os.environ.get("TOMO_LOCK_DIR", "/tmp/ionosphere_tomography_locks")
-)
-
-
-def _open_lock(name: str):
-    LOCK_ROOT.mkdir(parents=True, exist_ok=True)
-    return open(LOCK_ROOT / f"{name}.lock", "a")
-
-
-@contextlib.contextmanager
-def file_lock(name: str):
-    """Blocking exclusive lock, for short read-modify-write sections."""
-    fh = _open_lock(name)
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        yield
-    finally:
-        fh.close()  # closing releases the lock
-
-
-def try_hour_lock(name: str):
-    """Non-blocking lock. Returns an open handle (keep it!) or None if taken."""
-    fh = _open_lock(name)
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        fh.close()
-        return None
-    return fh
-
-
-def release_lock(fh) -> None:
-    if fh is not None:
-        fh.close()
-
-
-def atomic_write(write_fn, path) -> None:
-    """
-    Call write_fn(tmp_path) and rename the result onto path, so readers never
-    see a half-written file and an existing file is never truncated in place.
-    The temp file sits in the same directory, so os.replace() is atomic.
-    """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.stem}.{os.getpid()}.tmp{path.suffix}")
-    try:
-        write_fn(str(tmp))
-        os.replace(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
-
-
-def atomic_to_csv(df: pd.DataFrame, path) -> None:
-    atomic_write(lambda t: df.to_csv(t, index=False), path)
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -479,7 +497,7 @@ def save_canonical_hour_edp(
     # Directly refresh this label/hour's canonical cache with the exact
     # unboosted base ensemble used by this run. Reusing the same run label
     # after changing setup therefore cannot leave a stale cache behind.
-    atomic_write(edp_samples.saveNetCDF, path)
+    edp_samples.saveNetCDF(str(path))
 
     return path
 
@@ -516,6 +534,63 @@ def interp_log10(x_new: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
     logy = np.log10(np.clip(y, 1.0, None))
     out = np.interp(x_new, x, logy, left=np.nan, right=np.nan)
     return 10.0 ** out
+
+
+def great_circle_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two geographic points."""
+    r_earth_km = 6371.0
+    p1 = np.deg2rad(float(lat1))
+    p2 = np.deg2rad(float(lat2))
+    dlat = np.deg2rad(float(lat2) - float(lat1))
+    dlon = np.deg2rad(float(lon2) - float(lon1))
+    a = (
+        np.sin(dlat / 2.0) ** 2
+        + np.cos(p1) * np.cos(p2) * np.sin(dlon / 2.0) ** 2
+    )
+    return float(2.0 * r_earth_km * np.arcsin(np.sqrt(a)))
+
+
+def load_isr_registry() -> tuple[dict, dict]:
+    """
+    Load every available ISR input file, then select validation stations by ROI.
+
+    Missing validation files are allowed. PCA_1D_10ex_ISR training remains
+    a separate TRO-basis concern handled by ensure_tro_isr_pca_basis().
+    """
+    datasets = {}
+    active = {}
+
+    print("Loading ISR validation registry...")
+    for code, path in ISR_FILES.items():
+        if not path.is_file():
+            print(f"  {code}: file not found -> validation unavailable ({path})")
+            continue
+
+        ds = load_isr_dataset(path)
+        datasets[code] = ds
+        distance_km = great_circle_distance_km(
+            CENTER_LAT, CENTER_LON, ds.station.lat, ds.station.lon
+        )
+        in_roi = distance_km <= ROI_RADIUS_KM
+
+        print(
+            f"  {code}: {ds.station.name}, {len(ds.time)} profiles, "
+            f"{ds.altitude.min():.1f}-{ds.altitude.max():.1f} km, "
+            f"distance={distance_km:.0f} km -> "
+            f"{'ACTIVE' if in_roi else 'outside ROI / ignored'}"
+        )
+
+        if in_roi:
+            active[code] = ds
+
+    if not active:
+        raise RuntimeError(
+            "No ISR validation station lies inside the current tomography ROI. "
+            f"Center=({CENTER_LAT:.4f}, {CENTER_LON:.4f}), "
+            f"ROI_RADIUS_KM={ROI_RADIUS_KM:g}."
+        )
+
+    return datasets, active
 
 
 def nearest_profile_in_hour(isr, start: datetime, end: datetime):
@@ -726,7 +801,7 @@ class _NoArtifactRunContext:
                     Path(cfg.edp_samples_output_path).parent.mkdir(
                         parents=True, exist_ok=True
                     )
-                    atomic_write(edp.saveNetCDF, cfg.edp_samples_output_path)
+                    edp.saveNetCDF(cfg.edp_samples_output_path)
                 return edp
 
             if output_mode == "minimal":
@@ -745,9 +820,7 @@ class _NoArtifactRunContext:
                 captured[str(style)] = pes
 
             if output_mode == "all":
-                return atomic_write(
-                    lambda t: orig_save_parameterized(pes, t), path
-                )
+                return orig_save_parameterized(pes, path)
             return None
 
         def _skip_ensemble_nc(*args, **kwargs):
@@ -808,8 +881,7 @@ def make_run_cfg(
     hyper_params_by_style: dict,
     isr_pca_basis_path: Path | None,
     condition: dict,
-    tro_isr_available: bool,
-    svl_isr_available: bool,
+    active_hour_isr_files: dict[str, Path],
     base_edp_samples_path: Path | None = None,
 ) -> CycleConfig:
     ro_kwargs = dict(RO_KWARGS_TEMPLATE)
@@ -855,15 +927,19 @@ def make_run_cfg(
         ro_kwargs=ro_kwargs,
         # Reuse the exact accepted/QC'd RO set from the precheck.
         ro_observations_path=str(ro_observations_path),
-        # Run the package's EXISTING ISR comparison machinery only for ISR
-        # stations that actually have an Ne profile inside this one-hour window.
-        # TRO keeps the historical untagged folder naming; SVL uses the "svl"
-        # tag and gets the exact same nearest-point/range/pooled-RMSE products.
+        # Run package ISR comparison only for stations that are both inside
+        # the current tomography ROI and have an Ne profile in this hour.
         isr_file_path=(
-            str(TRO_ISR_FILE) if tro_isr_available else None
+            str(next(iter(active_hour_isr_files.values())))
+            if active_hour_isr_files else None
         ),
         additional_isr_file_paths=(
-            {"svl": str(SVL_ISR_FILE)} if svl_isr_available else {}
+            {
+                code.lower(): str(path)
+                for code, path in list(active_hour_isr_files.items())[1:]
+            }
+            if len(active_hour_isr_files) > 1
+            else {}
         ),
         isr_range_percentile=0.0,
         diagonal_boost_amplitude=condition["diagonal_boost_amplitude"],
@@ -1182,13 +1258,6 @@ def update_each_run_setting_csv(args: argparse.Namespace) -> Path:
 
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-    # Every parallel job updates this one file: serialize the whole
-    # read-modify-write, or concurrent jobs silently drop each other's rows.
-    with file_lock("each_run_setting"):
-        return _update_each_run_setting_csv_locked(path, row, setting_columns)
-
-
-def _update_each_run_setting_csv_locked(path, row, setting_columns) -> Path:
     if path.exists():
         try:
             df = pd.read_csv(path)
@@ -1240,7 +1309,7 @@ def _update_each_run_setting_csv_locked(path, row, setting_columns) -> Path:
         c for c in df.columns if c not in row
     ]
     df = df[ordered]
-    atomic_to_csv(df, path)
+    df.to_csv(path, index=False)
     return path
 
 
@@ -1271,12 +1340,6 @@ def save_daily_ro_status(rows: list[dict], day: datetime, run_output_root: Path)
 
     run_output_root.mkdir(parents=True, exist_ok=True)
 
-    # One daily file is shared by every hourly job for that date.
-    with file_lock(f"status_{run_output_root.name}_{day:%Y-%m-%d}"):
-        return _save_daily_ro_status_locked(path, new_df)
-
-
-def _save_daily_ro_status_locked(path: Path, new_df: pd.DataFrame) -> Path:
     if path.exists():
         try:
             old_df = pd.read_csv(path)
@@ -1307,7 +1370,7 @@ def _save_daily_ro_status_locked(path: Path, new_df: pd.DataFrame) -> Path:
         kind="stable",
     ).reset_index(drop=True)
 
-    atomic_to_csv(combined, path)
+    combined.to_csv(path, index=False)
     return path
 
 
@@ -1334,11 +1397,9 @@ def main():
     args = parse_args()
     day = validate_args(args)
 
-    if not TRO_ISR_FILE.exists():
-        raise FileNotFoundError(TRO_ISR_FILE)
-    if not SVL_ISR_FILE.exists():
-        raise FileNotFoundError(SVL_ISR_FILE)
-
+    # ISR validation files are loaded through the registry below.
+    # Missing station files do not stop the run unless no available ISR lies
+    # inside the selected ROI.
     ro_dir = ro_day_dir(day)
     if not ro_dir.is_dir():
         raise FileNotFoundError(
@@ -1375,17 +1436,14 @@ def main():
     print(f"Grid radius           : {GRID_RADIUS_DEG:g} deg")
     print(f"Minimum accepted RO   : {MIN_RO_PROFILES}")
 
-    # The first job builds the shared TRO extension/PCA basis if missing;
-    # the others wait here and then reuse the finished files.
-    with file_lock("tro_isr_pca_basis"):
-        isr_pca_basis_path = ensure_tro_isr_pca_basis(
-            args.isr_pca_basis,
-            args.styles,
-            rebuild_basis=args.rebuild_tro_pca_basis,
-        )
-        hyper_params_by_style = build_hyper_params_by_style(
-            args.styles, isr_pca_basis_path
-        )
+    isr_pca_basis_path = ensure_tro_isr_pca_basis(
+        args.isr_pca_basis,
+        args.styles,
+        rebuild_basis=args.rebuild_tro_pca_basis,
+    )
+    hyper_params_by_style = build_hyper_params_by_style(
+        args.styles, isr_pca_basis_path
+    )
 
     if isr_pca_basis_path is not None:
         print("ISR-derived PCA basis:", isr_pca_basis_path)
@@ -1412,43 +1470,19 @@ def main():
     else:
         print("  All package artifacts enabled.")
 
-    print("Loading ISR validation files once...")
-    tro = load_isr_dataset(TRO_ISR_FILE)
-    svl = load_isr_dataset(SVL_ISR_FILE)
-    print(
-        f"  TRO: {tro.station.name}, {len(tro.time)} profiles, "
-        f"{tro.altitude.min():.1f}-{tro.altitude.max():.1f} km"
-    )
-    print(
-        f"  SVL: {svl.station.name}, {len(svl.time)} profiles, "
-        f"{svl.altitude.min():.1f}-{svl.altitude.max():.1f} km"
-    )
+    isr_datasets, active_isr_datasets = load_isr_registry()
+    print("Active ISR validation station(s):", ", ".join(active_isr_datasets))
 
     hourly_rows: list[dict] = []
     mode_timing_rows: list[dict] = []
     daily_ro_status_rows: list[dict] = []
     total_t0 = time.perf_counter()
-    hour_lock = None
-    n_hours_locked_out = 0
 
     for hour in range(args.start_hour, args.end_hour):
         start = day + timedelta(hours=hour)
         end = start + timedelta(hours=1)
         folder = hour_folder_name(start, end)
         hour_dir = RUN_OUTPUT_ROOT / folder
-
-        # Only one process may work on a given label/hour at a time. Two
-        # processes on the same hour write the same files, which is what
-        # causes the PermissionError / FileNotFoundError collisions.
-        release_lock(hour_lock)
-        hour_lock = try_hour_lock(f"hour_{LABEL_OF_EACH_RUN}_{folder}")
-        if hour_lock is None:
-            n_hours_locked_out += 1
-            print(
-                f"SKIP {hour_label(start, end)}: another process is already "
-                f"running this hour for label {LABEL_OF_EACH_RUN!r}"
-            )
-            continue
 
         print("\n" + "=" * 96)
         print(f"HOUR: {hour_label(start, end)}")
@@ -1488,19 +1522,30 @@ def main():
                 # availability for every requested hour, even if no ISR exists.
                 skipped_for_ro = (n_ro < MIN_RO_PROFILES or n_tec == 0)
 
-                # After RO precheck, determine whether either ISR has an Ne
-                # profile inside this same one-hour window.
-                tro_match = nearest_profile_in_hour(tro, start, end)
-                svl_match = nearest_profile_in_hour(svl, start, end)
-                tro_isr_available = tro_match is not None
-                svl_isr_available = svl_match is not None
-                n_isr_stations = int(tro_isr_available) + int(svl_isr_available)
+                # Match only ISR stations that lie inside the current ROI.
+                isr_matches = {
+                    code: nearest_profile_in_hour(ds, start, end)
+                    for code, ds in active_isr_datasets.items()
+                }
+                active_hour_isr = {
+                    code: active_isr_datasets[code]
+                    for code, match in isr_matches.items()
+                    if match is not None
+                }
+                active_hour_isr_files = {
+                    code: ISR_FILES[code]
+                    for code in active_hour_isr
+                }
+
+                n_isr_stations = len(active_hour_isr)
                 skipped_for_isr = (n_isr_stations == 0)
 
                 print(
-                    "ISR available: "
-                    f"TRO={'yes' if tro_isr_available else 'no'}, "
-                    f"SVL={'yes' if svl_isr_available else 'no'}"
+                    "ISR available in ROI this hour: "
+                    + ", ".join(
+                        f"{code}={'yes' if isr_matches[code] is not None else 'no'}"
+                        for code in active_isr_datasets
+                    )
                 )
 
                 # Rejection precedence follows the hourly processing order:
@@ -1520,8 +1565,18 @@ def main():
                 status_row = {
                     "window_start_utc": start.isoformat(),
                     "window_end_utc": end.isoformat(),
-                    "tro_isr_available": bool(tro_isr_available),
-                    "svl_isr_available": bool(svl_isr_available),
+                    "tro_in_roi": bool("TRO" in active_isr_datasets),
+                    "svl_in_roi": bool("SVL" in active_isr_datasets),
+                    "mil_in_roi": bool("MIL" in active_isr_datasets),
+                    "tro_isr_available": bool(
+                        "TRO" in isr_matches and isr_matches["TRO"] is not None
+                    ),
+                    "svl_isr_available": bool(
+                        "SVL" in isr_matches and isr_matches["SVL"] is not None
+                    ),
+                    "mil_isr_available": bool(
+                        "MIL" in isr_matches and isr_matches["MIL"] is not None
+                    ),
                     "n_isr_stations": int(n_isr_stations),
                     "n_ro_profiles": int(n_ro),
                     "n_tec_rays": int(n_tec),
@@ -1559,8 +1614,8 @@ def main():
 
                 if skipped_for_isr:
                     print(
-                        "SKIP: RO requirement passed, but no Tromso or Svalbard "
-                        "ISR Ne profile exists inside this 1-hour window; "
+                        "SKIP: RO requirement passed, but no ISR station inside "
+                        "the current ROI has an Ne profile in this 1-hour window; "
                         "no hourly tomography folder/files created."
                     )
                     print(f"Daily RO/ISR status updated: {daily_status_path}")
@@ -1568,9 +1623,7 @@ def main():
 
                 hour_dir.mkdir(parents=True, exist_ok=True)
                 precomputed_ro = hour_dir / "accepted_ro_observations.nc"
-                atomic_write(
-                    lambda t: shutil.copy2(precomputed_ro_tmp, t), precomputed_ro
-                )
+                shutil.copy2(precomputed_ro_tmp, precomputed_ro)
 
             # -------------------------------------------------------------
             # 2. Resolve the base IRI ensemble for this hour.
@@ -1612,7 +1665,7 @@ def main():
                 condition_dir = hour_dir / condition_name
                 condition_dir.mkdir(parents=True, exist_ok=True)
                 label = (
-                    f"tromso_allstyles_{condition_name}_"
+                    f"{CENTER_SITE.lower()}_allstyles_{condition_name}_"
                     f"{start:%Y%m%d_%H%M}_{end:%H%M}"
                 )
 
@@ -1628,8 +1681,7 @@ def main():
                     hyper_params_by_style,
                     isr_pca_basis_path,
                     condition,
-                    tro_isr_available,
-                    svl_isr_available,
+                    active_hour_isr_files,
                     base_edp_samples_path=(
                         reference_edp_path
                         if condition_name == "no_boost"
@@ -1725,152 +1777,116 @@ def main():
                     print("Canonical hourly EDP cache:", canonical_edp_path)
 
                 # ---------------------------------------------------------
-                # 3. Extra TRO/SVL validation for each style in this
-                #    boost condition.
+                # 3. Extra location-matched validation for every active ISR
+                #    station inside the ROI.
                 # ---------------------------------------------------------
                 for style in cfg.styles:
                     display = (
                         f"{STYLE_DISPLAY.get(style, style)} "
                         f"[{condition_label}]"
                     )
-                    print("Creating TRO+SVL validation:", display)
-
-                    alt_tro, f_tro, a_tro = decode_profiles_at_station(
-                        cfg, result, style, tro.station.lat, tro.station.lon,
-                        in_memory_parameterizations,
-                    )
-                    alt_svl, f_svl, a_svl = decode_profiles_at_station(
-                        cfg, result, style, svl.station.lat, svl.station.lon,
-                        in_memory_parameterizations,
-                    )
-
-                    if not np.array_equal(alt_tro, alt_svl):
-                        raise RuntimeError(
-                            "TRO/SVL decoded model altitude grids differ"
-                        )
-                    model_altitude = alt_tro
                     style_dir = condition_dir / f"{label}_{style}"
 
-                    plot_dual_isr_ne(
-                        display,
-                        start,
-                        end,
-                        n_ro_used,
-                        n_tec_used,
-                        model_altitude,
-                        f_tro,
-                        a_tro,
-                        tro,
-                        tro_match,
-                        svl,
-                        svl_match,
-                        style_dir
-                        / "dual_isr_ne_comparison_TRO_model_location.png",
-                    )
+                    for code, station in active_hour_isr.items():
+                        match = isr_matches[code]
+                        print(f"Creating {code} validation:", display)
 
-                    # Physically location-matched TRO and SVL figure.
-                    fig, axes = plt.subplots(
-                        1, 2, figsize=(12, 9), sharey=True
-                    )
-                    for ax, code, station, match, f_prof, a_prof in (
-                        (axes[0], "TRO", tro, tro_match, f_tro, a_tro),
-                        (axes[1], "SVL", svl, svl_match, f_svl, a_svl),
-                    ):
+                        model_altitude, f_prof, a_prof = decode_profiles_at_station(
+                            cfg,
+                            result,
+                            style,
+                            station.station.lat,
+                            station.station.lon,
+                            in_memory_parameterizations,
+                        )
+
                         fm = np.nanmean(f_prof, axis=-1)
                         fs = np.nanstd(f_prof, axis=-1)
                         am = np.nanmean(a_prof, axis=-1)
                         ass = np.nanstd(a_prof, axis=-1)
-                        ax.plot(
-                            fm, model_altitude, color="C0",
-                            label="forecast mean"
-                        )
+
+                        fig, ax = plt.subplots(figsize=(7, 9))
+                        ax.plot(fm, model_altitude, color="C0", label="forecast mean")
                         ax.fill_betweenx(
                             model_altitude, fm - fs, fm + fs,
                             color="C0", alpha=0.2
                         )
-                        ax.plot(
-                            am, model_altitude, color="C1",
-                            label="analysis mean"
-                        )
+                        ax.plot(am, model_altitude, color="C1", label="analysis mean")
                         ax.fill_betweenx(
                             model_altitude, am - ass, am + ass,
                             color="C1", alpha=0.2
                         )
+
                         if match is not None:
                             mt, mne = match
-                            truth_color = (
-                                "black" if code == "TRO" else "green"
-                            )
                             ax.plot(
                                 mne,
                                 station.altitude,
                                 linestyle="--",
                                 marker=".",
-                                color=truth_color,
+                                color="black",
                                 markersize=5,
                                 label=f"{code} ISR ({mt:%H:%M})",
                             )
-                        ax.set_title(f"Model at {code} location")
+
                         ax.set_xlabel(r"Electron density (m$^{-3}$)")
+                        ax.set_ylabel("Altitude (km)")
+                        ax.set_title(
+                            f"{display} -- model at {code} ISR location\n"
+                            f"{hour_label(start, end)} | "
+                            f"RO profiles={n_ro_used} | TEC rays={n_tec_used}"
+                        )
                         ax.grid(True, alpha=0.2)
                         ax.legend(loc="best", fontsize=8)
+                        save_figure(
+                            fig,
+                            style_dir / f"{code.lower()}_isr_ne_comparison.png",
+                        )
 
-                    axes[0].set_ylabel("Altitude (km)")
-                    fig.suptitle(
-                        f"{display} -- location-matched TRO/SVL validation\n"
-                        f"{hour_label(start, end)} | "
-                        f"RO profiles={n_ro_used} | TEC rays={n_tec_used}"
-                    )
-                    fig.tight_layout()
-                    save_figure(
-                        fig,
-                        style_dir
-                        / "dual_isr_ne_comparison_location_matched.png",
-                    )
+                        error_profile = station_error_profile(
+                            model_altitude, a_prof, station, match
+                        )
 
-                    tro_error = station_error_profile(
-                        model_altitude, a_tro, tro, tro_match
-                    )
-                    svl_error = station_error_profile(
-                        model_altitude, a_svl, svl, svl_match
-                    )
+                        fig, ax = plt.subplots(figsize=(7, 9))
+                        if error_profile is not None:
+                            ax.plot(
+                                error_profile["error_m3"],
+                                error_profile["altitude_km"],
+                                ".-",
+                                color="red",
+                                markersize=4,
+                                label=f"{code} analysis RMSE/error",
+                            )
+                        ax.set_xlabel(
+                            r"Analysis RMSE/error vs. ISR (m$^{-3}$)"
+                        )
+                        ax.set_ylabel("Altitude (km)")
+                        ax.set_title(
+                            f"{display} -- analysis error vs. {code} ISR\n"
+                            f"{hour_label(start, end)} | "
+                            f"RO profiles={n_ro_used} | TEC rays={n_tec_used}"
+                        )
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(loc="best", fontsize=8)
+                        save_figure(
+                            fig,
+                            style_dir / f"{code.lower()}_isr_rmse_by_altitude.png",
+                        )
 
-                    plot_dual_isr_error(
-                        display,
-                        start,
-                        end,
-                        n_ro_used,
-                        n_tec_used,
-                        tro_error,
-                        svl_error,
-                        style_dir / "dual_isr_rmse_by_altitude.png",
-                    )
+                        append_error_rows(
+                            hour_error_rows,
+                            style=style,
+                            condition=condition_name,
+                            station_code=code,
+                            start=start,
+                            end=end,
+                            n_ro=n_ro_used,
+                            n_tec=n_tec_used,
+                            error_profile=error_profile,
+                        )
 
-                    append_error_rows(
-                        hour_error_rows,
-                        style=style,
-                        condition=condition_name,
-                        station_code="TRO",
-                        start=start,
-                        end=end,
-                        n_ro=n_ro_used,
-                        n_tec=n_tec_used,
-                        error_profile=tro_error,
-                    )
-                    append_error_rows(
-                        hour_error_rows,
-                        style=style,
-                        condition=condition_name,
-                        station_code="SVL",
-                        start=start,
-                        end=end,
-                        n_ro=n_ro_used,
-                        n_tec=n_tec_used,
-                        error_profile=svl_error,
-                    )
-
-                    del f_tro, a_tro, f_svl, a_svl
-                    gc.collect()
+                        del f_prof, a_prof
+                        gc.collect()
 
                 condition_row = {
                     "window_start_utc": start.isoformat(),
@@ -1951,11 +1967,23 @@ def main():
                 status_row = {
                     "window_start_utc": start.isoformat(),
                     "window_end_utc": end.isoformat(),
+                    "tro_in_roi": bool(
+                        "TRO" in locals().get("active_isr_datasets", {})
+                    ),
+                    "svl_in_roi": bool(
+                        "SVL" in locals().get("active_isr_datasets", {})
+                    ),
+                    "mil_in_roi": bool(
+                        "MIL" in locals().get("active_isr_datasets", {})
+                    ),
                     "tro_isr_available": bool(
-                        locals().get("tro_isr_available", False)
+                        locals().get("isr_matches", {}).get("TRO") is not None
                     ),
                     "svl_isr_available": bool(
-                        locals().get("svl_isr_available", False)
+                        locals().get("isr_matches", {}).get("SVL") is not None
+                    ),
+                    "mil_isr_available": bool(
+                        locals().get("isr_matches", {}).get("MIL") is not None
                     ),
                     "n_isr_stations": int(
                         locals().get("n_isr_stations", 0)
@@ -2004,15 +2032,9 @@ def main():
     # Per-hour validation products are the only ISR error outputs; RO-bin aggregate
     # comparison products and their helper code have been removed.
 
-    release_lock(hour_lock)
-
     if mode_timing_rows:
-        # Name by hour range: with one job per hour, a single per-date file
-        # would be overwritten by whichever job finished last.
-        atomic_to_csv(
-            pd.DataFrame(mode_timing_rows),
-            RUN_OUTPUT_ROOT
-            / f"{args.date}_{args.start_hour:02d}{args.end_hour:02d}_mode_timing.csv",
+        pd.DataFrame(mode_timing_rows).to_csv(
+            RUN_OUTPUT_ROOT / f"{args.date}_mode_timing.csv", index=False
         )
 
     total_elapsed = time.perf_counter() - total_t0
@@ -2029,18 +2051,6 @@ def main():
     print("Output root:", RUN_OUTPUT_ROOT)
     print("Run settings registry:", setting_csv_path)
 
-    # Report trouble through the exit status so GNU parallel counts this job
-    # as failed and -r/-R can retry it. With --continue-on-error the script
-    # used to exit 0 even when every hour failed.
-    n_failed = sum(1 for r in hourly_rows if r.get("status") == "failed")
-    if n_failed:
-        print(f"{n_failed} hour(s) failed")
-        return 1
-    if n_hours_locked_out:
-        print(f"{n_hours_locked_out} hour(s) skipped: locked by another process")
-        return 3
-    return 0
-
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
