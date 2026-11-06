@@ -310,6 +310,20 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                 ),
                 iv_dir / f"{batch_tag}_ranking.png",
             )
+            _savefig(
+                impact_vectors.plot_impact_vector_ranking_relative_to_norm(
+                    impacts_by_ro,
+                    title=f"{qp.name} impact ranking, relative to total change ({style}, batch {batch.batch_index})",
+                ),
+                iv_dir / f"{batch_tag}_ranking_relative_norm.png",
+            )
+            _savefig(
+                impact_vectors.plot_impact_vector_ranking_relative_to_local_change(
+                    impacts_by_ro, qp.altitudes,
+                    title=f"{qp.name} impact ranking, relative to local change ({style}, batch {batch.batch_index})",
+                ),
+                iv_dir / f"{batch_tag}_ranking_relative_local.png",
+            )
 
             impact_vector_cross_style_data.setdefault((batch.batch_index, qp.name), {})[style] = impacts_by_ro
 
