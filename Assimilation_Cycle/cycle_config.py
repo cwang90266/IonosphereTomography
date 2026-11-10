@@ -214,8 +214,20 @@ class CycleConfig:
     with no rays left is dropped entirely. IGS entries are unaffected.
     `None` (default) disables the filter."""
     obs_sigma: float = 1.0
-    """Constant observation-error standard deviation (TECU), same for RO
-    and IGS, observations independent (Section 8, decision 2)."""
+    """Observation-error standard deviation (TECU), observations assumed
+    independent (Section 8, decision 2). Used as-is for every observation
+    when `receiver_sigma_table_path` is unset; when it is set, this is the
+    fallback used for IGS (no tangent-point concept) and for any RO ray
+    whose receiver or tangent altitude the table doesn't cover."""
+    receiver_sigma_table_path: str | Path | None = None
+    """Optional CSV table of per-receiver, per-tangent-altitude-bin TEC
+    sigma (TECU), for RO receivers (e.g. YM08) known to carry different
+    uncertainty than others. First two columns are each row's tangent-
+    altitude bin `[alt_min_km, alt_max_km]` (inclusive both ends);
+    remaining columns are receiver codes (e.g. `GN04`, `GN05`, `YM08`)
+    matched against an RO entry's `label`/`rec_id`/`obs_source`. `None`
+    (default) keeps `obs_sigma` as a flat constant for every observation.
+    See `observation_preparation.load_receiver_sigma_table`."""
 
     # --- Observation source selection (Section 4.15) ---
     obs_sources: ObsSource = "both"
