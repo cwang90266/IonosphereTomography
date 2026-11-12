@@ -43,6 +43,7 @@ from Ensemble_Kalman_Engine.driver import GeneralEnKFDriver
 
 from .cycle_config import CycleConfig
 from . import iri_selection, ensemble_init, observation_stream, output, isr_comparison, impact_vectors
+from . import abel_consistency
 from .isr_pca_basis import resolve_hyper_params_for_style
 from .cycle_driver import CycleResult, run_cycle
 
@@ -419,15 +420,40 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                 return
             decoded_forecast = obs_operator.decode(ensemble_forecast.to_param_shape())
             decoded_analysis = obs_operator.decode(ensemble_analysis.to_param_shape())
+            # Full forecast-ensemble TEC (2026-11-12 user request #1: the TEC
+            # panel showed only the forecast *mean*, with no indication of
+            # the prior ensemble's spread, unlike the EDP panel) -- computed
+            # once per batch (not per entry) since it covers every ray in
+            # the batch; sliced per entry below like y_forecast/y_analysis.
+            y_forecast_ensemble_all = obs_operator.forward_ensemble(ensemble_forecast.X)
             for entry, ray_slice in ro_here:
                 y_forecast = outcome.y_forecast[ray_slice]
                 y_analysis = outcome.y_analysis[ray_slice]
                 y_measured = outcome.y_obs_used[ray_slice]
+                y_forecast_ensemble = y_forecast_ensemble_all[ray_slice]
+
+                # Spherically-symmetric Abel-consistency check (2026-11-12
+                # user request #2): replicate this RO's own Abel-retrieved
+                # profile across every geo vertex -- the same
+                # horizontal-homogeneity assumption the Abel inversion
+                # itself makes -- and forward-model that uniform field
+                # through this entry's own ray geometry, so the TEC panel
+                # can show whether the Abel profile alone (no tomography)
+                # already reproduces the measured TEC.
+                y_abel_spherical = None
+                if entry.abel and "Ne" in entry.abel and "alt_km" in entry.abel:
+                    abel_field = abel_consistency.build_uniform_field_from_abel(
+                        entry, edp_samples.altitude, edp_samples.geolocation.shape[0],
+                    )
+                    y_abel_spherical = obs_operator.forward_from_density(abel_field[..., 0])[ray_slice]
+
                 _savefig(
                     output.plot_tec_edp_profile_comparison(
                         entry, y_forecast, y_analysis, y_measured,
                         edp_samples, decoded_forecast, decoded_analysis,
                         style=_style, boost_label=boost_label,
+                        y_forecast_ensemble=y_forecast_ensemble,
+                        y_abel_spherical=y_abel_spherical,
                     ),
                     _style_dir / "profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png",
                 )

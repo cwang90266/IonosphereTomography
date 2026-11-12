@@ -125,6 +125,21 @@ class GenericObservationOperator:
         param_vec = X_f.reshape(*self.param_shape, n_members)
         return self.forward(param_vec)
 
+    def forward_from_density(self, density: np.ndarray) -> np.ndarray:
+        """
+        ``density``: physical electron density, shape ``(n_height, n_geo)``
+        or ``(n_height, n_geo, n_members)`` -- the same contract
+        :meth:`decode` returns -- maps straight to simulated TEC via
+        ``H_grid``, bypassing any parameterization's ``decode``. Used to
+        forward-simulate a density field that isn't a fitted
+        parameterization's filter-space state at all, e.g. a
+        spherically-symmetric field built by replicating one RO's
+        Abel-retrieved profile across every geo vertex (see
+        ``Assimilation_Cycle.abel_consistency.build_uniform_field_from_abel``).
+        """
+        density_flat = self._flatten_physical(np.asarray(density))
+        return self.H_grid @ density_flat
+
     def forward_single(self, x: np.ndarray) -> np.ndarray:
         """
         ``x``: flat filter-space single state vector, shape ``(n_state,)``
