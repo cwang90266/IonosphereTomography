@@ -47,9 +47,11 @@ To run only one of the PCA styles:
         --end-hour 24 \
         --styles PCA_3D_10ex
 
-The default run compares ALL FOUR parameterization styles:
+The default run compares the parameterization styles selected in DEFAULT_STYLES:
   - ANCHOR
+  - PCA_3D
   - PCA_3D_10ex
+  - PCA_1D
   - PCA_1D_10ex
   - PCA_1D_10ex_ISR
 
@@ -58,7 +60,7 @@ and, for every style, BOTH covariance conditions:
   - no_boost
   - boosted (diagonal boost amplitude set by BOOST_AMPLITUDE)
 
-Therefore every successful one-hour slot runs 8 filter cases total.
+Therefore cases per successful hour = len(DEFAULT_STYLES) x 2 covariance conditions.
 
 For PCA_1D_10ex_ISR the script automatically reuses/builds:
   TROISR2025_nonan_extended.nc
@@ -113,15 +115,46 @@ CENTER_SITE = "MIL"  # === Edit here ===  switch between MIL/TRO/SVL
 RUN_DATE_RANGE = ("2025-08-27", "2025-08-27")  # === Edit here ===
 
 # Observation ROI radius, also dynamic to run label and message
-ROI_RADIUS_KM = 3000.0  # === Edit here ===
+ROI_RADIUS_KM = 2000.0  # === Edit here ===
 
 # Diagonal covariance boost amplitude. Example 0.3 becomes "Op3Boost" in the label.
 BOOST_AMPLITUDE = 0.3  # === Edit here ===
+
+# Observation-error standard deviation for TEC assimilation, in TECU.
+OBS_SIGMA_TECU = 5.0  # === Edit here ===
+
+# Downsample the nominal IRI spread ranges by this factor.
+# Base ranges are:
+#   hour=3, f107=30, ap=30, ig=12, rz=12
+# Example factor=3 -> hour=1, f107=10, ap=10, ig=4, rz=4.
+IRI_DOWNSAMPLING_FACTOR = 1  # === Edit here ===
+
+# Required fraction of the RO LOS that must lie inside the tomography ROI.
+RO_AREA_FRACTION_REQUIRED = 0.65  # === Edit here ===
+
+# Scale the fraction of PCA variance that is discarded.
+# 1  -> original thresholds
+# 10 -> discard 10x more variance:
+#       0.9999 -> 0.999
+#       0.99999 -> 0.9999
+PCA_DISCARD_SCALE = 1.0  # === Edit here ===
+
+# Choose the parameterization styles to run.
+DEFAULT_STYLES = [
+    #"ANCHOR",
+    "PCA_3D",
+    #"PCA_3D_10ex",
+    "PCA_1D",
+    #"PCA_1D_10ex",
+    #"PCA_1D_10ex_ISR",
+]  # === Edit here ===
 
 # Optional reference-run label for reusing the exact hourly IRI ensemble.
 # Set "" or None to disable reference-IRI reuse.
 REFERENCE_RUN_LABEL = ""  # === Edit here ===
 
+# Example label may look like, gross long
+# MIL_aug27_2025_R2k_BOp3_Obs5_IRIScale3_LOSfracOp65_PCAdisScale10_3D_1D
 
 # =============================================================================
 # Derived configuration -- Don't need to edit for normal runs
@@ -180,6 +213,8 @@ def _run_range_tag(date_range: tuple[str, str]) -> str:
     mon2 = end.strftime("%b").lower()
 
     if start.year == end.year and start.month == end.month:
+        if start.day == end.day:
+            return f"{mon1}{start.day:02d}_{start.year}"
         return f"{mon1}{start.day:02d}{end.day:02d}_{start.year}"
 
     if start.year == end.year:
@@ -204,15 +239,58 @@ def _boost_tag(amplitude: float) -> str:
     return value.replace(".", "p").replace("-", "m")
 
 
+def _compact_number_tag(value: float) -> str:
+    """Compact numeric tag: 0.65 -> Op65, 10 -> 10, 2.5 -> 2p5."""
+    s = f"{float(value):g}"
+    if s.startswith("0."):
+        return "Op" + s[2:]
+    return s.replace(".", "p").replace("-", "m")
+
+
+def _styles_tag(styles: list[str]) -> str:
+    """Compact, stable style-set label."""
+    abbreviations = {
+        "ANCHOR": "A",
+        "PCA_3D": "3D",
+        "PCA_3D_10ex": "3DL",
+        "PCA_1D": "1D",
+        "PCA_1D_10ex": "1DL",
+        "PCA_1D_10ex_ISR": "ISR",
+    }
+    unknown = [s for s in styles if s not in abbreviations]
+    if unknown:
+        raise ValueError(f"Unknown style(s) in DEFAULT_STYLES: {unknown}")
+    return "_".join(abbreviations[s] for s in styles)
+
+
 RUN_RANGE_TAG = _run_range_tag(RUN_DATE_RANGE)
 BOOST_TAG = _boost_tag(BOOST_AMPLITUDE)
+OBS_SIG_TAG = _compact_number_tag(OBS_SIGMA_TECU)
+IRI_DOWNSAMPLE_TAG = _compact_number_tag(IRI_DOWNSAMPLING_FACTOR)
+AREA_FRACTION_TAG = _compact_number_tag(RO_AREA_FRACTION_REQUIRED)
+PCA_DISCARD_TAG = _compact_number_tag(PCA_DISCARD_SCALE)
+STYLES_TAG = _styles_tag(DEFAULT_STYLES)
 
-# Example:
-#   MIL_oct1417_2025_ROI2000kmRadius_Op3Boost
+# Compact but readable fully parameterized run label.
+# Examples:
+#   ROI 2000 km -> R2k
+#   ROI 2500 km -> R2p5k
+#   LOS fraction 0.65 -> LOSfracOp65
+#   LOS fraction 1.0  -> LOSfrac1
+#
+# Example full label:
+#   MIL_aug2529_2025_R2k_BOp3_Obs5_IRIScale3_LOSfracOp65_PCAdisScale10_A_3D_3DL_1D_1DL_ISR
+ROI_TAG = _compact_number_tag(ROI_RADIUS_KM / 1000.0)
+
 LABEL_OF_EACH_RUN = (
     f"{CENTER_SITE}_{RUN_RANGE_TAG}_"
-    f"ROI{ROI_RADIUS_KM:g}kmRadius_{BOOST_TAG}Boost_"
-    f"" # custom append to label
+    f"R{ROI_TAG}k_"
+    f"B{BOOST_TAG}_"
+    f"Obs{OBS_SIG_TAG}_"
+    f"IRIScale{IRI_DOWNSAMPLE_TAG}_"
+    f"LOSfrac{AREA_FRACTION_TAG}_"
+    f"PCAdisScale{PCA_DISCARD_TAG}_"
+    f"{STYLES_TAG}"
 )
 
 # Keep the run message synchronized automatically with the generated label.
@@ -239,23 +317,52 @@ TRO_ISR_EXTENDED_FILE = ISR_DIR / "TROISR2025_nonan_extended.nc"
 TRO_ISR_PCA_BASIS_FILE = ISR_DIR / "TROISR2025_nonan_pca_basis.nc"
 
 
-DEFAULT_STYLES = [
-    "ANCHOR",
-    "PCA_3D_10ex",
-    "PCA_1D_10ex",
-    "PCA_1D_10ex_ISR",
-]
-
-STYLE_DISPLAY = {
+ALL_STYLE_DISPLAY = {
     "ANCHOR": "ANCHOR",
+    "PCA_3D": "IRI-trained PCA_3D",
     "PCA_3D_10ex": "IRI-trained PCA_3D_10ex",
+    "PCA_1D": "IRI-trained PCA_1D",
     "PCA_1D_10ex": "IRI-trained PCA_1D_10ex",
     "PCA_1D_10ex_ISR": "TRO-ISR-trained PCA_1D_10ex_ISR",
 }
 
+# Base retaining thresholds before PCA_DISCARD_SCALE is applied.
+# The ISR-trained basis historically uses 0.9999 (= 1 - 1e-4).
+BASE_PCA_RETAINING_THRESHOLD = {
+    "PCA_3D": 0.9999,
+    "PCA_3D_10ex": 0.9999,
+    "PCA_1D": 0.99999,
+    "PCA_1D_10ex": 0.99999,
+    "PCA_1D_10ex_ISR": 0.9999,
+}
+
+
+def _scaled_retaining_threshold(base_threshold: float) -> float:
+    """Scale discarded variance while keeping the result in (0, 1)."""
+    discarded = 1.0 - float(base_threshold)
+    scaled_discarded = discarded * float(PCA_DISCARD_SCALE)
+    threshold = 1.0 - scaled_discarded
+    if not (0.0 < threshold < 1.0):
+        raise ValueError(
+            "PCA_DISCARD_SCALE produces an invalid retaining threshold: "
+            f"base={base_threshold}, scale={PCA_DISCARD_SCALE}, result={threshold}"
+        )
+    return threshold
+
+
+STYLE_DISPLAY = {
+    style: ALL_STYLE_DISPLAY[style]
+    for style in DEFAULT_STYLES
+}
+
 DEFAULT_HYPER_PARAMS = {
-    "PCA_3D_10ex": {"retaining_threshold": 0.9999},
-    "PCA_1D_10ex": {"retaining_threshold": 0.99999},
+    style: {
+        "retaining_threshold": _scaled_retaining_threshold(
+            BASE_PCA_RETAINING_THRESHOLD[style]
+        )
+    }
+    for style in DEFAULT_STYLES
+    if style in BASE_PCA_RETAINING_THRESHOLD
 }
 
 
@@ -289,7 +396,6 @@ MIN_RO_PROFILES = int(
 
 N_ENSEMBLE = 2000
 MAX_TEC_PER_BATCH = 100_000
-OBS_SIGMA_TECU = 5.0
 ANALYSIS_RNG_SEED = 777
 
 # Diagonal covariance boost configuration.
@@ -297,7 +403,7 @@ BOOST_TAPER_START_KM = 400.0
 BOOST_TAPER_END_KM = 700.0
 BOOST_TAPER_FLOOR = 1.0/7.0
 
-IRI_SPREAD_KWARGS = {
+BASE_IRI_SPREAD_KWARGS = {
     "hour_sample_range": 3,
     "f107_sample_range": 30,
     "ap_sample_range": 30,
@@ -305,10 +411,25 @@ IRI_SPREAD_KWARGS = {
     "rz_sample_range": 12,
 }
 
+
+def _downsample_iri_range(value: int) -> int:
+    """Divide a nominal integer IRI range by IRI_DOWNSAMPLING_FACTOR."""
+    factor = float(IRI_DOWNSAMPLING_FACTOR)
+    if factor <= 0:
+        raise ValueError("IRI_DOWNSAMPLING_FACTOR must be > 0")
+    scaled = int(round(float(value) / factor))
+    return max(1, scaled)
+
+
+IRI_SPREAD_KWARGS = {
+    key: _downsample_iri_range(value)
+    for key, value in BASE_IRI_SPREAD_KWARGS.items()
+}
+
 RO_KWARGS_TEMPLATE = {
     "roi_mode": "full_los",
     "alt_limit_km": None,
-    "fraction_required": 0.65,
+    "fraction_required": RO_AREA_FRACTION_REQUIRED,
     "min_valid_rays": 50,
     "max_rays_per_occultation": 200,
     "max_lowest_tangent_alt_km": 400.0,
@@ -336,7 +457,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--styles", nargs="+", default=DEFAULT_STYLES,
-        help="Parameterization styles. Default: ANCHOR PCA_3D_10ex PCA_1D_10ex PCA_1D_10ex_ISR",
+        help=f"Parameterization styles. Default: {' '.join(DEFAULT_STYLES)}",
     )
     parser.add_argument(
         "--isr-pca-basis", type=Path, default=None,
@@ -385,6 +506,22 @@ def parse_args() -> argparse.Namespace:
 
 def validate_args(args: argparse.Namespace) -> datetime:
     day = datetime.strptime(args.date, "%Y-%m-%d")
+
+    if OBS_SIGMA_TECU <= 0:
+        raise ValueError("OBS_SIGMA_TECU must be > 0")
+    if IRI_DOWNSAMPLING_FACTOR <= 0:
+        raise ValueError("IRI_DOWNSAMPLING_FACTOR must be > 0")
+    if not (0.0 < RO_AREA_FRACTION_REQUIRED <= 1.0):
+        raise ValueError("RO_AREA_FRACTION_REQUIRED must be in (0, 1]")
+    if PCA_DISCARD_SCALE <= 0:
+        raise ValueError("PCA_DISCARD_SCALE must be > 0")
+
+    unknown_styles = [
+        style for style in args.styles
+        if style not in ALL_STYLE_DISPLAY
+    ]
+    if unknown_styles:
+        raise ValueError(f"Unsupported parameterization style(s): {unknown_styles}")
     if not (0 <= args.start_hour < 24):
         raise ValueError("--start-hour must be 0..23")
     if not (1 <= args.end_hour <= 24):
@@ -684,7 +821,9 @@ def ensure_tro_isr_pca_basis(
         basis = ipb.build_isr_pca_basis(
             TRO_ISR_EXTENDED_FILE,
             default_altitude_grid(),
-            retaining_threshold=1.0 - 1e-4,
+            retaining_threshold=DEFAULT_HYPER_PARAMS[
+                "PCA_1D_10ex_ISR"
+            ]["retaining_threshold"],
         )
         ipb.save_isr_pca_basis(basis, TRO_ISR_PCA_BASIS_FILE)
         print(
@@ -1189,6 +1328,10 @@ def _run_settings_row(args: argparse.Namespace) -> dict:
         "min_ro_profiles": MIN_RO_PROFILES,
         "n_ensemble": int(args.n_ensemble),
         "obs_sigma_tecu": OBS_SIGMA_TECU,
+        "iri_downsampling_factor": IRI_DOWNSAMPLING_FACTOR,
+        "ro_area_fraction_required": RO_AREA_FRACTION_REQUIRED,
+        "pca_discard_scale": PCA_DISCARD_SCALE,
+        "styles": "|".join(DEFAULT_STYLES),
         "boost_le_400_km": round(_boost_amplitude_at_altitude(400.0), 2),
         "boost_500_km": round(_boost_amplitude_at_altitude(500.0), 2),
         "boost_600_km": round(_boost_amplitude_at_altitude(600.0), 2),
