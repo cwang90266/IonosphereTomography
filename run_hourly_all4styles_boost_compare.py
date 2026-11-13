@@ -243,7 +243,7 @@ def _compact_number_tag(value: float) -> str:
     """Compact numeric tag: 0.65 -> Op65, 10 -> 10, 2.5 -> 2p5."""
     s = f"{float(value):g}"
     if s.startswith("0."):
-        return "Op" + s[2:]
+        return "0p" + s[2:]
     return s.replace(".", "p").replace("-", "m")
 
 
