@@ -174,6 +174,84 @@ class TestMinTangentAltFilter:
         assert batches[0].y_obs.shape == (3,)
 
 
+class TestReceiverSigmaTable:
+    def _write_table(self, tmp_path):
+        path = tmp_path / "sigma.csv"
+        path.write_text(
+            "alt_min_km,alt_max_km,YM08\n"
+            "0,500,9.0\n"
+        )
+        return path
+
+    def test_covered_ro_receiver_gets_table_sigma(self, tmp_path):
+        table_path = self._write_table(tmp_path)
+        cfg = _make_cfg(batch_size=10, obs_sigma=3.0, receiver_sigma_table_path=table_path)
+        entry = _make_entry(
+            "RO", "2025-11-18T10:00:00", n_rays=3,
+            label="podTc2_YM08.2025.322.10.06.0022.C22.01_0000.0001_nc",
+            tangent_alt_km=[100.0, 200.0, 300.0],
+        )
+        batch = observation_stream.batch_entries([entry], cfg)[0]
+        np.testing.assert_allclose(np.diag(batch.R), [9.0 ** 2] * 3)
+
+    def test_unmatched_receiver_falls_back_to_obs_sigma(self, tmp_path):
+        table_path = self._write_table(tmp_path)
+        cfg = _make_cfg(batch_size=10, obs_sigma=3.0, receiver_sigma_table_path=table_path)
+        entry = _make_entry(
+            "RO", "2025-11-18T10:00:00", n_rays=2,
+            label="podTc2_GN04.2025.322.10.06.0022.C22.01_0000.0001_nc",
+            tangent_alt_km=[100.0, 200.0],
+        )
+        batch = observation_stream.batch_entries([entry], cfg)[0]
+        np.testing.assert_allclose(np.diag(batch.R), [3.0 ** 2] * 2)
+
+    def test_igs_entries_always_use_obs_sigma(self, tmp_path):
+        table_path = self._write_table(tmp_path)
+        cfg = _make_cfg(batch_size=10, obs_sigma=3.0, receiver_sigma_table_path=table_path)
+        igs_entry = _make_entry("IGS", "2025-11-18T10:00:00", n_rays=2)  # no tangent_alt_km
+        batch = observation_stream.batch_entries([igs_entry], cfg)[0]
+        np.testing.assert_allclose(np.diag(batch.R), [3.0 ** 2] * 2)
+
+    def test_mixed_batch_gives_nonuniform_diagonal_R(self, tmp_path):
+        table_path = self._write_table(tmp_path)
+        cfg = _make_cfg(batch_size=10, obs_sigma=3.0, receiver_sigma_table_path=table_path)
+        ym08_entry = _make_entry(
+            "RO", "2025-11-18T10:00:00", n_rays=2,
+            label="podTc2_YM08.2025.322.10.06.0022.C22.01_0000.0001_nc",
+            tangent_alt_km=[100.0, 200.0],
+        )
+        gn04_entry = _make_entry(
+            "RO", "2025-11-18T10:01:00", n_rays=2,
+            label="podTc2_GN04.2025.322.10.06.0022.C22.01_0000.0001_nc",
+            tangent_alt_km=[100.0, 200.0],
+        )
+        batch = observation_stream.batch_entries([ym08_entry, gn04_entry], cfg)[0]
+        diag = np.diag(batch.R)
+        np.testing.assert_allclose(diag, [9.0 ** 2, 9.0 ** 2, 3.0 ** 2, 3.0 ** 2])
+        off_diag = batch.R - np.diag(diag)
+        assert np.all(off_diag == 0.0)
+
+    def test_out_of_range_altitude_falls_back_to_obs_sigma(self, tmp_path):
+        table_path = self._write_table(tmp_path)
+        cfg = _make_cfg(batch_size=10, obs_sigma=3.0, receiver_sigma_table_path=table_path)
+        entry = _make_entry(
+            "RO", "2025-11-18T10:00:00", n_rays=1,
+            label="podTc2_YM08.2025.322.10.06.0022.C22.01_0000.0001_nc",
+            tangent_alt_km=[900.0],  # beyond the table's only bin (0-500)
+        )
+        batch = observation_stream.batch_entries([entry], cfg)[0]
+        np.testing.assert_allclose(np.diag(batch.R), [3.0 ** 2])
+
+    def test_none_path_preserves_constant_diagonal_R(self):
+        cfg = _make_cfg(batch_size=10, obs_sigma=3.0, receiver_sigma_table_path=None)
+        entry = _make_entry(
+            "RO", "2025-11-18T10:00:00", n_rays=3,
+            label="podTc2_YM08...", tangent_alt_km=[100.0, 200.0, 300.0],
+        )
+        batch = observation_stream.batch_entries([entry], cfg)[0]
+        np.testing.assert_allclose(batch.R, (3.0 ** 2) * np.eye(3))
+
+
 class TestFilterEntryRays:
     def test_all_true_mask_returns_same_entry(self):
         entry = _make_entry("RO", "2025-11-18T10:00:00", n_rays=3)

@@ -23,6 +23,7 @@ _stale_locks/
 /apf107.dat
 /ig_rz.dat
 
+<<<<<<< HEAD
 # Ignore Pipfile.lock
 *.lock
 
@@ -35,3 +36,8 @@ _stale_locks/
 
 # Ignore memory tracing logs
 *.tsv
+=======
+# Documentation example data -- intentionally committed despite the
+# blanket *.csv rule above (these ship with the repo, not run output).
+!/Documentation/examples/*.csv
+>>>>>>> origin/develop
