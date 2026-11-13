@@ -1,6 +1,4 @@
 *.egg-info/
-iri2020_driver
-iri2020_namelist_driver
 .claude/
 Figures/
 DataFiles/
@@ -25,6 +23,21 @@ _stale_locks/
 /apf107.dat
 /ig_rz.dat
 
+<<<<<<< HEAD
+# Ignore Pipfile.lock
+*.lock
+
+# Ignore the IRI drivers, since they should be recompiled for different machines
+/iri2020_new/src/iri2020/iri2020_driver
+/iri2020_new/src/iri2020/iri2020_namelist_driver
+
+# Ignore log files
+*.log*
+
+# Ignore memory tracing logs
+*.tsv
+=======
 # Documentation example data -- intentionally committed despite the
 # blanket *.csv rule above (these ship with the repo, not run output).
 !/Documentation/examples/*.csv
+>>>>>>> origin/develop
