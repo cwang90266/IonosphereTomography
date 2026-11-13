@@ -110,10 +110,10 @@ OUTPUT_ROOT = Path("/mnt/tmp-sbem-ionosphere-tomography/tomography_output")  # =
 CENTER_SITE = "MIL"  # === Edit here ===  switch between MIL/TRO/SVL
 
 # Campaign date range used in LABEL_OF_EACH_RUN and RUN_MESSAGE.Example below becomes "oct1417_2025".
-RUN_DATE_RANGE = ("2025-08-25", "2025-08-29")  # === Edit here ===
+RUN_DATE_RANGE = ("2025-08-27", "2025-08-27")  # === Edit here ===
 
 # Observation ROI radius, also dynamic to run label and message
-ROI_RADIUS_KM = 2000.0  # === Edit here ===
+ROI_RADIUS_KM = 3000.0  # === Edit here ===
 
 # Diagonal covariance boost amplitude. Example 0.3 becomes "Op3Boost" in the label.
 BOOST_AMPLITUDE = 0.3  # === Edit here ===
@@ -211,7 +211,8 @@ BOOST_TAG = _boost_tag(BOOST_AMPLITUDE)
 #   MIL_oct1417_2025_ROI2000kmRadius_Op3Boost
 LABEL_OF_EACH_RUN = (
     f"{CENTER_SITE}_{RUN_RANGE_TAG}_"
-    f"ROI{ROI_RADIUS_KM:g}kmRadius_{BOOST_TAG}Boost"
+    f"ROI{ROI_RADIUS_KM:g}kmRadius_{BOOST_TAG}Boost_"
+    f"" # custom append to label
 )
 
 # Keep the run message synchronized automatically with the generated label.
