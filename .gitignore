@@ -24,3 +24,7 @@ _stale_locks/
 # source tree; ignored here as a backstop for the cwd-relative fallback.
 /apf107.dat
 /ig_rz.dat
+
+# Documentation example data -- intentionally committed despite the
+# blanket *.csv rule above (these ship with the repo, not run output).
+!/Documentation/examples/*.csv

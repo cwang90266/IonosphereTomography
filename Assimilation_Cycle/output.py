@@ -429,13 +429,32 @@ def _cartopy_projection(edp_samples):
 
 
 def plot_tec_profile_comparison(entry, y_forecast: np.ndarray, y_analysis: np.ndarray,
-                                 y_measured: np.ndarray, ax=None, figsize=(6, 6)):
+                                 y_measured: np.ndarray, ax=None, figsize=(6, 6),
+                                 y_forecast_ensemble: np.ndarray | None = None,
+                                 y_abel_spherical: np.ndarray | None = None):
     """Forecast vs. analysis vs. measured TEC for one RO occultation (plan/
     docx step 7), by tangent altitude -- ``y_forecast``/``y_analysis``/
     ``y_measured`` are already sliced to this entry's rays (e.g. via
     ``CycleBatch.entry_ray_ranges``), all shape ``(entry.n_rays,)``. RO-
     specific: uses ``entry.tangent_alt_km`` as the y-axis, so this isn't
-    meaningful for an IGS arc (no tangent point)."""
+    meaningful for an IGS arc (no tangent point).
+
+    ``y_forecast_ensemble`` : optional, shape ``(entry.n_rays, n_members)``
+        (2026-11-12 user request) -- the full forecast ensemble's simulated
+        TEC (e.g. ``obs_operator.forward_ensemble(ensemble_forecast.X)``,
+        sliced to this entry), shown as a shaded +/-1 prior-sigma band so
+        the forecast line isn't shown without the spread that produced it.
+    ``y_abel_spherical`` : optional, shape ``(entry.n_rays,)``
+        (2026-11-12 user request) -- predicted TEC from replicating this
+        entry's own Abel-retrieved profile across every geo vertex (a
+        spherically-symmetric field consistent with the Abel inversion's
+        own assumption) and forward-modeling it through the same ray
+        geometry, e.g. via
+        ``obs_operator.forward_from_density(build_uniform_field_from_abel(...))``.
+        Lets this panel show whether the Abel inversion's spherical-symmetry
+        assumption alone reproduces the measured TEC, independent of the
+        tomography analysis.
+    """
     if entry.tangent_alt_km is None:
         raise ValueError(
             "plot_tec_profile_comparison: entry has no tangent_alt_km -- "
@@ -448,9 +467,19 @@ def plot_tec_profile_comparison(entry, y_forecast: np.ndarray, y_analysis: np.nd
     order = np.argsort(entry.tangent_alt_km)
     alt = np.asarray(entry.tangent_alt_km)[order]
 
+    if y_forecast_ensemble is not None:
+        yfe = np.asarray(y_forecast_ensemble)[order]
+        f_mean, f_std = yfe.mean(axis=1), yfe.std(axis=1)
+        ax.fill_betweenx(alt, f_mean - f_std, f_mean + f_std, color="C0", alpha=0.2,
+                          label="forecast ensemble spread (+/-1$\\sigma$)")
+
     ax.plot(np.asarray(y_measured)[order], alt, "o-", color="k", label="measured", markersize=3)
     ax.plot(np.asarray(y_forecast)[order], alt, "o-", color="C0", label="forecast", markersize=3)
     ax.plot(np.asarray(y_analysis)[order], alt, "o-", color="C1", label="analysis", markersize=3)
+
+    if y_abel_spherical is not None:
+        ax.plot(np.asarray(y_abel_spherical)[order], alt, "--", color="g",
+                label="Abel-consistent (spherical)")
 
     ax.set_xlabel("TEC (TECU)")
     ax.set_ylabel("Tangent altitude (km)")
@@ -581,6 +610,8 @@ def plot_tec_edp_profile_comparison(
     *, lat: float | None = None, lon: float | None = None,
     tangent_alt_window: tuple[float, float] = (250.0, 350.0),
     figsize=(12, 6), style: str | None = None, boost_label: str | None = None,
+    y_forecast_ensemble: np.ndarray | None = None,
+    y_abel_spherical: np.ndarray | None = None,
 ):
     """One two-panel figure per RO (2026-09-29 user request, replaces
     separately saving :func:`plot_tec_profile_comparison` and
@@ -595,7 +626,11 @@ def plot_tec_edp_profile_comparison(
     style, boost_label : optional (2026-10-17 user request) -- shown on a
     second suptitle line when given, so a saved/shared image is
     self-identifying (which parameterization style, boosted or not)
-    without needing its file path/folder name."""
+    without needing its file path/folder name.
+
+    y_forecast_ensemble, y_abel_spherical : optional (2026-11-12 user
+    request) -- passed straight through to :func:`plot_tec_profile_comparison`,
+    see its docstring."""
     fig, (ax_tec, ax_edp) = plt.subplots(1, 2, figsize=figsize)
 
     # Both plot_*_profile_comparison functions bake the entry label into
@@ -603,7 +638,9 @@ def plot_tec_edp_profile_comparison(
     # redundant suffix here since the figure-level suptitle below already
     # carries it -- otherwise the two titles visually collide with the
     # suptitle (found visually reviewing the first version of this plot).
-    plot_tec_profile_comparison(entry, y_forecast, y_analysis, y_measured, ax=ax_tec)
+    plot_tec_profile_comparison(entry, y_forecast, y_analysis, y_measured, ax=ax_tec,
+                                 y_forecast_ensemble=y_forecast_ensemble,
+                                 y_abel_spherical=y_abel_spherical)
     ax_tec.set_title(ax_tec.get_title().split(":")[0])
     try:
         plot_edp_profile_comparison(

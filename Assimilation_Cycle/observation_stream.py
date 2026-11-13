@@ -35,6 +35,9 @@ from observation_preparation import (
     write_observations,
     read_observations,
     build_roi_dict,
+    ReceiverSigmaTable,
+    load_receiver_sigma_table,
+    sigma_for_entry,
 )
 
 from .cycle_config import CycleConfig
@@ -102,13 +105,17 @@ def _load_or_compute_igs(cfg: CycleConfig) -> list[ObservationEntry]:
     return entries
 
 
-def _entries_to_batch(entries: list[ObservationEntry], obs_sigma: float, batch_index: int) -> CycleBatch:
+def _entries_to_batch(
+    entries: list[ObservationEntry], obs_sigma: float, batch_index: int,
+    sigma_table: ReceiverSigmaTable | None = None,
+) -> CycleBatch:
     rec = np.concatenate([np.asarray(e.rec_ecef_km) for e in entries], axis=1)
     gnss = np.concatenate([np.asarray(e.gnss_ecef_km) for e in entries], axis=1)
     tec = np.concatenate([np.asarray(e.tec) for e in entries])
     obs_type = np.concatenate([np.full(e.n_rays, e.obs_type) for e in entries])
     n = tec.shape[0]
-    R = (obs_sigma ** 2) * np.eye(n)
+    sigma = np.concatenate([sigma_for_entry(e, sigma_table, obs_sigma) for e in entries])
+    R = np.diag(sigma ** 2)
 
     dates = [e.date for e in entries if e.date is not None]
     entry_ray_ranges = []
@@ -202,22 +209,27 @@ def batch_entries(entries: list[ObservationEntry], cfg: CycleConfig) -> list[Cyc
     if cfg.min_tangent_alt_km is not None:
         entries = _apply_min_tangent_alt_filter(entries, cfg.min_tangent_alt_km)
 
+    sigma_table = (
+        load_receiver_sigma_table(cfg.receiver_sigma_table_path)
+        if cfg.receiver_sigma_table_path is not None else None
+    )
+
     batches = []
     if cfg.max_tec_per_batch is not None:
         chunk: list[ObservationEntry] = []
         chunk_rays = 0
         for e in entries:
             if chunk and chunk_rays + e.n_rays > cfg.max_tec_per_batch:
-                batches.append(_entries_to_batch(chunk, cfg.obs_sigma, batch_index=len(batches)))
+                batches.append(_entries_to_batch(chunk, cfg.obs_sigma, batch_index=len(batches), sigma_table=sigma_table))
                 chunk, chunk_rays = [], 0
             chunk.append(e)
             chunk_rays += e.n_rays
         if chunk:
-            batches.append(_entries_to_batch(chunk, cfg.obs_sigma, batch_index=len(batches)))
+            batches.append(_entries_to_batch(chunk, cfg.obs_sigma, batch_index=len(batches), sigma_table=sigma_table))
     else:
         for i in range(0, len(entries), cfg.batch_size):
             chunk = entries[i:i + cfg.batch_size]
-            batches.append(_entries_to_batch(chunk, cfg.obs_sigma, batch_index=len(batches)))
+            batches.append(_entries_to_batch(chunk, cfg.obs_sigma, batch_index=len(batches), sigma_table=sigma_table))
     return batches
 
 

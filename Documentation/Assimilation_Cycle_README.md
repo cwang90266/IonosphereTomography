@@ -355,7 +355,69 @@ comparison.
 | `max_tec_per_batch` | `None` (disabled) | cap on total rays per assimilation batch; set `300` for `Final_Packaging.docx`'s stated default. Entries are never split across batches. |
 | `batch_size` | 200 | fallback entry-count batching policy, used only when `max_tec_per_batch` is `None` |
 | `min_tangent_alt_km` | `None` (disabled) | drop RO rays with `tangent_alt_km` below this before batching; IGS unaffected |
-| `obs_sigma` | 1.0 | constant TEC observation-error std (TECU), same for RO and IGS |
+| `obs_sigma` | 1.0 | TEC observation-error std (TECU); flat constant for every observation when `receiver_sigma_table_path` is unset, otherwise the fallback for IGS and any RO ray the table doesn't cover |
+| `receiver_sigma_table_path` | `None` (disabled) | path to a per-receiver, per-tangent-altitude-bin TEC sigma CSV (see below); overrides `obs_sigma` wherever it covers a ray |
+
+#### Per-receiver measurement noise (`receiver_sigma_table_path`, opt-in, default off)
+
+Some RO receivers (e.g. `YM08`) have been found to carry substantially
+higher TEC uncertainty than others at a given tangent altitude, so a
+single project-wide `obs_sigma` can be too coarse. Setting
+`receiver_sigma_table_path` to a CSV replaces that constant, per RO ray,
+with a value looked up by receiver and tangent altitude.
+
+CSV layout (columns are read positionally, not by exact header text):
+the first two columns give each row's tangent-altitude bin as
+`[alt_min_km, alt_max_km]` (inclusive on both ends); every column after
+that is one receiver, named by its header (matched case/`-`/`_`-
+insensitively against an RO entry's `label`/`rec_id`/`obs_source`,
+e.g. `YM08` against the podTc2 filename `podTc2_YM08.2025...`), holding
+TEC-sigma values (TECU) for that bin:
+
+```csv
+alt_min_km,alt_max_km,GN04,GN05,YM08
+0,100,2.0,2.0,5.0
+100,300,2.5,2.5,6.0
+```
+
+`obs_sigma` still applies as the fallback whenever the table doesn't
+cover a ray: IGS observations always (no tangent-point concept), and
+RO rays with a receiver not in the table, a tangent altitude outside
+every bin, or a blank cell. `None` (the default) disables the table
+entirely, keeping `obs_sigma` as a flat constant for every observation
+(no behavior change for existing configs). See
+`observation_preparation.load_receiver_sigma_table`/`sigma_for_entry`.
+
+Two real example tables ship with this repo in
+[`Documentation/examples/`](examples/):
+
+- [`TEC_Uncertainty.csv`](examples/TEC_Uncertainty.csv) -- one coarse
+  bin covering the whole RO tangent-altitude range used so far,
+  `[90, 900]` km.
+- [`TEC_Uncertainty_v.csv`](examples/TEC_Uncertainty_v.csv) -- the same
+  range split into 81 fine 10 km bins (`[89.999, 100]`, `[99.999,
+  110]`, ..., `[889.999, 900]`); each bin's lower edge is set 0.001 km
+  below the previous bin's upper edge so no tangent altitude falls
+  through a float-roundoff gap between them (`sigma_for_entry` resolves
+  the resulting 0.001 km overlap by taking the first/lower bin that
+  matches).
+
+Both are UTF-8-with-BOM, CRLF-terminated (an Excel export artifact) and
+load as-is -- `load_receiver_sigma_table` reads the altitude columns
+positionally, so the BOM on the first header and the trailing space on
+`"Upper Bound "` in `TEC_Uncertainty.csv` don't matter, and pandas
+strips the CRLF automatically. As of this writing both files set every
+receiver's sigma to a flat `5.0` TECU (a placeholder, not yet
+differentiated by receiver); point `receiver_sigma_table_path` at
+`TEC_Uncertainty_v.csv` for the finer altitude resolution once
+per-receiver values are filled in:
+
+```python
+cfg = CycleConfig(
+    ...,
+    receiver_sigma_table_path=f"{REPO}/Documentation/examples/TEC_Uncertainty_v.csv",
+)
+```
 
 ### Grid margin and inter-batch inflation (both opt-in, default off)
 

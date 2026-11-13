@@ -29,6 +29,7 @@ from .roi import (
 from .roi_selection import haversine_km, los_within_roi, build_roi_dict
 from .schema import ObservationEntry
 from .netcdf_io import write_observations, read_observations
+from .receiver_sigma_table import ReceiverSigmaTable, load_receiver_sigma_table, match_receiver, sigma_for_entry
 from .diagnostics import (
     plot_geolocation,
     plot_obs_detail,
@@ -63,4 +64,8 @@ __all__ = [
     "pooled_fraction_inside_roi",
     "plot_los_penetration",
     "plot_tec_comparison",
+    "ReceiverSigmaTable",
+    "load_receiver_sigma_table",
+    "match_receiver",
+    "sigma_for_entry",
 ]
