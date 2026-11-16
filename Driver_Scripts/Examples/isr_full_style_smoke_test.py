@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Smoke test: full 4-default-style package_run (ANCHOR, PCA_3D_10ex,
-PCA_1D_10ex, PCA_1D_10ex_ISR) against real cached Tromso 2025-11-18 data,
-with the real ISR comparison tooling AND the real ISR-derived PCA basis
-wired in -- end-to-end verification of everything built this session."""
+PCA_1D_10ex, PCA_1D_10ex_ISR) plus the two opt-in power-law styles
+(PCA_1D_pow, PCA_3D_pow -- density = |x|^alpha, alpha > 1; see
+Documentation/Assimilation_Cycle_README.md's "Styles" section) against
+real cached Tromso 2025-11-18 data, with the real ISR comparison tooling
+AND the real ISR-derived PCA basis wired in -- end-to-end verification of
+everything built this session."""
 import sys
 from pathlib import Path
 
@@ -44,7 +47,7 @@ cfg = CycleConfig(
     igs_observations_path=CACHE / "smoke_test_igs_observations.nc",
     isr_file_path=ISR_FILE,
     isr_pca_basis_path=ISR_BASIS,
-    styles=default_styles(),
+    styles=default_styles() + ["PCA_1D_pow", "PCA_3D_pow"],
     hyper_params_by_style=default_hyper_params_by_style(),
     output_dir=OUT,
     label="isr_full",

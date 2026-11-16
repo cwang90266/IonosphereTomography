@@ -250,11 +250,15 @@ STYLE_DISPLAY = {
     "PCA_3D_10ex": "IRI-trained PCA_3D_10ex",
     "PCA_1D_10ex": "IRI-trained PCA_1D_10ex",
     "PCA_1D_10ex_ISR": "TRO-ISR-trained PCA_1D_10ex_ISR",
+    "PCA_3D_pow": "IRI-trained PCA_3D_pow",
+    "PCA_1D_pow": "IRI-trained PCA_1D_pow",
 }
 
 DEFAULT_HYPER_PARAMS = {
     "PCA_3D_10ex": {"retaining_threshold": 0.9999},
     "PCA_1D_10ex": {"retaining_threshold": 0.99999},
+    "PCA_3D_pow": {"retaining_threshold": 0.9999, "alpha": 2.0},
+    "PCA_1D_pow": {"retaining_threshold": 0.99999, "alpha": 2.0},
 }
 
 
@@ -698,7 +702,29 @@ def ensure_tro_isr_pca_basis(
 
 
 def build_hyper_params_by_style(styles: list[str], basis_path: Path | None) -> dict:
-    """Build hyper-parameters once; inject the pre-fit ISR PCA explicitly."""
+    """Build hyper-parameters once; inject the pre-fit ISR PCA explicitly.
+
+    Any requested ``PCA_*`` style other than ``PCA_1D_10ex_ISR`` (handled
+    separately below) must have an entry in ``DEFAULT_HYPER_PARAMS``, or it
+    fails to fit (needs 'PCA'/'retaining_threshold') with no diagnostic --
+    confirmed root cause of a real total-run-failure bug (every hour of
+    every run silently got an empty hyper_params dict for a PCA style
+    missing from this dict, instead of raising here). Styles with no
+    hyper_params requirement (``raw``, ``density_10ex``, ``ANCHOR``, which
+    fill in their own defaults in ``EDP_Parameterization._init_hyper_params``)
+    are intentionally exempt.
+    """
+    missing = [
+        style for style in styles
+        if style.startswith("PCA_") and style != "PCA_1D_10ex_ISR"
+        and style not in DEFAULT_HYPER_PARAMS
+    ]
+    if missing:
+        raise ValueError(
+            f"No DEFAULT_HYPER_PARAMS entry for style(s) {missing} -- add one "
+            "(or pass a pre-fit 'PCA' via some other mechanism) rather than "
+            "silently running with empty hyper_params."
+        )
     out = {
         style: dict(DEFAULT_HYPER_PARAMS[style])
         for style in styles

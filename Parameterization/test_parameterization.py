@@ -114,11 +114,17 @@ def synthetic_edpsamples(small_anchor_ensemble):
     )
 
 
-ALL_STYLES = ["density_10ex", "ANCHOR", "PCA_1D", "PCA_1D_10ex", "PCA_3D", "PCA_3D_10ex"]
-PCA_STYLES = ["PCA_1D", "PCA_1D_10ex", "PCA_3D", "PCA_3D_10ex"]
+ALL_STYLES = ["density_10ex", "ANCHOR", "PCA_1D", "PCA_1D_10ex", "PCA_3D", "PCA_3D_10ex",
+              "PCA_1D_pow", "PCA_3D_pow"]
+PCA_STYLES = ["PCA_1D", "PCA_1D_10ex", "PCA_3D", "PCA_3D_10ex", "PCA_1D_pow", "PCA_3D_pow"]
+POW_STYLES = ["PCA_1D_pow", "PCA_3D_pow"]
+TEST_ALPHA = 2.0   # fixed unit-test alpha; independent of whatever default the
+                    # real-data sweep eventually settles on for production use.
 
 
 def _hyper_params_for(style: str) -> dict | None:
+    if style in POW_STYLES:
+        return {"retaining_threshold": 0.999, "alpha": TEST_ALPHA}
     if style in PCA_STYLES:
         return {"retaining_threshold": 0.999}
     return None
@@ -174,6 +180,64 @@ class TestDensity10ex:
         p = np.array([1.0, 3.0, 3.9999])
         jac = P.Jacobian_density_10ex(p, minlog10Density=4.0)
         assert np.allclose(jac, 0.0)
+
+
+# ===========================================================================
+# density_pow
+# ===========================================================================
+
+class TestDensityPow:
+    @pytest.mark.parametrize("alpha", [1.2, 1.5, 2.0, 3.0])
+    def test_round_trip_nonnegative_branch(self, alpha):
+        density = np.array([0.0, 1e5, 1e8, 1e10, 1e11, 3.7e11])
+        x = P.pow_param(density.copy(), alpha)
+        recon = P.density_pow(x, alpha)
+        assert np.allclose(recon, density, rtol=1e-10)
+
+    @pytest.mark.parametrize("alpha", [1.2, 1.5, 2.0, 3.0])
+    def test_always_nonnegative_for_mixed_sign_x(self, alpha, rng):
+        # The core motivating property: unlike the linear PCA styles,
+        # density_pow can never go negative, however negative x is.
+        x = rng.normal(scale=1e6, size=1000)
+        x = np.concatenate([x, [-1e12, 0.0, 1e12]])
+        density = P.density_pow(x, alpha)
+        assert np.all(density >= 0.0)
+
+    def test_does_not_mutate_input(self):
+        x = np.array([-2.0, 0.0, 3.0])
+        original = x.copy()
+        _ = P.density_pow(x, 2.0)
+        assert np.array_equal(x, original), "density_pow mutated its input array"
+
+    @pytest.mark.parametrize("alpha", [1.2, 1.5, 2.0, 3.0])
+    def test_jacobian_matches_finite_difference(self, alpha):
+        # Mixed-sign x, away from 0 (checked separately below).
+        x = np.array([-11.0, -3.5, -0.5, 0.5, 3.5, 11.0])
+        eps = 1e-6
+        fd = (P.density_pow(x + eps, alpha) - P.density_pow(x - eps, alpha)) / (2 * eps)
+        analytic = P.Jacobian_density_pow(x, alpha)
+        assert np.allclose(fd, analytic, rtol=1e-4)
+
+    @pytest.mark.parametrize("alpha", [1.2, 1.5, 2.0, 3.0])
+    def test_differentiable_at_zero(self, alpha):
+        """
+        The property that motivates alpha > 1 over plain alpha = 1 (i.e.
+        plain ``|x|``, not differentiable at 0): the one-sided finite
+        differences approaching x=0 from above and below must converge to
+        the *same* limit (0), and that limit must match the analytic
+        Jacobian evaluated exactly at x=0.
+        """
+        analytic_at_zero = P.Jacobian_density_pow(np.array([0.0]), alpha)[0]
+        assert analytic_at_zero == 0.0
+
+        for eps in (1e-2, 1e-4, 1e-6):
+            fd_right = (P.density_pow(np.array([eps]), alpha)[0] - 0.0) / eps
+            fd_left = (0.0 - P.density_pow(np.array([-eps]), alpha)[0]) / eps
+            # Both one-sided slopes -> 0 as eps -> 0 (alpha > 1 means
+            # |eps|^(alpha-1) -> 0), and they agree with each other to
+            # within the slopes' own shrinking magnitude.
+            assert abs(fd_right) < eps ** (alpha - 1.0) * 10
+            assert abs(fd_left) < eps ** (alpha - 1.0) * 10
 
 
 # ===========================================================================
@@ -465,6 +529,42 @@ class TestPCAJacobians1D:
                 max_err = max(max_err, np.max(relative_error(jac[:, k, j], fd)))
         assert max_err < 1e-5
 
+    @pytest.mark.parametrize("alpha", [1.2, 2.0, 3.0])
+    def test_matches_finite_difference_pow(self, rng, alpha):
+        """
+        Regression target: the pow-branch Jacobian must be evaluated at the
+        *signed* pre-abs x (recovered via the linear decode), not at the
+        already-|.|-ed density -- reusing density the way the log10 branch
+        does would silently flatten this to a wrong, always-nonnegative
+        Jacobian. ``state`` is plain ``rng.normal`` so ``x = PCA@state+mean``
+        naturally lands on both sides of zero -- this test would fail on
+        that wrong implementation for roughly half the (k, j) entries.
+        """
+        n_alt, nPCA, nPts = 40, 4, 3
+        PCA = rng.normal(size=(n_alt, nPCA))
+        mean = rng.normal(scale=5.0, size=n_alt)
+        state = rng.normal(size=(nPCA, nPts))
+
+        jac = P.PCA2EDP_1D_map(state, PCA, mean=mean, alpha=alpha)
+        eps = 1e-6
+        max_err = 0.0
+        for k in range(nPCA):
+            for j in range(nPts):
+                sp = state.copy(); sp[k, j] += eps
+                sm = state.copy(); sm[k, j] -= eps
+                fd = (P.PCA2EDP_1D(sp, PCA, mean=mean, alpha=alpha)[:, j]
+                      - P.PCA2EDP_1D(sm, PCA, mean=mean, alpha=alpha)[:, j]) / (2 * eps)
+                max_err = max(max_err, np.max(relative_error(jac[:, k, j], fd)))
+        assert max_err < 1e-5
+
+    def test_pow_density_always_nonnegative(self, rng):
+        n_alt, nPCA, nPts = 40, 4, 200
+        PCA = rng.normal(size=(n_alt, nPCA))
+        mean = rng.normal(scale=5.0, size=n_alt)
+        state = rng.normal(scale=10.0, size=(nPCA, nPts))
+        density = P.PCA2EDP_1D(state, PCA, mean=mean, alpha=2.0)
+        assert np.all(density >= 0.0)
+
 
 class TestPCAJacobians3D:
     @pytest.mark.parametrize("linear", [True, False])
@@ -485,6 +585,35 @@ class TestPCAJacobians3D:
                       - P.PCA2EDP_3D(sm, PCA, mean=mean, linear=linear)[:, :, j]) / (2 * eps)
                 max_err = max(max_err, np.max(relative_error(jac[:, :, k, j], fd)))
         assert max_err < 1e-5
+
+    @pytest.mark.parametrize("alpha", [1.2, 2.0, 3.0])
+    def test_matches_finite_difference_pow(self, rng, alpha):
+        """3D analogue of TestPCAJacobians1D's same-named test -- see its
+        docstring for what this specifically guards against."""
+        n_alt, n_geo, nPCA, nSample = 15, 6, 3, 2
+        PCA = rng.normal(size=(n_alt, n_geo, nPCA))
+        mean = rng.normal(scale=5.0, size=(n_alt, n_geo))
+        state = rng.normal(size=(nPCA, nSample))
+
+        jac = P.PCA2EDP_3D_map(state, PCA, mean=mean, alpha=alpha)
+        eps = 1e-6
+        max_err = 0.0
+        for k in range(nPCA):
+            for j in range(nSample):
+                sp = state.copy(); sp[k, j] += eps
+                sm = state.copy(); sm[k, j] -= eps
+                fd = (P.PCA2EDP_3D(sp, PCA, mean=mean, alpha=alpha)[:, :, j]
+                      - P.PCA2EDP_3D(sm, PCA, mean=mean, alpha=alpha)[:, :, j]) / (2 * eps)
+                max_err = max(max_err, np.max(relative_error(jac[:, :, k, j], fd)))
+        assert max_err < 1e-5
+
+    def test_pow_density_always_nonnegative(self, rng):
+        n_alt, n_geo, nPCA, nSample = 15, 6, 3, 200
+        PCA = rng.normal(size=(n_alt, n_geo, nPCA))
+        mean = rng.normal(scale=5.0, size=(n_alt, n_geo))
+        state = rng.normal(scale=10.0, size=(nPCA, nSample))
+        density = P.PCA2EDP_3D(state, PCA, mean=mean, alpha=2.0)
+        assert np.all(density >= 0.0)
 
 
 # ===========================================================================
@@ -523,6 +652,30 @@ class TestEDPParameterizationRegistry:
     def test_pca_3d_wrong_ndim_raises(self, rng):
         with pytest.raises(ValueError):
             P.EDP_Parameterization(style="PCA_3D", hyper_params={"PCA": rng.normal(size=(5, 3))})
+
+    @pytest.mark.parametrize("style", POW_STYLES)
+    def test_pow_style_missing_alpha_raises(self, style, rng):
+        ndim = 2 if style == "PCA_1D_pow" else 3
+        pca_shape = (5, 3) if ndim == 2 else (5, 4, 3)
+        with pytest.raises(ValueError):
+            P.EDP_Parameterization(style=style, hyper_params={"PCA": rng.normal(size=pca_shape)})
+
+    @pytest.mark.parametrize("style", POW_STYLES)
+    @pytest.mark.parametrize("alpha", [1.0, 0.5, -2.0, "2.0", True])
+    def test_pow_style_invalid_alpha_raises(self, style, alpha, rng):
+        ndim = 2 if style == "PCA_1D_pow" else 3
+        pca_shape = (5, 3) if ndim == 2 else (5, 4, 3)
+        with pytest.raises(ValueError):
+            P.EDP_Parameterization(
+                style=style, hyper_params={"PCA": rng.normal(size=pca_shape), "alpha": alpha})
+
+    @pytest.mark.parametrize("style", POW_STYLES)
+    def test_pow_style_valid_alpha_accepted(self, style, rng):
+        ndim = 2 if style == "PCA_1D_pow" else 3
+        pca_shape = (5, 3) if ndim == 2 else (5, 4, 3)
+        ep = P.EDP_Parameterization(
+            style=style, hyper_params={"PCA": rng.normal(size=pca_shape), "alpha": 2.0})
+        assert ep.hyper_params["alpha"] == 2.0
 
     def test_unknown_style_raises(self):
         with pytest.raises(ValueError):
@@ -567,7 +720,7 @@ class TestParameterizedEDPSamples:
         if style in PCA_STYLES:
             assert "n_retained_components" in summary
 
-    @pytest.mark.parametrize("style", ["density_10ex", "PCA_1D", "PCA_3D"])
+    @pytest.mark.parametrize("style", ["density_10ex", "PCA_1D", "PCA_3D", "PCA_1D_pow"])
     def test_netcdf_round_trip_preserves_param_vec(self, parameterized_by_style, style, tmp_path):
         pe = parameterized_by_style[style]
         path = tmp_path / f"{style}.nc"
@@ -579,6 +732,12 @@ class TestParameterizedEDPSamples:
         pv2 = pe2.EDPSamples["param_vec"].to_numpy()
         assert pv1.shape == pv2.shape
         assert np.allclose(pv1, pv2, rtol=1e-5)
+        if style == "PCA_1D_pow":
+            # Confirms the generic hyper_params netCDF round-trip (no
+            # PCA_*_pow-specific save/load code) actually carries 'alpha'
+            # through, since get_density/get_parameter are meaningless
+            # without it.
+            assert pe2.Parameterization.hyper_params["alpha"] == pe.Parameterization.hyper_params["alpha"]
 
     def test_anchor_netcdf_round_trip_reuses_param_vec_without_refitting(self, synthetic_edpsamples, tmp_path, monkeypatch):
         """Regression for a real bug: from_xarray/fromNetCDF used to call
