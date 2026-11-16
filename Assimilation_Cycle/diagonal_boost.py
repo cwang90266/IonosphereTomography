@@ -44,16 +44,24 @@ Design (as specified by the user):
 density, scaled by that point's own linear-space std, can push individual
 members' density below zero at points/members where the local
 std/mean ratio is high (observed up to >2 in a real ensemble) --
-requiring a clip to a small positive floor. That's fine for the ``raw``
-style (confirmed on real data: a genuine, modest, robust held-out RMSE
-improvement, no pathology) since ``raw`` consumes density directly. But
-``density_10ex``/``PCA_*_10ex`` take ``log10`` of density before fitting
-anything -- a value clipped to the floor becomes ``log10(1.0) = 0`` next
-to typical surrounding values around ``log10 ~ 9-12``, an 8-12
-order-of-magnitude discontinuity in the space those styles actually fit,
-which severely corrupts the ensemble's sample statistics at that point
-and caused catastrophic (RMSE into the millions) or non-convergent
-real-data results for those styles at exactly this amplitude range.
+requiring a clip to a positive floor (``_DENSITY_FLOOR``, 1e6 m^-3 --
+raised 2026-11-16 from a 1.0 m^-3 no-op-sized floor, still physically
+negligible next to real EDP values of >= ~1e8, but large enough to
+shrink the magnitude of the discontinuity described next). That's fine
+for the ``raw`` style (confirmed on real data: a genuine, modest, robust
+held-out RMSE improvement, no pathology) since ``raw`` consumes density
+directly. But ``density_10ex``/``PCA_*_10ex`` take ``log10`` of density
+before fitting anything -- a value clipped to the floor becomes
+``log10(1e6) = 6`` next to typical surrounding values around
+``log10 ~ 9-12``, still a multi-order-of-magnitude discontinuity in the
+space those styles actually fit (smaller than the old floor's 8-12
+orders, but not eliminated), which caused catastrophic (RMSE into the
+millions) or non-convergent real-data results for those styles at
+exactly this amplitude range. The same reasoning applies to the
+``PCA_*_pow`` styles' own fit space (``density^(1/alpha)``). For any of
+these non-``raw`` styles, ``log_space=True`` (below) remains the
+recommended way to avoid this discontinuity entirely, not reliance on
+the floor's exact value.
 ``log_space=True`` avoids the mechanism entirely: the perturbation is
 added to ``log10(density)`` instead, which has no positivity constraint
 (so no clipping is ever needed), and converted back via ``10**(...)`` --
@@ -86,7 +94,7 @@ from __future__ import annotations
 import numpy as np
 
 _EARTH_RADIUS_KM = 6371.0
-_DENSITY_FLOOR = 1.0   # m^-3; real EDP values are >= ~1e8, this is a no-op safety clip (linear space only)
+_DENSITY_FLOOR = 1.0e6   # m^-3; real EDP values are >= ~1e8, still physically negligible (linear space only)
 
 
 def _haversine_km(lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
