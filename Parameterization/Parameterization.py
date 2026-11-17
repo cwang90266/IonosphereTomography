@@ -11,10 +11,17 @@ Defines a family of mappings between a vertical electron-density profile
 - ``'ANCHOR'``        : an 8-parameter analytic Epstein/Chapman-style model
                         of the whole profile (NmF2, hmF2, H0, gamma, B0, B1,
                         NmE, hmE), fit by nonlinear least squares.
-- ``'PCA_1D'``/``'PCA_1D_10ex'`` : per-geolocation empirical-orthogonal-
-                        function (PCA) compression of the altitude profile.
-- ``'PCA_3D'``/``'PCA_3D_10ex'`` : joint (altitude, geolocation) PCA
-                        compression -- one basis shared across the mesh.
+- ``'PCA_1D'``/``'PCA_1D_10ex'``/``'PCA_1D_pow'`` : per-geolocation empirical-
+                        orthogonal-function (PCA) compression of the altitude
+                        profile.
+- ``'PCA_3D'``/``'PCA_3D_10ex'``/``'PCA_3D_pow'`` : joint (altitude,
+                        geolocation) PCA compression -- one basis shared
+                        across the mesh.
+
+The ``_pow`` styles parameterize ``density = |x|^alpha`` (``alpha > 1``,
+required in ``hyper_params``) instead of the ``_10ex`` styles' ``density =
+10**x``: always non-negative like ``_10ex``, but differentiable (continuous
+derivative, no clamp needed) at ``x = 0`` -- see ``density_pow``.
 
 Each style is bundled into a ``ParameterizationSpec`` (three callables plus
 a couple of flags) registered in ``EDP_Parameterization._build_spec``.
@@ -44,6 +51,7 @@ from edp_samples import EDPSamples
 
 __all__ = [
     "density_10ex", "Jacobian_density_10ex", "log10_param",
+    "density_pow", "Jacobian_density_pow", "pow_param",
     "ANCHOR_PARAM_LABELS", "ANCHOR_DEFAULT_BOUNDS",
     "anchor_region_boundaries",
     "PCADiagnostics", "get_PCA",
@@ -86,6 +94,47 @@ def log10_param(density: np.ndarray, minlog10Density: float = 4.0) -> np.ndarray
     floor = 10.0 ** minlog10Density
     density = np.where(density < floor, floor, density)
     return np.log10(density)
+
+
+# ===========================================================================
+# 'density_pow': pointwise density = |x|^alpha <-> density, no compression.
+# ===========================================================================
+#
+# Like 'density_10ex', always non-negative -- but unlike it, no floor/clamp
+# is needed anywhere: |x|^alpha is already defined (and, for alpha > 1,
+# differentiable) for every real x, including x = 0.
+
+def density_pow(x: np.ndarray, alpha: float) -> np.ndarray:
+    """x -> density = |x|^alpha. Always >= 0 for any real x, any alpha > 0."""
+    x = np.asarray(x, dtype=float)
+    return np.abs(x) ** alpha
+
+
+def pow_param(density: np.ndarray, alpha: float) -> np.ndarray:
+    """
+    density -> x, the non-negative branch: x = density^(1/alpha).
+
+    Only ever applied to already-non-negative density (e.g. the IRI2020
+    ensemble being encoded for the first time), so there's no sign to
+    recover -- unlike ``density_pow``'s inverse in general, which has two
+    roots (+-density^(1/alpha)). Negative density (numerical noise only;
+    physical density is never negative going in) is clipped to 0 first.
+    """
+    density = np.asarray(density, dtype=float)
+    return np.clip(density, 0.0, None) ** (1.0 / alpha)
+
+
+def Jacobian_density_pow(x: np.ndarray, alpha: float) -> np.ndarray:
+    """
+    d(density)/dx = alpha * |x|^(alpha-1) * sign(x), for density = |x|^alpha.
+
+    Unlike ``Jacobian_density_10ex``, this needs no ``np.where`` clamp at
+    x = 0: for alpha > 1, |x|^(alpha-1) -> 0 as x -> 0 from either side, and
+    ``np.sign(0.0) == 0.0``, so the formula below already evaluates to the
+    exact (not approximated) continuous two-sided derivative at x = 0.
+    """
+    x = np.asarray(x, dtype=float)
+    return alpha * np.abs(x) ** (alpha - 1.0) * np.sign(x)
 
 
 # ===========================================================================
@@ -892,7 +941,8 @@ def get_PCA(edps: np.ndarray, retaining_threshold: float) -> tuple[np.ndarray, n
 
 
 def PCA2EDP_1D(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None = None,
-               linear: bool = True, minlog10Density: float = 4.0) -> np.ndarray:
+               linear: bool = True, minlog10Density: float = 4.0,
+               alpha: float | None = None) -> np.ndarray:
     """
     Coefficient space -> EDP space.
 
@@ -901,6 +951,9 @@ def PCA2EDP_1D(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None =
     given, is added back after projecting -- it must be the same mean
     ``get_PCA`` subtracted when fitting ``PCA``, or reconstruction will be
     missing the ensemble's mean profile entirely.
+
+    ``alpha``, if given (not None), takes priority over ``linear``: density
+    = |x|^alpha where x = PCA @ PCA_state + mean (see ``density_pow``).
     """
     PCA_state = np.asarray(PCA_state, dtype=float)
     PCA = np.asarray(PCA, dtype=float)
@@ -914,18 +967,25 @@ def PCA2EDP_1D(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None =
     if mean is not None:
         density = density + np.asarray(mean, dtype=float).reshape(-1, 1)
     density = density.reshape([PCA_shape[0]] + list(PCA_state_shape[1:]))
-    if not linear:
+    if alpha is not None:
+        density = density_pow(density, alpha)
+    elif not linear:
         density = 10.0 ** density
     return density
 
 
 def EDP2PCA_1D(density: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None = None,
-               linear: bool = True, minlog10Density: float = 4.0) -> np.ndarray:
+               linear: bool = True, minlog10Density: float = 4.0,
+               alpha: float | None = None) -> np.ndarray:
     """
     Project density onto the PCA coefficient space (inverse of PCA2EDP_1D).
 
     ``mean`` (nAlt,), if given, is subtracted before projecting -- must
     match the mean ``get_PCA`` used when fitting ``PCA``.
+
+    ``alpha``, if given (not None), takes priority over ``linear``: project
+    x = density^(1/alpha) (see ``pow_param``) instead of density or
+    log10(density).
     """
     density = np.asarray(density, dtype=float)
     PCA = np.asarray(PCA, dtype=float)
@@ -935,7 +995,9 @@ def EDP2PCA_1D(density: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None = N
         raise ValueError("density and PCA dimensions are inconsistent.")
 
     flat_density = density.reshape(density_shape[0], -1)
-    if not linear:
+    if alpha is not None:
+        flat_density = pow_param(flat_density, alpha)
+    elif not linear:
         floor = 10.0 ** minlog10Density
         flat_density = np.log10(np.where(flat_density < floor, floor, flat_density))
     if mean is not None:
@@ -947,7 +1009,8 @@ def EDP2PCA_1D(density: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None = N
 
 
 def PCA2EDP_1D_map(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None = None,
-                    linear: bool = True, minlog10Density: float = 4.0) -> np.ndarray:
+                    linear: bool = True, minlog10Density: float = 4.0,
+                    alpha: float | None = None) -> np.ndarray:
     """
     Jacobian of ``PCA2EDP_1D`` w.r.t. ``PCA_state``.
 
@@ -959,6 +1022,13 @@ def PCA2EDP_1D_map(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | No
     ``linear=False`` (density = 10**(PCA @ PCA_state + mean)) it
     additionally scales by ``ln(10) * density`` at each point, since the
     map is then nonlinear.
+
+    ``alpha``, if given (not None), takes priority over ``linear``: density
+    = |x|^alpha, so the scale factor is ``Jacobian_density_pow(x, alpha)``
+    -- evaluated at the *signed* x = PCA @ PCA_state + mean, not at the
+    (sign-discarding) decoded density, unlike the ``linear=False`` branch
+    above, which can get away with scaling by density alone only because
+    10**x is monotonic and positive throughout.
     """
     PCA_state = np.asarray(PCA_state, dtype=float)
     PCA = np.asarray(PCA, dtype=float)
@@ -971,14 +1041,18 @@ def PCA2EDP_1D_map(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | No
     idx = (slice(None), slice(None)) + (np.newaxis,) * len(tail_shape)
     jac = np.broadcast_to(PCA[idx], PCA_shape + tail_shape).copy()
 
-    if not linear:
+    if alpha is not None:
+        x = PCA2EDP_1D(PCA_state, PCA, mean=mean, linear=True)
+        jac = jac * Jacobian_density_pow(x, alpha)[:, np.newaxis, ...]
+    elif not linear:
         density = PCA2EDP_1D(PCA_state, PCA, mean=mean, linear=False, minlog10Density=minlog10Density)
         jac = np.log(10.0) * jac * density[:, np.newaxis, ...]
     return jac
 
 
 def PCA2EDP_3D(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None = None,
-               linear: bool = True, minlog10Density: float = 4.0) -> np.ndarray:
+               linear: bool = True, minlog10Density: float = 4.0,
+               alpha: float | None = None) -> np.ndarray:
     """
     Coefficient space -> EDP space, joint (altitude, geolocation) basis.
 
@@ -986,6 +1060,9 @@ def PCA2EDP_3D(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None =
     (nPCA, nSample); the returned density has dimension (nAlt, nGeo, nSample).
     ``mean`` (nAlt, nGeo) or (nAlt*nGeo,), if given, is added back after
     projecting -- must match the mean ``get_PCA`` used when fitting ``PCA``.
+
+    ``alpha``, if given (not None), takes priority over ``linear`` -- see
+    ``PCA2EDP_1D``'s docstring for the same convention.
     """
     PCA_state = np.asarray(PCA_state, dtype=float)
     PCA = np.asarray(PCA, dtype=float)
@@ -1000,18 +1077,24 @@ def PCA2EDP_3D(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None =
     if mean is not None:
         density = density + np.asarray(mean, dtype=float).reshape(-1, 1)
     density = density.reshape([PCA_shape[0], PCA_shape[1], flat_state.shape[1]])
-    if not linear:
+    if alpha is not None:
+        density = density_pow(density, alpha)
+    elif not linear:
         density = 10.0 ** density
     return density
 
 
 def EDP2PCA_3D(density: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None = None,
-               linear: bool = True, minlog10Density: float = 4.0) -> np.ndarray:
+               linear: bool = True, minlog10Density: float = 4.0,
+               alpha: float | None = None) -> np.ndarray:
     """
     Project density onto the joint PCA coefficient space (inverse of PCA2EDP_3D).
 
     ``mean`` (nAlt, nGeo) or (nAlt*nGeo,), if given, is subtracted before
     projecting -- must match the mean ``get_PCA`` used when fitting ``PCA``.
+
+    ``alpha``, if given (not None), takes priority over ``linear`` -- see
+    ``EDP2PCA_1D``'s docstring for the same convention.
     """
     density = np.asarray(density, dtype=float)
     PCA = np.asarray(PCA, dtype=float)
@@ -1021,7 +1104,9 @@ def EDP2PCA_3D(density: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None = N
         raise ValueError("density and PCA dimensions are inconsistent.")
 
     flat_density = density.reshape(density_shape[0] * density_shape[1], -1)
-    if not linear:
+    if alpha is not None:
+        flat_density = pow_param(flat_density, alpha)
+    elif not linear:
         floor = 10.0 ** minlog10Density
         flat_density = np.log10(np.where(flat_density < floor, floor, flat_density))
     if mean is not None:
@@ -1034,7 +1119,8 @@ def EDP2PCA_3D(density: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None = N
 
 
 def PCA2EDP_3D_map(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | None = None,
-                    linear: bool = True, minlog10Density: float = 4.0) -> np.ndarray:
+                    linear: bool = True, minlog10Density: float = 4.0,
+                    alpha: float | None = None) -> np.ndarray:
     """
     Jacobian of ``PCA2EDP_3D`` w.r.t. ``PCA_state``.
 
@@ -1042,6 +1128,11 @@ def PCA2EDP_3D_map(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | No
     ``PCA2EDP_1D_map``: for ``linear=True`` the Jacobian is ``PCA`` itself,
     tiled over the sample axis; for ``linear=False`` it additionally scales
     by ``ln(10) * density`` per sample.
+
+    ``alpha``, if given (not None), takes priority over ``linear``: scales
+    by ``Jacobian_density_pow(x, alpha)``, evaluated at the signed x (the
+    ``linear=True`` decode), not at the sign-discarding decoded density --
+    see ``PCA2EDP_1D_map``'s docstring for why that distinction matters.
     """
     PCA_state = np.asarray(PCA_state, dtype=float)
     PCA = np.asarray(PCA, dtype=float)
@@ -1053,7 +1144,10 @@ def PCA2EDP_3D_map(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | No
     nSample = PCA_state_shape[1] if PCA_state.ndim > 1 else 1
     jac = np.broadcast_to(PCA[..., np.newaxis], PCA_shape + (nSample,)).copy()
 
-    if not linear:
+    if alpha is not None:
+        x = PCA2EDP_3D(PCA_state, PCA, mean=mean, linear=True)
+        jac = jac * Jacobian_density_pow(x, alpha)[:, :, np.newaxis, :]
+    elif not linear:
         density = PCA2EDP_3D(PCA_state, PCA, mean=mean, linear=False, minlog10Density=minlog10Density)
         jac = np.log(10.0) * jac * density[:, :, np.newaxis, :]
     return jac
@@ -1065,7 +1159,7 @@ def PCA2EDP_3D_map(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | No
 
 Parameterization_Style = Literal[
     'raw', 'density_10ex', 'ANCHOR', 'PCA_1D', 'PCA_3D', 'PCA_1D_10ex', 'PCA_3D_10ex',
-    'PCA_1D_10ex_ISR',
+    'PCA_1D_10ex_ISR', 'PCA_1D_pow', 'PCA_3D_pow',
 ]
 """``PCA_1D_10ex_ISR`` (ISR_Integration_Plan.md Section 4.1.2): mechanically
 identical to ``PCA_1D_10ex`` (1-D, log10-space PCA parameterization) --
@@ -1136,19 +1230,40 @@ class EDP_Parameterization:
             if hyper_params:
                 merged.update(hyper_params)
             return merged
-        if style in ('PCA_1D', 'PCA_1D_10ex', 'PCA_1D_10ex_ISR'):
+        if style in ('PCA_1D', 'PCA_1D_10ex', 'PCA_1D_10ex_ISR', 'PCA_1D_pow'):
             if hyper_params is None or 'PCA' not in hyper_params:
                 raise ValueError(f"Parameterization {style} requires 'PCA' in hyper_params.")
             if np.asarray(hyper_params['PCA']).ndim != 2:
                 raise ValueError(f"Parameterization {style} requires PCA to be 2-D (nAlt, nPCA).")
+            if style == 'PCA_1D_pow':
+                EDP_Parameterization._check_alpha(style, hyper_params)
             return dict(hyper_params)
-        if style in ('PCA_3D', 'PCA_3D_10ex'):
+        if style in ('PCA_3D', 'PCA_3D_10ex', 'PCA_3D_pow'):
             if hyper_params is None or 'PCA' not in hyper_params:
                 raise ValueError(f"Parameterization {style} requires 'PCA' in hyper_params.")
             if np.asarray(hyper_params['PCA']).ndim != 3:
                 raise ValueError(f"Parameterization {style} requires PCA to be 3-D (nAlt, nGeo, nPCA).")
+            if style == 'PCA_3D_pow':
+                EDP_Parameterization._check_alpha(style, hyper_params)
             return dict(hyper_params)
         raise ValueError(f"Parameterization style '{style}' is not defined.")
+
+    @staticmethod
+    def _check_alpha(style: str, hyper_params: dict) -> None:
+        """Shared validation for the ``_pow`` styles: ``alpha`` must be
+        present and strictly > 1 -- the exact bound that makes ``density =
+        |x|^alpha`` differentiable (not just continuous) at x = 0, which is
+        the whole point of this style over plain ``alpha = 1`` (``PCA_1D``/
+        ``PCA_3D``'s own ``abs``-free linear map, not this one)."""
+        if 'alpha' not in hyper_params:
+            raise ValueError(f"Parameterization {style} requires 'alpha' in hyper_params.")
+        alpha = hyper_params['alpha']
+        if not isinstance(alpha, (int, float)) or isinstance(alpha, bool) or not (alpha > 1.0):
+            raise ValueError(
+                f"Parameterization {style} requires 'alpha' to be a number > 1 "
+                f"(got {alpha!r}); alpha > 1 is what makes |x|^alpha "
+                "differentiable at x = 0."
+            )
 
     @staticmethod
     def _build_spec(style: str, hyper_params: dict) -> ParameterizationSpec:
@@ -1223,6 +1338,26 @@ class EDP_Parameterization:
                 to_density=lambda p, alt: PCA2EDP_3D(p, PCA, mean=mean, linear=False),
                 to_parameter=lambda d, alt: EDP2PCA_3D(d, PCA, mean=mean, linear=False),
                 jacobian=lambda p, alt: ('full', PCA2EDP_3D_map(p, PCA, mean=mean, linear=False)),
+                is_lossy=True,
+            )
+        if style == 'PCA_1D_pow':
+            PCA = hyper_params['PCA']
+            mean = hyper_params.get('PCA_mean')
+            alpha = hyper_params['alpha']
+            return ParameterizationSpec(
+                to_density=lambda p, alt: PCA2EDP_1D(p, PCA, mean=mean, alpha=alpha),
+                to_parameter=lambda d, alt: EDP2PCA_1D(d, PCA, mean=mean, alpha=alpha),
+                jacobian=lambda p, alt: ('full', PCA2EDP_1D_map(p, PCA, mean=mean, alpha=alpha)),
+                is_lossy=True,
+            )
+        if style == 'PCA_3D_pow':
+            PCA = hyper_params['PCA']
+            mean = hyper_params.get('PCA_mean')
+            alpha = hyper_params['alpha']
+            return ParameterizationSpec(
+                to_density=lambda p, alt: PCA2EDP_3D(p, PCA, mean=mean, alpha=alpha),
+                to_parameter=lambda d, alt: EDP2PCA_3D(d, PCA, mean=mean, alpha=alpha),
+                jacobian=lambda p, alt: ('full', PCA2EDP_3D_map(p, PCA, mean=mean, alpha=alpha)),
                 is_lossy=True,
             )
         raise ValueError(f"Parameterization style '{style}' is not defined.")
@@ -1351,6 +1486,8 @@ class Parameterized_EDPSamples:
         'PCA_3D': lambda E: ('nPCA', E.DIM_SAMPLE),
         'PCA_3D_10ex': lambda E: ('nPCA', E.DIM_SAMPLE),
         'PCA_1D_10ex_ISR': lambda E: ('nPCA', E.DIM_GEO, E.DIM_SAMPLE),
+        'PCA_1D_pow': lambda E: ('nPCA', E.DIM_GEO, E.DIM_SAMPLE),
+        'PCA_3D_pow': lambda E: ('nPCA', E.DIM_SAMPLE),
     }
 
     def __init__(self, EDP: EDPSamples, style: Parameterization_Style = 'density_10ex',
@@ -1370,7 +1507,9 @@ class Parameterized_EDPSamples:
         """
         hyper_params = dict(hyper_params) if hyper_params is not None else {}
         is_isr_pca = style == 'PCA_1D_10ex_ISR'
-        is_pca = is_isr_pca or style in ('PCA_1D', 'PCA_1D_10ex', 'PCA_3D', 'PCA_3D_10ex')
+        is_pca = is_isr_pca or style in (
+            'PCA_1D', 'PCA_1D_10ex', 'PCA_3D', 'PCA_3D_10ex', 'PCA_1D_pow', 'PCA_3D_pow',
+        )
         if is_isr_pca and 'PCA' not in hyper_params:
             raise ValueError(
                 "Parameterization style 'PCA_1D_10ex_ISR' always requires a "
@@ -1385,6 +1524,12 @@ class Parameterized_EDPSamples:
                 "'retaining_threshold' (to fit a new PCA basis from this "
                 "dataset) or a pre-fit 'PCA' matrix in hyper_params."
             )
+        if style.endswith('_pow'):
+            # Required regardless of whether PCA is fit fresh or pre-fit
+            # (unlike retaining_threshold, alpha can't be inferred from a
+            # pre-fit PCA matrix) -- validate before spending time on a
+            # PCA fit that would otherwise be wasted.
+            EDP_Parameterization._check_alpha(style, hyper_params)
 
         edp = EDP.copy(deep=False)
         edps = edp.edps
@@ -1398,6 +1543,7 @@ class Parameterized_EDPSamples:
             # but never reaches the fit-from-ensemble branch below that this flag guards (is_isr_pca
             # always supplies 'PCA' directly) -- set correctly anyway so it can't silently mislead
             # a future reader/change.
+            is_pow = style.endswith('_pow')   # mutually exclusive with is_log (disjoint suffixes)
             if 'PCA' in hyper_params:
                 PCA = hyper_params['PCA']
                 mean = hyper_params.get('PCA_mean')
@@ -1410,6 +1556,13 @@ class Parameterized_EDPSamples:
                     mld = hyper_params.get('minlog10Density', 4.0)
                     floor = 10.0 ** mld
                     flat = np.log10(np.where(flat < floor, floor, flat))
+                elif is_pow:
+                    # Project the (known-nonnegative) IRI2020 ensemble into
+                    # x-space before fitting PCA, same role as the log10
+                    # floor+transform above: the PCA basis is fit on x, not
+                    # on raw density, so retaining_threshold applies to x's
+                    # variance, not density's.
+                    flat = pow_param(flat, hyper_params['alpha'])
                 PCA_flat, mean_flat, pca_diag = get_PCA(flat, hyper_params['retaining_threshold'])
                 PCA = PCA_flat.reshape(n_height, n_geo, -1) if is_3d else PCA_flat
                 mean = mean_flat.reshape(n_height, n_geo) if is_3d else mean_flat
@@ -1566,7 +1719,7 @@ class Parameterized_EDPSamples:
         if self.style == 'ANCHOR':
             summary['rmse_by_region'] = self._anchor_rmse_by_region(residual)
 
-        if self.style in ('PCA_1D', 'PCA_1D_10ex', 'PCA_3D', 'PCA_3D_10ex'):
+        if self.style in ('PCA_1D', 'PCA_1D_10ex', 'PCA_3D', 'PCA_3D_10ex', 'PCA_1D_pow', 'PCA_3D_pow'):
             diag: PCADiagnostics | None = self.Parameterization.hyper_params.get('pca_diagnostics')
             if diag is not None:
                 summary['n_retained_components'] = diag.n_retained
@@ -1608,7 +1761,7 @@ class Parameterized_EDPSamples:
         altitude = self.EDPSamples.altitude
         edps = self.EDPSamples.edps
 
-        if self.style in ('PCA_3D', 'PCA_3D_10ex'):
+        if self.style in ('PCA_3D', 'PCA_3D_10ex', 'PCA_3D_pow'):
             # PCA_3D's basis mixes altitude and geolocation jointly, so a
             # single profile can't be encoded/decoded on its own -- run the
             # whole spatial field for this sample, then slice one geo point.

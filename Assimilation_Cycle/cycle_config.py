@@ -56,6 +56,8 @@ def default_hyper_params_by_style() -> dict:
     return {
         "PCA_3D_10ex": {"retaining_threshold": 1 - 1e-4},
         "PCA_1D_10ex": {"retaining_threshold": 1 - 1e-5},
+        "PCA_3D_pow": {"retaining_threshold": 1 - 1e-4, "alpha": 2.0},
+        "PCA_1D_pow": {"retaining_threshold": 1 - 1e-5, "alpha": 2.0},
     }
 
 

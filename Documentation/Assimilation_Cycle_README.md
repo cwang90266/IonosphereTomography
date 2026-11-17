@@ -278,7 +278,7 @@ check `rmse_reduction.png` before trusting a result.
 | field | default | meaning |
 |---|---|---|
 | `styles` | `["ANCHOR", "PCA_3D_10ex", "PCA_1D_10ex", "PCA_1D_10ex_ISR"]` | styles a **packaged run** (`run_package`) runs and cross-compares -- 4 as of `ISR_Integration_Plan.md`, see below |
-| `hyper_params_by_style` | `{"PCA_3D_10ex": {"retaining_threshold": 0.9999}, "PCA_1D_10ex": {"retaining_threshold": 0.99999}}` | PCA styles' retained-variance threshold (`1 - removal_threshold`); `ANCHOR` needs none; `PCA_1D_10ex_ISR` needs none *here* either (its basis comes from `isr_pca_basis_path`, Section 9, not a threshold) |
+| `hyper_params_by_style` | `default_hyper_params_by_style()`: `{"PCA_3D_10ex": {"retaining_threshold": 0.9999}, "PCA_1D_10ex": {"retaining_threshold": 0.99999}, "PCA_3D_pow": {"retaining_threshold": 0.9999, "alpha": 2.0}, "PCA_1D_pow": {"retaining_threshold": 0.99999, "alpha": 2.0}}` | PCA styles' retained-variance threshold (`1 - removal_threshold`); the `_pow` styles also require `alpha` (a number `> 1`, see below); `ANCHOR` needs none; `PCA_1D_10ex_ISR` needs none *here* either (its basis comes from `isr_pca_basis_path`, Section 9, not a threshold) |
 | `style` / `hyper_params` | `"density_10ex"` / `None` | single-style fields, used only by the lower-level `cycle_driver.run_cycle`/`style_sweep.run_style_sweep`, not by `run_package` |
 
 **`PCA_1D_10ex_ISR`** (added `ISR_Integration_Plan.md`) is mechanically
@@ -304,6 +304,45 @@ point used across many prior projects, not because it's the recommended
 choice for new work. If you only care about the best result fastest, run
 with `styles=["PCA_3D_10ex"]` alone; keep `ANCHOR` in the list when you
 specifically want that comparison, and budget real time for it (Section 7).
+
+#### `PCA_1D_pow` / `PCA_3D_pow` -- opt-in, not a default
+
+Two more styles, mechanically parallel to `PCA_1D_10ex`/`PCA_3D_10ex` (same
+PCA-on-a-transformed-ensemble fitting procedure) but decoding
+`density = |x|^alpha` (`alpha > 1`, required in `hyper_params_by_style`)
+instead of `density = 10**x`. Motivation (`LinearPCA_vs_LogPCA_Report.md`):
+the plain linear styles (`PCA_1D`/`PCA_3D`) produce physically invalid
+*negative* analysis density in the large majority of real cases tested,
+while the log10-space styles avoid that but are prone to blow up
+(unphysically large density, `analysis_error_m3` spiking by orders of
+magnitude) in the exact reduced-observation hours where robustness matters
+most. `|x|^alpha` with `alpha > 1` is always non-negative like the log10
+styles, but -- unlike `10**x` -- doesn't exponentially amplify a large
+state value, and is differentiable at `x = 0` with no clamp needed.
+
+Not in `default_styles()` (opt-in, same precedent as the plain linear
+styles) but **is** in `default_hyper_params_by_style()`, which supplies
+`{"retaining_threshold": 1 - 1e-4, "alpha": 2.0}` /
+`{"retaining_threshold": 1 - 1e-5, "alpha": 2.0}` -- `alpha=2.0` is a
+starting default, not yet tuned by a real-data sweep across alpha values.
+To use: add `"PCA_1D_pow"`/`"PCA_3D_pow"` to `styles` explicitly; if you
+override `hyper_params_by_style` rather than using the default, each
+entry must include `alpha` (a number `> 1`) alongside `retaining_threshold`,
+or the style's `EDP_Parameterization` raises at construction.
+
+Initial real-data check (cached Tromso smoke-test data,
+`Data_Assimilation_Cycle/step16_package_smoke`): both pow styles converged
+with RMSE comparable to or better than their log10-space counterparts and
+**zero** negative density in either style's analysis ensemble. Under a
+synthetic sparse-observation stress test (RO/IGS counts truncated to 3/2),
+the log10-space styles' decoded density reached unphysically large maxima
+(~2-3e16 m^-3, versus ~1e12 normally) while the pow styles' maxima stayed
+in the normal range (~3e12) with still-zero negative density -- a small-
+scale echo of the log-space divergence documented for real MIL data, with
+the pow styles avoiding both failure modes (negative density and blow-up)
+at once in this test. This has not yet been confirmed against the full
+real ROI2000 MIL dataset or swept across alpha values; treat `alpha=2.0`
+as provisional until that's done.
 
 ### ISR ground-truth comparison (optional, default off)
 

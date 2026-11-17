@@ -51,8 +51,10 @@ The default run compares the parameterization styles selected in DEFAULT_STYLES:
   - ANCHOR
   - PCA_3D
   - PCA_3D_10ex
+  - PCA_3D_pow
   - PCA_1D
   - PCA_1D_10ex
+  - PCA_1D_pow
   - PCA_1D_10ex_ISR
 
 
@@ -256,6 +258,8 @@ def _styles_tag(styles: list[str]) -> str:
         "PCA_1D": "1D",
         "PCA_1D_10ex": "1DL",
         "PCA_1D_10ex_ISR": "ISR",
+        "PCA_3D_pow": "3Dp",
+        "PCA_1D_pow": "1Dp",
     }
     unknown = [s for s in styles if s not in abbreviations]
     if unknown:
@@ -324,6 +328,59 @@ ALL_STYLE_DISPLAY = {
     "PCA_1D": "IRI-trained PCA_1D",
     "PCA_1D_10ex": "IRI-trained PCA_1D_10ex",
     "PCA_1D_10ex_ISR": "TRO-ISR-trained PCA_1D_10ex_ISR",
+    "PCA_3D_pow": "IRI-trained PCA_3D_pow",
+    "PCA_1D_pow": "IRI-trained PCA_1D_pow",
+}
+
+# Base retaining thresholds before PCA_DISCARD_SCALE is applied.
+# The ISR-trained basis historically uses 0.9999 (= 1 - 1e-4).
+BASE_PCA_RETAINING_THRESHOLD = {
+    "PCA_3D": 0.9999,
+    "PCA_3D_10ex": 0.9999,
+    "PCA_1D": 0.99999,
+    "PCA_1D_10ex": 0.99999,
+    "PCA_1D_10ex_ISR": 0.9999,
+    "PCA_3D_pow": 0.9999,
+    "PCA_1D_pow": 0.99999,
+}
+
+# alpha for the |x|^alpha power-law styles (required, must be > 1).
+# 2.0 is a starting default, not yet tuned by a real-data alpha sweep.
+POW_STYLE_ALPHA = {
+    "PCA_3D_pow": 2.0,
+    "PCA_1D_pow": 2.0,
+}
+
+
+def _scaled_retaining_threshold(base_threshold: float) -> float:
+    """Scale discarded variance while keeping the result in (0, 1)."""
+    discarded = 1.0 - float(base_threshold)
+    scaled_discarded = discarded * float(PCA_DISCARD_SCALE)
+    threshold = 1.0 - scaled_discarded
+    if not (0.0 < threshold < 1.0):
+        raise ValueError(
+            "PCA_DISCARD_SCALE produces an invalid retaining threshold: "
+            f"base={base_threshold}, scale={PCA_DISCARD_SCALE}, result={threshold}"
+        )
+    return threshold
+
+
+def _hyper_params_for_style(style: str) -> dict:
+    """retaining_threshold (scaled by PCA_DISCARD_SCALE like every other PCA
+    style) plus, for the power-law styles, the required alpha."""
+    hyper_params = {
+        "retaining_threshold": _scaled_retaining_threshold(
+            BASE_PCA_RETAINING_THRESHOLD[style]
+        )
+    }
+    if style in POW_STYLE_ALPHA:
+        hyper_params["alpha"] = POW_STYLE_ALPHA[style]
+    return hyper_params
+
+
+STYLE_DISPLAY = {
+    style: ALL_STYLE_DISPLAY[style]
+    for style in DEFAULT_STYLES
 }
 
 # Base retaining thresholds before PCA_DISCARD_SCALE is applied.
@@ -356,11 +413,7 @@ STYLE_DISPLAY = {
 }
 
 DEFAULT_HYPER_PARAMS = {
-    style: {
-        "retaining_threshold": _scaled_retaining_threshold(
-            BASE_PCA_RETAINING_THRESHOLD[style]
-        )
-    }
+    style: _hyper_params_for_style(style)
     for style in DEFAULT_STYLES
     if style in BASE_PCA_RETAINING_THRESHOLD
 }
@@ -838,7 +891,29 @@ def ensure_tro_isr_pca_basis(
 
 
 def build_hyper_params_by_style(styles: list[str], basis_path: Path | None) -> dict:
-    """Build hyper-parameters once; inject the pre-fit ISR PCA explicitly."""
+    """Build hyper-parameters once; inject the pre-fit ISR PCA explicitly.
+
+    Any requested ``PCA_*`` style other than ``PCA_1D_10ex_ISR`` (handled
+    separately below) must have an entry in ``DEFAULT_HYPER_PARAMS``, or it
+    fails to fit (needs 'PCA'/'retaining_threshold') with no diagnostic --
+    confirmed root cause of a real total-run-failure bug (every hour of
+    every run silently got an empty hyper_params dict for a PCA style
+    missing from this dict, instead of raising here). Styles with no
+    hyper_params requirement (``raw``, ``density_10ex``, ``ANCHOR``, which
+    fill in their own defaults in ``EDP_Parameterization._init_hyper_params``)
+    are intentionally exempt.
+    """
+    missing = [
+        style for style in styles
+        if style.startswith("PCA_") and style != "PCA_1D_10ex_ISR"
+        and style not in DEFAULT_HYPER_PARAMS
+    ]
+    if missing:
+        raise ValueError(
+            f"No DEFAULT_HYPER_PARAMS entry for style(s) {missing} -- add one "
+            "(or pass a pre-fit 'PCA' via some other mechanism) rather than "
+            "silently running with empty hyper_params."
+        )
     out = {
         style: dict(DEFAULT_HYPER_PARAMS[style])
         for style in styles

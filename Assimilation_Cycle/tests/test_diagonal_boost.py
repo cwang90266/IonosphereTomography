@@ -228,7 +228,7 @@ class TestPhysicalValidity:
     def test_stays_non_negative_even_with_large_amplitude(self):
         edp = _make_synthetic_edp_samples()
         boosted = apply_diagonal_boost(edp, amplitude=50.0, rng=np.random.default_rng(6))
-        assert np.all(boosted.edps >= 1.0)
+        assert np.all(boosted.edps >= 1.0e6)
 
 
 class TestReproducibility:
@@ -269,7 +269,7 @@ class TestLogSpace:
         edp = _make_synthetic_edp_samples()
         boosted = apply_diagonal_boost(edp, amplitude=50.0, rng=np.random.default_rng(6), log_space=True)
         assert np.all(boosted.edps > 0)
-        assert not np.any(boosted.edps == 1.0)   # the linear-space floor value
+        assert not np.any(boosted.edps == 1.0e6)   # the linear-space floor value
 
     def test_preserves_geometric_mean_not_arithmetic_mean(self):
         """Zero-mean noise in log10 space preserves the per-point
