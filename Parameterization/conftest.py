@@ -15,6 +15,6 @@ matplotlib.use("Agg")  # headless: plotting tests must not require a display
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parent
 
-for _p in (_THIS_DIR, _REPO_ROOT / "EDPSamples"):
+for _p in (_THIS_DIR, _REPO_ROOT / "EDPSamples", _REPO_ROOT / "Spline_Basis"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))

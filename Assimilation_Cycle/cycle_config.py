@@ -393,6 +393,18 @@ class CycleConfig:
     gates rather than the other way around, so it has no need for (and no
     dependency on) the topside extension used by the ISR-PCA
     parameterization style."""
+    ionosonde_file_path: str | Path | None = None
+    """Path to a preprocessed ionosonde netCDF (e.g.
+    ``MILIONO_Aug2530_2025.nc``'s schema: ``nmF2``/``hmF2``/``time_utc``
+    data variables, same ``station_name``/``station_latitude``/
+    ``station_longitude`` global-attrs convention as ``isr_file_path`` --
+    see ``isr_comparison.load_ionosonde_dataset``). An independent,
+    different-instrument calibration check on the primary ISR profile's
+    F2-peak density/height, plotted as red ``(nmF2, hmF2)`` dots on the
+    ``isr_file_path`` comparison plots. ``None`` (default): no ionosonde
+    overlay. Paired with the *primary* ``isr_file_path`` station only --
+    not with ``additional_isr_file_paths`` entries, which have no
+    per-tag ionosonde counterpart yet."""
     additional_isr_file_paths: dict[str, str | Path] = field(default_factory=dict)
     """Optional additional ISR validation files, keyed by a short output tag.
 
@@ -433,6 +445,26 @@ class CycleConfig:
     over the cycle's window; a value in ``(0, 50)`` shades the
     ``[p, 100-p]`` percentile band instead (less sensitive to a single
     outlier scan, at the cost of no longer being a literal bound)."""
+    spline_grid_file_path: str | Path | None = None
+    """Path to a cubic B-spline knot-grid file (``Spline_Basis.
+    knot_optimization.save_grid_file``'s JSON output, e.g. produced by
+    ``Driver_Scripts/optimize_vertical_grid.py``) -- supplies
+    ``hyper_params['grid_file_path']`` for the ``'SPLINE'`` style wherever
+    it's resolved (``isr_pca_basis.resolve_hyper_params_for_style``),
+    unless ``hyper_params``/``hyper_params_by_style`` already supplies
+    ``'grid_file_path'`` explicitly (that takes priority). ``None``
+    (default): no effect on any other style; using ``'SPLINE'`` without
+    this set and without an explicit ``'grid_file_path'`` raises (see
+    ``Parameterization.Parameterized_EDPSamples``).
+
+    **Same altitude-grid gotcha as ``isr_pca_basis_path`` above**: the
+    grid file's own ``h0``/``h1`` (currently 60-900 km, deliberately below
+    the production default of 90-900 km -- see
+    ``Documentation/Spline_Basis_Knot_Optimization_Plan.md`` §1.3a) must be
+    covered by whatever ``EDPSamples`` altitude range the cycle actually
+    uses; a run using ``'SPLINE'`` needs ``cfg.altitude_grid`` extended
+    down to the grid file's ``h0`` (e.g. ``np.arange(60.0, 901.0, 10.0)``),
+    not left at ``default_altitude_grid()``'s 90 km floor."""
 
     # --- Per-RO/IGS impact vectors (on by default; Impact_Vector_Plan.md Section 10) ---
     compute_impact_vectors: bool = True
