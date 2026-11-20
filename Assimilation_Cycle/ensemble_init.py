@@ -13,6 +13,7 @@ modules only once ``EDPSamples/``/``Parameterization/`` are on
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,38 @@ from .cycle_config import CycleConfig
 from .diagonal_boost import apply_diagonal_boost
 from .iri_selection import sampling_parameters_for_cycle
 from .isr_pca_basis import resolve_hyper_params_for_style
+
+_NAN_DENSITY_FLOOR = 1.0e6
+"""m^-3; same floor value as diagonal_boost.py's `_DENSITY_FLOOR` ("raised
+2026-11-16 from a 1.0 m^-3 no-op-sized floor, still physically negligible
+next to real EDP values of >= ~1e8") -- reused here for the identical
+reason, not re-derived. Defined separately (not imported) since that one is
+a private module constant and the two floors are conceptually independent
+even though they share a value."""
+
+
+def _replace_nan_density(edp) -> None:
+    """IRI2020 has occasionally produced `NaN` Ne at low latitude when
+    evaluated down to low altitudes (e.g. the 60 km floor the `SPLINE`
+    style's training collection needs) -- a Fortran-side fix was made, but
+    isn't confirmed to fully eliminate it (user, 2026-11-19). A `NaN`
+    silently reaching any style's fit (`get_PCA`'s eigendecomposition,
+    `Spline_Basis.spline_fit`'s per-column least squares) would corrupt it
+    with no clear error, so guard here, before any parameterization is
+    built, for every style -- not just `SPLINE`. Replaces in place."""
+    edps = edp.edps
+    nan_mask = np.isnan(edps)
+    n_nan = int(nan_mask.sum())
+    if n_nan:
+        alt_idx, geo_idx, mem_idx = np.where(nan_mask)
+        warnings.warn(
+            f"load_or_build_edp_samples: replacing {n_nan} NaN Ne value(s) with "
+            f"{_NAN_DENSITY_FLOOR:g} m^-3 (altitude indices {sorted(set(alt_idx.tolist()))}, "
+            f"{len(set(zip(geo_idx.tolist(), mem_idx.tolist())))} distinct (geo, member) cells affected) "
+            "-- likely an IRI2020 low-latitude/low-altitude evaluation issue.",
+            stacklevel=3,
+        )
+        edps[nan_mask] = _NAN_DENSITY_FLOOR
 
 
 def load_or_build_edp_samples(cfg: CycleConfig):
@@ -52,6 +85,7 @@ def load_or_build_edp_samples(cfg: CycleConfig):
             Lon=cfg.center_lon, Lat=cfg.center_lat, radius=cfg.effective_grid_radius_deg,
             dLat=cfg.horizontal_resolution_deg,
         )
+        _replace_nan_density(edp)
 
     if cfg.diagonal_boost_amplitude:
         rng = np.random.default_rng(cfg.diagonal_boost_rng_seed)

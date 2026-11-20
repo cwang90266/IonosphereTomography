@@ -66,7 +66,7 @@ from dataclasses import replace
 from pathlib import Path
 
 REPO = Path("/Users/cwang/Documents/Consulting/PlanetIQ/Code/IonosphereTomography")
-for p in (REPO, REPO / "Parameterization", REPO / "EDPSamples", REPO / "IRI_Sample_Inputs"):
+for p in (REPO, REPO / "Parameterization", REPO / "EDPSamples", REPO / "IRI_Sample_Inputs", REPO / "Spline_Basis"):
     sys.path.insert(0, str(p))
 
 from Assimilation_Cycle.cycle_config import CycleConfig, default_styles, default_hyper_params_by_style

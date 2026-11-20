@@ -63,7 +63,7 @@ import numpy as np
 import pandas as pd
 
 REPO = Path(__file__).resolve().parents[1]
-for _p in (REPO, REPO / "Parameterization", REPO / "EDPSamples", REPO / "IRI_Sample_Inputs"):
+for _p in (REPO, REPO / "Parameterization", REPO / "EDPSamples", REPO / "IRI_Sample_Inputs", REPO / "Spline_Basis"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -109,6 +109,55 @@ def _single(pattern: str) -> str:
     if len(hits) != 1:
         raise FileNotFoundError(f"expected exactly one file for {pattern!r}, found {len(hits)}")
     return hits[0]
+
+
+def count_peaks(log_ne: np.ndarray, prominence: float) -> np.ndarray:
+    """Peaks of prominence >= ``prominence`` (dex) in each column of (n_h, n_col)."""
+    from scipy.signal import find_peaks
+    # Pad with a floor below every value so a maximum at the top or bottom level counts too.
+    floor = log_ne.min() - 1.0
+    return np.array([
+        len(find_peaks(np.r_[floor, col, floor], prominence=prominence)[0]) for col in log_ne.T
+    ])
+
+
+def field_stats(density: np.ndarray, alt: np.ndarray, args) -> dict[str, np.ndarray]:
+    """Physical-plausibility statistics of a decoded ensemble (n_h, n_g, members).
+
+    Negative/extreme densities over every grid value of the ensemble mean and
+    of the members; per-column F peak (>= E top) of the mean; and waviness, the
+    number of log10-Ne peaks per column (a physical column has at most an E
+    and an F peak), for the mean and for up to ``--field-stats-members``
+    members.
+    """
+    mean = density.mean(axis=-1)
+    f_lev = alt >= args.e_top_km
+    finite = np.isfinite(density)
+    vals = density[finite]
+    rng = np.random.default_rng(0)
+    m = density.shape[-1]
+    pick = rng.choice(m, size=min(m, args.field_stats_members), replace=False)
+    sub = density[:, :, pick].reshape(len(alt), -1)                     # (n_h, n_g * picked)
+    floor = args.field_stats_floor
+    peaks_mean = count_peaks(np.log10(np.clip(mean, floor, None)), args.waviness_prominence)
+    peaks_mem = count_peaks(np.log10(np.clip(np.nan_to_num(sub, nan=floor), floor, None)), args.waviness_prominence)
+    return {
+        "nonfinite_frac": np.float64(1.0 - finite.mean()),
+        "neg_mean_frac": np.float64((mean <= 0).mean()),
+        "neg_member_frac": np.float64((vals <= 0).mean()),
+        "min_member": np.float64(vals.min()),
+        "max_member": np.float64(vals.max()),
+        "p999_member": np.float64(np.percentile(vals, 99.9)),
+        "max_mean": np.float64(np.nanmax(mean)),
+        "extreme_member_frac": np.float64((vals > args.extreme_ne).mean()),
+        "extreme_mean_frac": np.float64((mean > args.extreme_ne).mean()),
+        "colNmF": mean[f_lev].max(axis=0),
+        "colhmF": alt[f_lev][mean[f_lev].argmax(axis=0)],
+        "colNmE": mean[~f_lev].max(axis=0),
+        "peaks_mean": peaks_mean.astype(np.int16),
+        "wavy_member_frac": np.float64((peaks_mem >= 3).mean()),
+        "peaks_member_mean": np.float64(peaks_mem.mean()),
+    }
 
 
 def extract_hour(hour_dir: Path, out_dir: Path, isr_files: dict[str, str], args) -> str:
@@ -229,6 +278,9 @@ def extract_hour(hour_dir: Path, out_dir: Path, isr_files: dict[str, str], args)
                     res[f"{key}|{code}|{tag}mean"] = prof.mean(axis=-1)
                     res[f"{key}|{code}|{tag}std"] = prof.std(axis=-1)
                     res[f"{key}|{code}|{tag}logstd"] = np.log10(np.clip(prof, 1.0, None)).std(axis=-1)
+                if args.field_stats:
+                    for name, value in field_stats(density, alt, args).items():
+                        res[f"{key}|fs{tag}|{name}"] = value
                 del density
 
             if dual is not None:
@@ -273,6 +325,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--obs-sigma", type=float, default=3.0, help="TEC observation error (TECU)")
     p.add_argument("--num-segments", type=int, default=1000)
     p.add_argument("--e-top-km", type=float, default=150.0, help="top of the E region for the E-share of model TEC")
+    p.add_argument("--field-stats", action="store_true",
+                   help="also store plausibility statistics of the full decoded fields (see field_stats)")
+    p.add_argument("--field-stats-members", type=int, default=200, help="members used for member waviness")
+    p.add_argument("--field-stats-floor", type=float, default=1e6, help="Ne floor (m^-3) before log10 for waviness")
+    p.add_argument("--waviness-prominence", type=float, default=0.1, help="peak prominence (dex) counted as a peak")
+    p.add_argument("--extreme-ne", type=float, default=5e12, help="Ne (m^-3) above which a value counts as extreme")
     return p.parse_args()
 
 

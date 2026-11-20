@@ -166,7 +166,7 @@ for _p in (
     REPO,
     REPO / "Parameterization",
     REPO / "EDPSamples",
-    REPO / "IRI_Sample_Inputs",
+    REPO / "IRI_Sample_Inputs", REPO / "Spline_Basis",
 ):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))

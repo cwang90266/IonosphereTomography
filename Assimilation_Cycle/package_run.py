@@ -174,6 +174,13 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     for isr_tag, isr_path in cfg.additional_isr_file_paths.items():
         isr_by_tag[str(isr_tag)] = isr_comparison.load_isr_dataset(isr_path)
 
+    # Independent ionosonde calibration check, paired with the primary
+    # ISR station only (cycle_config.py's ionosonde_file_path docstring).
+    ionosonde_dataset = (
+        isr_comparison.load_ionosonde_dataset(cfg.ionosonde_file_path)
+        if cfg.ionosonde_file_path is not None else None
+    )
+
     # -- Impact-vector query points (Impact_Vector_Plan.md Section 7/10),
     #    optional -- explicit points plus, when a primary ISR file is
     #    configured, that station's point added automatically. ----------
@@ -399,7 +406,10 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         style_dir = out / f"{cfg.label}_{style}"
 
         isr_collectors = {
-            tag: isr_comparison.IsrComparisonCollector(edp_samples, isr_dataset)
+            tag: isr_comparison.IsrComparisonCollector(
+                edp_samples, isr_dataset,
+                ionosonde=ionosonde_dataset if tag == "" else None,
+            )
             for tag, isr_dataset in isr_by_tag.items()
         }
 
@@ -517,6 +527,7 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                     model_altitude,
                     percentile=cfg.isr_range_percentile,
                     style=style,
+                    ionosonde=ionosonde_dataset if isr_tag == "" else None,
                 ),
                 isr_dir / "range_comparison.png",
             )
@@ -651,6 +662,7 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                 cfg.end_time,
                 model_altitude,
                 percentile=cfg.isr_range_percentile,
+                ionosonde=ionosonde_dataset if isr_tag == "" else None,
             ),
             isr_cross_dir / "range_comparison.png",
         )

@@ -214,23 +214,33 @@ def load_isr_pca_basis(path: str | Path) -> IsrPcaBasis:
 
 
 def resolve_hyper_params_for_style(cfg, style: str, hyper_params: dict | None) -> dict | None:
-    """The one piece of per-style wiring ``'PCA_1D_10ex_ISR'`` needs beyond
-    what every other style already gets from ``hyper_params``/
-    ``hyper_params_by_style``: if ``style`` is this one, ``hyper_params``
-    doesn't already carry a ``'PCA'``, and ``cfg.isr_pca_basis_path`` is
-    set, load that basis and merge it in. A no-op (returns
-    ``hyper_params`` unchanged) for every other style, or when ``'PCA'``
-    is already supplied explicitly (that takes priority over the
-    configured path). Called by ``ensemble_init.py``, ``package_run.py``,
-    and ``style_sweep.py`` wherever they resolve a style's hyper_params
-    before building a ``Parameterized_EDPSamples``."""
-    if style != "PCA_1D_10ex_ISR":
-        return hyper_params
+    """Per-style hyper_params wiring beyond what every style already gets
+    from ``hyper_params``/``hyper_params_by_style`` directly -- currently
+    two styles, each a no-op for every other style (and for each other):
+
+    - ``'PCA_1D_10ex_ISR'``: if ``hyper_params`` doesn't already carry a
+      ``'PCA'`` and ``cfg.isr_pca_basis_path`` is set, load that basis and
+      merge it in.
+    - ``'SPLINE'``: if ``hyper_params`` doesn't already carry a
+      ``'grid_file_path'`` and ``cfg.spline_grid_file_path`` is set, merge
+      that path in (``Parameterized_EDPSamples`` itself does the actual
+      fit against it -- this function only resolves which file to use).
+
+    In both cases an explicitly-supplied value in ``hyper_params`` takes
+    priority over the configured path. Called by ``ensemble_init.py``,
+    ``package_run.py``, and ``style_sweep.py`` wherever they resolve a
+    style's hyper_params before building a ``Parameterized_EDPSamples``."""
     hp = dict(hyper_params) if hyper_params else {}
-    if "PCA" not in hp and getattr(cfg, "isr_pca_basis_path", None) is not None:
-        basis = load_isr_pca_basis(cfg.isr_pca_basis_path)
-        hp.update(hyper_params_from_basis(basis))
-    return hp
+    if style == "PCA_1D_10ex_ISR":
+        if "PCA" not in hp and getattr(cfg, "isr_pca_basis_path", None) is not None:
+            basis = load_isr_pca_basis(cfg.isr_pca_basis_path)
+            hp.update(hyper_params_from_basis(basis))
+        return hp
+    if style == "SPLINE":
+        if "grid_file_path" not in hp and getattr(cfg, "spline_grid_file_path", None) is not None:
+            hp["grid_file_path"] = cfg.spline_grid_file_path
+        return hp
+    return hyper_params
 
 
 def hyper_params_from_basis(basis: IsrPcaBasis) -> dict:
