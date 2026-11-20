@@ -19,11 +19,11 @@ Usage::
     # Default: the existing, already-validated 'linear' grid file
     python3 Driver_Scripts/Examples/spline_style_fit_space_example.py
 
-    # Once you've produced a 'pow' or 'log10' grid file of your own
-    # (Documentation/Spline_Basis_README.md Section 3), point this at it
-    # to see SPLINE pick up that fit_space with no other code change:
+    # Any of the other committed grid files under Spline_Basis/grid_files/
+    # (or one of your own, built per Documentation/Spline_Basis_README.md
+    # Section 3) work the same way, with no other code change:
     python3 Driver_Scripts/Examples/spline_style_fit_space_example.py \\
-        --grid-file /path/to/grid_h60_dvar_pow_n14.json
+        --grid-file Spline_Basis/grid_files/grid_h60_dvar_pow_alpha2_n14_full.json
 """
 import argparse
 import sys
@@ -39,10 +39,7 @@ import Parameterization as P
 from edp_samples import EDPSamples
 from knot_optimization import load_grid_file
 
-DEFAULT_GRID_FILE = (
-    "/Users/cwang/Documents/Consulting/PlanetIQ/Runs/Tomography_Test/Claude_Test/"
-    "spline_knots/full_resolution/grid_h60_dvar_linear_n14_full.json"
-)
+DEFAULT_GRID_FILE = str(REPO / "Spline_Basis" / "grid_files" / "grid_h60_dvar_linear_n14_full.json")
 DEFAULT_EDP_SAMPLES = (
     "/Users/cwang/Documents/Consulting/PlanetIQ/Runs/Tomography_Test/Claude_Test/"
     "spline_knots/full_resolution/collection/training/MIL_2025-08-26_0000_edp_samples.nc"
