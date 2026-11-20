@@ -114,7 +114,7 @@ OUTPUT_ROOT = Path("/mnt/tmp-sbem-ionosphere-tomography/tomography_output")  # =
 CENTER_SITE = "MIL"  # === Edit here ===  switch between MIL/TRO/SVL
 
 # Campaign date range used in LABEL_OF_EACH_RUN and RUN_MESSAGE.Example below becomes "oct1417_2025".
-RUN_DATE_RANGE = ("2025-08-27", "2025-08-27")  # === Edit here ===
+RUN_DATE_RANGE = ("2025-08-25", "2025-08-29")  # === Edit here ===
 
 # Observation ROI radius, also dynamic to run label and message
 ROI_RADIUS_KM = 3000.0  # === Edit here ===
@@ -139,16 +139,19 @@ RO_AREA_FRACTION_REQUIRED = 0.65  # === Edit here ===
 # 10 -> discard 10x more variance:
 #       0.9999 -> 0.999
 #       0.99999 -> 0.9999
-PCA_DISCARD_SCALE = 1.0  # === Edit here ===
+PCA_DISCARD_SCALE = 100.0  # === Edit here ===
 
 # Choose the parameterization styles to run.
 DEFAULT_STYLES = [
     #"ANCHOR",
-    "PCA_3D",
+    #"PCA_3D",
     #"PCA_3D_10ex",
-    "PCA_1D",
+    #"PCA_1D",
     #"PCA_1D_10ex",
     #"PCA_1D_10ex_ISR",
+    "PCA_3D_pow",
+    "PCA_1D_pow",
+    
 ]  # === Edit here ===
 
 # Optional reference-run label for reusing the exact hourly IRI ensemble.
@@ -347,8 +350,10 @@ BASE_PCA_RETAINING_THRESHOLD = {
 # alpha for the |x|^alpha power-law styles (required, must be > 1).
 # 2.0 is a starting default, not yet tuned by a real-data alpha sweep.
 POW_STYLE_ALPHA = {
-    "PCA_3D_pow": 2.0,
-    "PCA_1D_pow": 2.0,
+    "PCA_3D_pow": 1.1,
+    "PCA_1D_pow": 1.1,
+    #"PCA_3D_pow": 2.0,
+    #"PCA_1D_pow": 2.0,
 }
 
 
@@ -381,16 +386,6 @@ def _hyper_params_for_style(style: str) -> dict:
 STYLE_DISPLAY = {
     style: ALL_STYLE_DISPLAY[style]
     for style in DEFAULT_STYLES
-}
-
-# Base retaining thresholds before PCA_DISCARD_SCALE is applied.
-# The ISR-trained basis historically uses 0.9999 (= 1 - 1e-4).
-BASE_PCA_RETAINING_THRESHOLD = {
-    "PCA_3D": 0.9999,
-    "PCA_3D_10ex": 0.9999,
-    "PCA_1D": 0.99999,
-    "PCA_1D_10ex": 0.99999,
-    "PCA_1D_10ex_ISR": 0.9999,
 }
 
 
