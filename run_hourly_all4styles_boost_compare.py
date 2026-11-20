@@ -117,7 +117,7 @@ CENTER_SITE = "MIL"  # === Edit here ===  switch between MIL/TRO/SVL
 RUN_DATE_RANGE = ("2025-08-25", "2025-08-29")  # === Edit here ===
 
 # Observation ROI radius, also dynamic to run label and message
-ROI_RADIUS_KM = 3000.0  # === Edit here ===
+ROI_RADIUS_KM = 2000.0  # === Edit here ===
 
 # Diagonal covariance boost amplitude. Example 0.3 becomes "Op3Boost" in the label.
 BOOST_AMPLITUDE = 0.3  # === Edit here ===
@@ -139,7 +139,7 @@ RO_AREA_FRACTION_REQUIRED = 0.65  # === Edit here ===
 # 10 -> discard 10x more variance:
 #       0.9999 -> 0.999
 #       0.99999 -> 0.9999
-PCA_DISCARD_SCALE = 100.0  # === Edit here ===
+PCA_DISCARD_SCALE = 1.0  # === Edit here ===
 
 # Choose the parameterization styles to run.
 DEFAULT_STYLES = [
