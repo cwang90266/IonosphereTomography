@@ -285,6 +285,26 @@ def nearest_isr_profile(isr: IsrDataset, target_time) -> tuple[pd.Timestamp, np.
     return isr.time[idx], isr.density[:, idx]
 
 
+def nearest_ionosonde_point(
+    iono: IonosondeDataset | None, target_time,
+) -> tuple[pd.Timestamp, float, float] | None:
+    """Nearest-in-time ``(time, nmF2, hmF2)`` with both finite, or ``None``
+    if ``iono`` is ``None`` or has no finite point at all -- the ionosonde
+    analog of :func:`nearest_isr_profile`, for picking one representative
+    value (e.g. for a tabulated row) instead of
+    :func:`ionosonde_points_in_window`'s whole-window array."""
+    if iono is None:
+        return None
+    finite = np.isfinite(iono.nmF2) & np.isfinite(iono.hmF2)
+    if not np.any(finite):
+        return None
+    target = pd.Timestamp(target_time)
+    idx_finite = np.where(finite)[0]
+    deltas = np.abs((iono.time[idx_finite] - target).to_numpy())
+    idx = idx_finite[int(np.argmin(deltas))]
+    return iono.time[idx], float(iono.nmF2[idx]), float(iono.hmF2[idx])
+
+
 def isr_profiles_in_window(isr: IsrDataset, start_time, end_time) -> np.ndarray:
     """All ISR profiles (native gates) whose timestamp falls in
     ``[start_time, end_time]`` -- shape ``(n_alt, n_in_window)``, possibly
