@@ -53,10 +53,55 @@ for the full design background.
   ensemble is generated exactly the way a real cycle's ensemble is).
 - `Driver_Scripts/optimize_vertical_grid.py` -- the driver script that
   calls the two pieces above to produce a grid file end to end.
+- `Spline_Basis/grid_files/` -- committed, ready-to-use grid files
+  (Section 3).
 - `Parameterization.Parameterized_EDPSamples(..., style='SPLINE',
   hyper_params={'grid_file_path': ...})` -- the runtime consumer.
 
-## 3. Producing a grid file in a given fit_space
+## 3. Committed grid files (`Spline_Basis/grid_files/`)
+
+Grid files are small (a few KB) and carry no run-specific data (Section
+3.1 below), so they're committed directly in the repo rather than kept as
+a Drive/`Runs/`-only output -- this also means a fresh `git clone`/`git
+pull` on a server already has them, with no separate file transfer step.
+All four were produced from the same training/validation conditions (1
+Millstone Hill hour + 1 Tromso-May hour, full 2000-member ensemble) so
+they're directly comparable:
+
+| File | `fit_space` | `alpha` | `rms_log10_ne` (train, excl. h0) |
+| --- | --- | --- | --- |
+| `grid_h60_dvar_linear_n14_full.json` | `linear` | -- | 0.0921 |
+| `grid_h60_dvar_pow_alpha1p1_n14_full.json` | `pow` | 1.1 | 0.0284 |
+| `grid_h60_dvar_pow_alpha2_n14_full.json` | `pow` | 2.0 | 0.0164 |
+| `grid_h60_dvar_log10_n14_full.json` | `log10` | -- | 0.0101 |
+
+(RMSE values are each grid file's own recorded training metric,
+`train_metrics.all.rms_log10_ne`, excluding the structural `h0` sample;
+lower isn't automatically "better" across different `fit_space`s since
+each fits a differently-shaped quantity -- don't use this column alone to
+pick one.)
+
+### 3.1 Are these files site-dependent or universal?
+
+**Universal.** A grid file only records *where the spline breakpoints go
+in altitude* and the mathematical form (`fit_space`/`alpha`, boundary
+conditions, degree) -- it carries no fitted coefficients and no
+location-specific data. At runtime, `Parameterized_EDPSamples` always
+refits the actual spline coefficients fresh from whatever ensemble is
+being parameterized (`_spline_fit_from_ensemble` in `Parameterization.py`),
+regardless of the run's own ROI. Millstone Hill/Tromso data was used only
+to *choose* good breakpoint locations (representative mid- and high
+-latitude profile shapes); once chosen, those locations are reused as-is
+for any site -- this is unlike the ISR-fit PCA basis
+(`isr_pca_basis.py`), which really is tied to one fixed station.
+
+The one caveat: if SPLINE were run somewhere with a qualitatively
+different profile shape never represented in training (e.g. the
+equatorial anomaly), the fixed knot placement might be a little less
+optimal there -- it would still produce a valid fit, just not necessarily
+the best possible one for that regime.
+
+## 4. Producing a grid file in a given fit_space
 
 A grid file is a small, self-describing JSON artifact (`grid_km`,
 `degree`, `fit_space`, `alpha`, boundary-condition settings, train/
@@ -111,13 +156,13 @@ which makes the spline overshoot near `h0`; this is a known, already
 log10 a looser reconstruction-error tolerance for exactly this reason),
 not a bug.
 
-## 4. Using a grid file in a run
+## 5. Using a grid file in a run
 
 `'SPLINE'` is a single style name -- `fit_space` only changes which grid
 file you point it at, nothing else about how you declare the style:
 
 ```python
-cfg.spline_grid_file_path = "/path/to/grid_h60_dvar_pow_n14_full.json"
+cfg.spline_grid_file_path = "Spline_Basis/grid_files/grid_h60_dvar_pow_alpha2_n14_full.json"
 cfg.styles = ["ANCHOR", "SPLINE"]   # or just ["SPLINE"], etc.
 ```
 
@@ -125,7 +170,7 @@ or, per-style (takes priority over `spline_grid_file_path` if both are
 set):
 
 ```python
-cfg.hyper_params_by_style["SPLINE"] = {"grid_file_path": "/path/to/grid_h60_dvar_pow_n14_full.json"}
+cfg.hyper_params_by_style["SPLINE"] = {"grid_file_path": "Spline_Basis/grid_files/grid_h60_dvar_pow_alpha2_n14_full.json"}
 ```
 
 **Altitude grid gotcha:** `CycleConfig.altitude_grid` defaults to
@@ -145,7 +190,7 @@ you compare, say, `PCA_3D_10ex` vs. `PCA_3D_pow`. Run separate
 `CycleConfig`s (or separate `package_run` calls), one per grid file, the
 same way you'd compare any other per-style hyperparameter choice today.
 
-## 5. Example script
+## 6. Example script
 
 `Driver_Scripts/Examples/spline_style_fit_space_example.py` loads a real,
 already-built EDPSamples ensemble, builds a `'SPLINE'`
@@ -153,10 +198,11 @@ already-built EDPSamples ensemble, builds a `'SPLINE'`
 file's `fit_space`/`alpha`, and reports the reconstruction RMSE (excluding
 the structural `h0` boundary sample). Run it as-is to see the existing,
 already-validated `linear` grid file in action, or point `--grid-file` at
-a `pow`/`log10` grid file you produce via Section 3 to see SPLINE pick up
-that fit_space with no other code change.
+any other file under `Spline_Basis/grid_files/` (Section 3), or one you
+produce yourself via Section 4, to see SPLINE pick up that fit_space with
+no other code change.
 
-## 6. Verification status
+## 7. Verification status
 
 - 761 repo-wide tests pass, including 12 SPLINE-specific round-trip/
   Jacobian/NetCDF tests covering all three `fit_space` values
