@@ -55,6 +55,33 @@ def _make_cfg(**overrides) -> CycleConfig:
     return CycleConfig(**defaults)
 
 
+class TestReplaceNanDensity:
+    def test_replaces_nan_with_floor_and_warns(self):
+        import edp_samples as E
+        edp = E.EDPSamples.fromNetCDF(str(_EDP_FIXTURE))
+        edp = E.EDPSamples.from_xarray(edp.isel(sample=slice(0, 5)))
+        edp.edps[1, 0, 2] = np.nan
+        edp.edps[3, 0, 4] = np.nan
+
+        with pytest.warns(UserWarning, match="replacing 2 NaN"):
+            ensemble_init._replace_nan_density(edp)
+
+        assert not np.any(np.isnan(edp.edps))
+        assert edp.edps[1, 0, 2] == ensemble_init._NAN_DENSITY_FLOOR
+        assert edp.edps[3, 0, 4] == ensemble_init._NAN_DENSITY_FLOOR
+
+    def test_no_nan_is_a_silent_noop(self, recwarn):
+        import edp_samples as E
+        edp = E.EDPSamples.fromNetCDF(str(_EDP_FIXTURE))
+        edp = E.EDPSamples.from_xarray(edp.isel(sample=slice(0, 5)))
+        before = edp.edps.copy()
+
+        ensemble_init._replace_nan_density(edp)
+
+        np.testing.assert_array_equal(edp.edps, before)
+        assert len(recwarn) == 0
+
+
 @pytest.mark.skipif(not _has_iri2020, reason="no compiled IRI2020 driver in this environment")
 class TestFreshBuildRealIri2020:
     def test_edp_samples_shape_matches_grid_and_ensemble(self):

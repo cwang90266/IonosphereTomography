@@ -879,3 +879,209 @@ class TestDiagnosticPlots:
         ep = P.EDP_Parameterization(style="PCA_1D", hyper_params={"PCA": PCA})
         with pytest.raises(ValueError):
             ep.plot_pca_spectrum()
+
+
+# ===========================================================================
+# 'SPLINE' style (Documentation/Spline_Basis_Knot_Optimization_Plan.md
+# Phase 6) -- a dedicated fixture/class rather than folding into
+# ALL_STYLES/parameterized_by_style above, since its hyper_params shape
+# (a grid file, not retaining_threshold/alpha) and its one real behavioral
+# quirk (the h0 boundary sample reconstructs as exactly 0 by construction,
+# see error_summary's docstring) don't fit that shared harness cleanly.
+# ===========================================================================
+
+import json
+
+from knot_optimization import GRID_FILE_VERSION
+
+
+def _write_spline_grid_file(path, grid_km, fit_space="linear", alpha=None,
+                             minlog10Density=4.0, degree=3, n_top_H=3):
+    payload = {
+        "grid_file_version": GRID_FILE_VERSION,
+        "grid_km": list(grid_km),
+        "degree": degree,
+        "representation": "ratio",
+        "fit_space": fit_space,
+        "alpha": alpha,
+        "minlog10Density": minlog10Density,
+        "boundary_conditions": {
+            "lower": "Ne(h0)=0", "upper": "dNe/dh(h1)=0",
+            "reference_mean": "column", "n_top_H": n_top_H,
+        },
+    }
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def _chapman_like_edpsamples(rng, n_alt=85, n_sample=60, h0=60.0, h1=900.0, hm=300.0, H=100.0,
+                              noise_std=0.02):
+    """A smooth, always-positive, boundary-respecting (near-zero at h0,
+    smoothly decaying at h1) synthetic ensemble -- unlike ANCHOR's
+    bottomside-heavy profile (synthetic_edpsamples above), this actually
+    satisfies the SPLINE grid's Ne(h0)~0 assumption, so round-trip error
+    isn't dominated by the expected, documented h0 artifact. dLon=dLat=5
+    matches _make_rectangle_with_mesh's own convention (test_output.py) --
+    genRectangularArea's 3rd/6th args are the grid *spacing* in degrees,
+    not a vertex count, so this must match the EDPSamples(...) call below
+    exactly or the two independently-derived n_geo values disagree."""
+    altitude = np.linspace(h0, h1, n_alt)
+    geo, _ = EDPSamples.genRectangularArea(-10, 10, 5, 0, 10, 5)
+    n_geo = geo.shape[0]
+    z = (altitude - hm) / H
+    base = (1e11 * np.exp(0.5 * (1 - z - np.exp(-z))))[:, None, None]
+    noise = rng.normal(0.0, noise_std, size=(n_alt, n_geo, n_sample))
+    edps = np.clip(base * (1 + noise), 1e6, None)
+    feature_edps = np.zeros((len(EDPSamples.FEATURE_LABEL), n_geo, n_sample))
+
+    sp = pd.DataFrame({
+        "hour": [12] * n_sample, "f107": [120.0] * n_sample,
+        "ap": [10.0] * n_sample, "ig12": [80.0] * n_sample, "rz12": [70.0] * n_sample,
+    })
+    sp.attrs = {}
+    return EDPSamples(
+        DateTime="2026-01-01T12:00:00", geo_type="Rectangle",
+        altitude=altitude, sampling_parameters=sp,
+        minLon=-10, maxLon=10, dLon=5, minLat=0, maxLat=10, dLat=5,
+        edps=edps, feature_edps=feature_edps,
+    )
+
+
+SPLINE_GRID_KM = [60.0, 100.0, 150.0, 200.0, 300.0, 450.0, 650.0, 900.0]
+
+
+class TestSplineStyleValidation:
+    def test_missing_everything_raises(self, rng):
+        edp = _chapman_like_edpsamples(rng, n_sample=5)
+        with pytest.raises(ValueError, match="grid_file_path"):
+            P.Parameterized_EDPSamples(edp, style="SPLINE", hyper_params={})
+
+    def test_edp_parameterization_alone_requires_resolved_hyper_params(self):
+        with pytest.raises(ValueError, match="Spline_B"):
+            P.EDP_Parameterization(style="SPLINE", hyper_params={})
+
+
+class TestSplineStyleRoundTrip:
+    @pytest.mark.parametrize("fit_space,alpha", [("linear", None), ("pow", 2.0), ("log10", None)])
+    def test_reconstruction_error_small_excluding_h0(self, rng, tmp_path, fit_space, alpha):
+        edp = _chapman_like_edpsamples(rng, n_sample=80)
+        grid_file = _write_spline_grid_file(tmp_path / "grid.json", SPLINE_GRID_KM,
+                                            fit_space=fit_space, alpha=alpha)
+        pes = P.Parameterized_EDPSamples(
+            edp, style="SPLINE", hyper_params={"grid_file_path": str(grid_file)},
+        )
+        residual, _ = pes.reconstruction_error(in_log10=True)
+        rmse_excl_h0 = float(np.sqrt(np.nanmean(residual[1:] ** 2)))
+        # fit_space='log10' combined with the grid file's lower_bc=True
+        # (Ne(h0)=0) is a documented upstream characteristic, not a bug:
+        # KnotOptimizationConfig.__post_init__ warns that "the lower value
+        # is the log10 floor ... which makes the spline overshoot near
+        # h0. Consider lower_bc=False for log10." -- that overshoot
+        # elevates nearby-h0 error even after excluding h0 itself, so
+        # log10 gets a looser tolerance here than linear/pow.
+        assert rmse_excl_h0 < (0.3 if fit_space == "log10" else 0.1)
+
+    def test_n_free_equals_grid_points_for_cubic(self, rng, tmp_path):
+        edp = _chapman_like_edpsamples(rng, n_sample=20)
+        grid_file = _write_spline_grid_file(tmp_path / "grid.json", SPLINE_GRID_KM)
+        pes = P.Parameterized_EDPSamples(edp, style="SPLINE", hyper_params={"grid_file_path": str(grid_file)})
+        n_free = pes.EDPSamples["param_vec"].shape[0]
+        assert n_free == len(SPLINE_GRID_KM)   # K-2 = n+m-3 = n for cubic (m=3)
+
+
+class TestSplineStyleBasisVariesPerColumn:
+    def test_different_columns_get_different_basis(self, rng, tmp_path):
+        """The constrained basis depends on each column's own topside
+        scale height (plan §1.3a) -- confirms Spline_B actually varies
+        across geo columns rather than silently sharing one basis
+        (the bug this per-column design is most exposed to)."""
+        n_sample = 60
+        altitude = np.linspace(60.0, 900.0, 85)
+        geo, _ = EDPSamples.genRectangularArea(-10, 10, 5, 0, 10, 5)
+        n_geo = geo.shape[0]
+        z = (altitude[:, None] - 300.0) / np.linspace(60.0, 160.0, n_geo)[None, :]   # H varies per column
+        base = (1e11 * np.exp(0.5 * (1 - z - np.exp(-z))))[:, :, None]
+        noise = rng.normal(0.0, 0.02, size=(85, n_geo, n_sample))
+        edps = np.clip(base * (1 + noise), 1e6, None)
+        feature_edps = np.zeros((len(EDPSamples.FEATURE_LABEL), n_geo, n_sample))
+        sp = pd.DataFrame({
+            "hour": [12] * n_sample, "f107": [120.0] * n_sample,
+            "ap": [10.0] * n_sample, "ig12": [80.0] * n_sample, "rz12": [70.0] * n_sample,
+        })
+        sp.attrs = {}
+        edp = EDPSamples(
+            DateTime="2026-01-01T12:00:00", geo_type="Rectangle",
+            altitude=altitude, sampling_parameters=sp,
+            minLon=-10, maxLon=10, dLon=5, minLat=0, maxLat=10, dLat=5,
+            edps=edps, feature_edps=feature_edps,
+        )
+        grid_file = _write_spline_grid_file(tmp_path / "grid.json", SPLINE_GRID_KM)
+        pes = P.Parameterized_EDPSamples(edp, style="SPLINE", hyper_params={"grid_file_path": str(grid_file)})
+
+        B = pes.EDPSamples["Spline_B"].to_numpy()   # (n_height, n_free, n_geo)
+        assert not np.allclose(B[:, :, 0], B[:, :, -1])
+
+
+class TestSplineStyleJacobian:
+    @pytest.mark.parametrize("fit_space,alpha", [("linear", None), ("pow", 2.0), ("log10", None)])
+    def test_matches_finite_difference(self, rng, tmp_path, fit_space, alpha):
+        edp = _chapman_like_edpsamples(rng, n_sample=30)
+        grid_file = _write_spline_grid_file(tmp_path / "grid.json", SPLINE_GRID_KM,
+                                            fit_space=fit_space, alpha=alpha)
+        pes = P.Parameterized_EDPSamples(edp, style="SPLINE", hyper_params={"grid_file_path": str(grid_file)})
+        param = pes.Parameterization
+
+        a0 = pes.EDPSamples["param_vec"].to_numpy()[:, :, 0]   # (n_free, n_geo), single member
+        kind, jac = param.get_Jacobian(a0)
+        assert kind == "block_diagonal"
+
+        n_free, n_geo = a0.shape
+        eps = 1e-5
+        max_err = 0.0
+        # Mixed-sign check at a handful of (k, g) entries -- for 'pow'/'log10'
+        # the scale factor must be evaluated at the signed ratio y = B@a,
+        # not at the already-mean-scaled density (same class of bug the
+        # PCA_*_pow styles' own Jacobian tests guard against).
+        rng2 = np.random.default_rng(1)
+        checks = [(rng2.integers(0, n_free), rng2.integers(0, n_geo)) for _ in range(6)]
+        for k, g in checks:
+            ap = a0.copy(); ap[k, g] += eps
+            am = a0.copy(); am[k, g] -= eps
+            fd = (param.get_density(ap)[:, g] - param.get_density(am)[:, g]) / (2 * eps)
+            max_err = max(max_err, np.max(relative_error(jac[:, k, g], fd)))
+        assert max_err < 1e-4
+
+
+class TestSplineStyleNetCDFRoundTrip:
+    def test_spline_arrays_and_decode_survive_round_trip(self, rng, tmp_path):
+        edp = _chapman_like_edpsamples(rng, n_sample=20)
+        grid_file = _write_spline_grid_file(tmp_path / "grid.json", SPLINE_GRID_KM)
+        pes = P.Parameterized_EDPSamples(edp, style="SPLINE", hyper_params={"grid_file_path": str(grid_file)})
+
+        nc_path = tmp_path / "pes.nc"
+        pes.saveNetCDF(str(nc_path))
+        pes2 = P.Parameterized_EDPSamples.fromNetCDF(str(nc_path))
+
+        np.testing.assert_array_equal(
+            pes.EDPSamples["Spline_B"].to_numpy(), pes2.EDPSamples["Spline_B"].to_numpy(),
+        )
+        np.testing.assert_array_equal(
+            pes.EDPSamples["Spline_mean"].to_numpy(), pes2.EDPSamples["Spline_mean"].to_numpy(),
+        )
+        np.testing.assert_array_equal(
+            pes.EDPSamples["Spline_grid"].to_numpy(), pes2.EDPSamples["Spline_grid"].to_numpy(),
+        )
+
+        d1 = pes.Parameterization.get_density(pes.EDPSamples["param_vec"].to_numpy())
+        d2 = pes2.Parameterization.get_density(pes2.EDPSamples["param_vec"].to_numpy())
+        np.testing.assert_array_equal(d1, d2)   # no recompute-from-edps on reload
+
+    def test_pow_alpha_round_trips_and_log10_alpha_stays_absent(self, rng, tmp_path):
+        edp = _chapman_like_edpsamples(rng, n_sample=10)
+        grid_file = _write_spline_grid_file(tmp_path / "grid.json", SPLINE_GRID_KM,
+                                            fit_space="pow", alpha=3.0)
+        pes = P.Parameterized_EDPSamples(edp, style="SPLINE", hyper_params={"grid_file_path": str(grid_file)})
+        pes.saveNetCDF(str(tmp_path / "pes.nc"))
+        pes2 = P.Parameterized_EDPSamples.fromNetCDF(str(tmp_path / "pes.nc"))
+        assert pes2.Parameterization.hyper_params["Spline_alpha"] == 3.0
+        assert pes2.Parameterization.hyper_params["Spline_fit_space"] == "pow"

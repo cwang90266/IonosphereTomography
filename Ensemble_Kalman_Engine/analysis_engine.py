@@ -60,6 +60,7 @@ DEFAULT_LINEARIZATION_BY_STYLE: dict[str, Linearization] = {
     "PCA_3D_10ex": "iterated",
     "PCA_1D_pow": "iterated",
     "PCA_3D_pow": "iterated",
+    "SPLINE": "iterated",
 }
 
 

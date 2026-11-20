@@ -17,6 +17,15 @@ Defines a family of mappings between a vertical electron-density profile
 - ``'PCA_3D'``/``'PCA_3D_10ex'``/``'PCA_3D_pow'`` : joint (altitude,
                         geolocation) PCA compression -- one basis shared
                         across the mesh.
+- ``'SPLINE'``         : per-geolocation cubic B-spline ratio-to-mean
+                        compression (``Documentation/
+                        Spline_Basis_Knot_Optimization_Plan.md`` Phase 6).
+                        ``density = mean * g(B_tilde @ a)``, with a fixed
+                        knot grid loaded from a grid file
+                        (``hyper_params['grid_file_path']``) and a
+                        per-column basis/mean/topside-scale-height derived
+                        fresh from the ensemble being parameterized (never
+                        re-fit/re-optimized here -- see ``Spline_Basis/``).
 
 The ``_pow`` styles parameterize ``density = |x|^alpha`` (``alpha > 1``,
 required in ``hyper_params``) instead of the ``_10ex`` styles' ``density =
@@ -48,6 +57,9 @@ from scipy.optimize import minimize
 from tqdm import tqdm
 
 from edp_samples import EDPSamples
+from spline_basis import ConstrainedSplineBasis
+from spline_fit import BatchedSplineFit, prepare_targets
+from knot_optimization import load_grid_file
 
 __all__ = [
     "density_10ex", "Jacobian_density_10ex", "log10_param",
@@ -1154,12 +1166,140 @@ def PCA2EDP_3D_map(PCA_state: np.ndarray, PCA: np.ndarray, mean: np.ndarray | No
 
 
 # ===========================================================================
+# 'SPLINE': per-column cubic B-spline ratio-to-mean compression (plan Phase 6).
+# ===========================================================================
+
+def _spline_fit_from_ensemble(
+    edps: np.ndarray, altitude: np.ndarray, grid_file_path: str,
+    topside_H_fit_samples: int | None = None,
+) -> dict:
+    """
+    Fits the ``'SPLINE'`` style's per-column ratio-to-mean basis/coefficients
+    fresh from ``edps`` (n_height, n_geo, n_sample), against the knot grid
+    in ``grid_file_path`` (``Documentation/Spline_Basis_Knot_Optimization_Plan.md``
+    Phase 6) -- the knot/degree/fit_space are loaded as-is, never re
+    -optimized here; only the per-column mean/topside-scale-height/basis
+    and the fitted coefficients come from this specific ensemble
+    (``reference='column'``, the design's decided choice -- see the grid
+    file's own ``boundary_conditions``).
+
+    Reuses ``Spline_Basis.spline_fit.prepare_targets``/``BatchedSplineFit``
+    for the actual constrained weighted least-squares fit -- the basis
+    isn't orthonormal, so the naive transpose-projection ``EDP2PCA_1D``
+    uses for PCA styles would give biased coefficients here. The resulting
+    per-column boundary-condition data (``H_eff``/``lower_value``/``s0``,
+    already correctly derived for whichever ``fit_space`` the grid file
+    uses) is reused directly to build the matching per-column
+    ``ConstrainedSplineBasis`` for decode/Jacobian, per
+    ``Spline_Basis.knot_optimization.basis_from_grid_file``'s own
+    documented contract ("pass the column's effective scale height / slope
+    offset ... exactly as ``prepare_targets`` derives them").
+
+    Returns a dict with ``param_vec`` (n_free, n_geo, n_sample) plus every
+    ``Spline_*`` hyper_params entry the ``'SPLINE'`` style's ``_build_spec``
+    branch needs to decode/encode without ever reloading the grid file
+    again.
+    """
+    d = load_grid_file(grid_file_path)
+    n_top = (topside_H_fit_samples if topside_H_fit_samples is not None
+             else d["boundary_conditions"]["n_top_H"])
+
+    targets = prepare_targets(
+        edps, altitude, h0=float(d["grid_km"][0]), h1=float(d["grid_km"][-1]),
+        representation="ratio", fit_space=d["fit_space"], alpha=d.get("alpha"),
+        minlog10Density=d.get("minlog10Density", 4.0), n_top_H=n_top,
+    )
+    fit = BatchedSplineFit(targets, degree=d["degree"]).fit(d["grid_km"])
+    # (n_geo, n_free, n_sample) -> (n_free, n_geo, n_sample), matching
+    # PCA_1D's own (nPCA, n_geo, n_sample) param_vec convention.
+    param_vec = np.moveaxis(fit.coeffs, 0, 1)
+
+    n_height = int(altitude.shape[0])
+    n_geo = int(edps.shape[1])
+    n_free = fit.coeffs.shape[1]
+    B = np.empty((n_height, n_free, n_geo), dtype=float)
+    for g in range(n_geo):
+        # H_eff is literally `inf` for fit_space='log10' (prepare_targets
+        # expresses that upper BC through `s0` instead -- see its own
+        # docstring) -- ConstrainedSplineBasis's convention for "H = inf"
+        # is upper_scale_height=None, not a literal inf float (which its
+        # own upper_tie_factor rejects).
+        H_g = float(targets.H_eff[g])
+        basis_g = ConstrainedSplineBasis(
+            d["grid_km"], d["degree"],
+            lower_value=None if targets.lower_value is None else float(targets.lower_value[g]),
+            upper_bc="slope" if targets.upper_bc else None,
+            upper_scale_height=H_g if np.isfinite(H_g) else None,
+            upper_slope_offset=float(targets.s0[g]),
+        )
+        B[:, :, g] = basis_g.design_matrix(altitude)
+
+    return dict(
+        param_vec=param_vec,
+        Spline_B=B, Spline_mean=np.asarray(targets.mean, dtype=float).T,   # (n_col,n_h) -> (n_height,n_geo)
+        Spline_grid=np.asarray(d["grid_km"], dtype=float), Spline_degree=int(d["degree"]),
+        Spline_fit_space=d["fit_space"], Spline_alpha=d.get("alpha"),
+        Spline_minlog10Density=float(d.get("minlog10Density", 4.0)),
+    )
+
+
+def _spline_encode(density: np.ndarray, hyper_params: dict) -> np.ndarray:
+    """
+    Projects ``density`` (n_height, n_geo[, n_members]) onto the
+    ``'SPLINE'`` style's already-fixed per-column basis/mean
+    (``hyper_params['Spline_B']``/``['Spline_mean']``) via ordinary
+    per-column least squares.
+
+    This does **not** re-derive ``mean``/the topside scale height from
+    ``density`` -- that only ever happens once, in
+    ``_spline_fit_from_ensemble``, when the basis itself is first built
+    from the original ensemble (``reference='column'``, the design's
+    decided choice: the basis is fixed for the run, not re-fit per call).
+    ``Parameterized_EDPSamples.__init__`` never reaches this function at
+    all -- it always resolves ``param_vec`` directly via
+    ``_spline_fit_from_ensemble``'s own (weighted, boundary-condition
+    -aware) fit when first building the basis, the same way the ``PCA``
+    styles resolve ``param_vec`` through the generic ``get_parameter``
+    call once their basis is fixed. This path exists so
+    ``EDP_Parameterization.get_parameter`` still works correctly if called
+    directly against an already-built ``'SPLINE'`` parameterization (e.g.
+    to encode some other density profile through the same fixed basis) --
+    an ordinary (unweighted) least-squares projection, not a byte-for-byte
+    reproduction of ``_spline_fit_from_ensemble``'s own weighted fit.
+    """
+    B = hyper_params['Spline_B']                 # (n_height, n_free, n_geo)
+    mean = np.asarray(hyper_params['Spline_mean'], dtype=float)   # (n_height, n_geo)
+    fit_space = hyper_params['Spline_fit_space']
+    alpha = hyper_params.get('Spline_alpha')
+    minlog10Density = hyper_params.get('Spline_minlog10Density', 4.0)
+
+    density = np.asarray(density, dtype=float)
+    n_height, n_free, n_geo = B.shape
+    mean_b = mean if density.ndim == 2 else mean[:, :, None]
+
+    if fit_space == 'pow':
+        y = np.clip(density / mean_b, 0.0, None) ** (1.0 / alpha)
+    elif fit_space == 'log10':
+        floor = 10.0 ** minlog10Density
+        y = np.log10(np.maximum(density, floor)) - np.log10(mean_b)
+    else:
+        y = density / mean_b
+
+    tail_shape = y.shape[2:]
+    a = np.empty((n_free, n_geo) + tail_shape, dtype=float)
+    for g in range(n_geo):
+        coeffs, *_ = np.linalg.lstsq(B[:, :, g], y[:, g, ...].reshape(n_height, -1), rcond=None)
+        a[:, g, ...] = coeffs.reshape((n_free,) + tail_shape)
+    return a
+
+
+# ===========================================================================
 # Registry: bundle each style's three operations into one place.
 # ===========================================================================
 
 Parameterization_Style = Literal[
     'raw', 'density_10ex', 'ANCHOR', 'PCA_1D', 'PCA_3D', 'PCA_1D_10ex', 'PCA_3D_10ex',
-    'PCA_1D_10ex_ISR', 'PCA_1D_pow', 'PCA_3D_pow',
+    'PCA_1D_10ex_ISR', 'PCA_1D_pow', 'PCA_3D_pow', 'SPLINE',
 ]
 """``PCA_1D_10ex_ISR`` (ISR_Integration_Plan.md Section 4.1.2): mechanically
 identical to ``PCA_1D_10ex`` (1-D, log10-space PCA parameterization) --
@@ -1245,6 +1385,17 @@ class EDP_Parameterization:
                 raise ValueError(f"Parameterization {style} requires PCA to be 3-D (nAlt, nGeo, nPCA).")
             if style == 'PCA_3D_pow':
                 EDP_Parameterization._check_alpha(style, hyper_params)
+            return dict(hyper_params)
+        if style == 'SPLINE':
+            required = ('Spline_B', 'Spline_mean', 'Spline_grid', 'Spline_fit_space')
+            missing = [k for k in required if hyper_params is None or k not in hyper_params]
+            if missing:
+                raise ValueError(
+                    f"Parameterization 'SPLINE' requires {missing} in hyper_params -- "
+                    "these are resolved by Parameterized_EDPSamples.__init__ (fit fresh from "
+                    "an ensemble + a grid_file_path, or reloaded from netCDF), never supplied "
+                    "directly to EDP_Parameterization on its own."
+                )
             return dict(hyper_params)
         raise ValueError(f"Parameterization style '{style}' is not defined.")
 
@@ -1359,6 +1510,51 @@ class EDP_Parameterization:
                 to_parameter=lambda d, alt: EDP2PCA_3D(d, PCA, mean=mean, alpha=alpha),
                 jacobian=lambda p, alt: ('full', PCA2EDP_3D_map(p, PCA, mean=mean, alpha=alpha)),
                 is_lossy=True,
+            )
+        if style == 'SPLINE':
+            B = hyper_params['Spline_B']                 # (n_height, n_free, n_geo)
+            mean = np.asarray(hyper_params['Spline_mean'], dtype=float)   # (n_height, n_geo)
+            fit_space = hyper_params['Spline_fit_space']
+            alpha = hyper_params.get('Spline_alpha')
+
+            def _decode_y(a):
+                return np.einsum('hkg,kg...->hg...', B, np.asarray(a, dtype=float))
+
+            def _to_density(a, alt):
+                y = _decode_y(a)
+                mean_b = mean if y.ndim == 2 else mean[:, :, None]
+                if fit_space == 'pow':
+                    return mean_b * density_pow(y, alpha)
+                if fit_space == 'log10':
+                    return mean_b * (10.0 ** y)
+                return mean_b * y
+
+            def _jacobian(a, alt):
+                # Exactly linear in `a` for fit_space='linear' (scale==1
+                # everywhere) -- the whole point of the ratio-to-mean
+                # design (plan Phase 6/ §1.3a): the Jacobian never needs
+                # recomputing across Gauss-Newton iterations. For 'pow'/
+                # 'log10' it reuses the identical scaling PCA2EDP_1D_map
+                # already applies for the '_pow'/'_10ex' PCA styles,
+                # evaluated at the signed ratio y = B @ a (not at the
+                # already-mean-scaled, sign-discarding density).
+                if fit_space == 'linear':
+                    scale = np.ones_like(mean)
+                else:
+                    y = _decode_y(a)
+                    scale = (Jacobian_density_pow(y, alpha) if fit_space == 'pow'
+                             else np.log(10.0) * (10.0 ** y))
+                mean_scale = mean * scale if scale.ndim == 2 else mean[:, :, None] * scale
+                if mean_scale.ndim == 2:
+                    jac = mean_scale[:, None, :] * B
+                else:
+                    jac = mean_scale[:, None, :, :] * B[:, :, :, None]
+                return ('block_diagonal', jac)
+
+            return ParameterizationSpec(
+                to_density=_to_density,
+                to_parameter=lambda d, alt: _spline_encode(d, hyper_params),
+                jacobian=_jacobian, is_lossy=True,
             )
         raise ValueError(f"Parameterization style '{style}' is not defined.")
 
@@ -1488,6 +1684,7 @@ class Parameterized_EDPSamples:
         'PCA_1D_10ex_ISR': lambda E: ('nPCA', E.DIM_GEO, E.DIM_SAMPLE),
         'PCA_1D_pow': lambda E: ('nPCA', E.DIM_GEO, E.DIM_SAMPLE),
         'PCA_3D_pow': lambda E: ('nPCA', E.DIM_SAMPLE),
+        'SPLINE': lambda E: ('nSpline', E.DIM_GEO, E.DIM_SAMPLE),
     }
 
     def __init__(self, EDP: EDPSamples, style: Parameterization_Style = 'density_10ex',
@@ -1530,6 +1727,15 @@ class Parameterized_EDPSamples:
             # pre-fit PCA matrix) -- validate before spending time on a
             # PCA fit that would otherwise be wasted.
             EDP_Parameterization._check_alpha(style, hyper_params)
+
+        is_spline = style == 'SPLINE'
+        if is_spline and 'Spline_B' not in hyper_params and 'grid_file_path' not in hyper_params:
+            raise ValueError(
+                "Parameterization style 'SPLINE' requires either 'grid_file_path' (to fit a "
+                "basis+coefficients fresh from this dataset's own ensemble, plan Phase 6) or an "
+                "already-resolved 'Spline_B'/'Spline_mean'/'Spline_grid'/'Spline_fit_space' in "
+                "hyper_params (e.g. reloaded from a netCDF this class itself saved)."
+            )
 
         edp = EDP.copy(deep=False)
         edps = edp.edps
@@ -1577,6 +1783,27 @@ class Parameterized_EDPSamples:
             if mean is not None:
                 new_vars['PCA_mean'] = (mean_dims, mean)
 
+        if is_spline:
+            if 'Spline_B' not in hyper_params:
+                # Fit fresh (plan Phase 6): mean/topside-scale-height/basis
+                # and the coefficients themselves all come from *this*
+                # ensemble (reference='column') -- never pre-supplied the
+                # way a PCA basis optionally can be, since there's nothing
+                # climatological to reuse here (only the knot grid/degree/
+                # fit_space, loaded as-is from grid_file_path, are fixed
+                # ahead of time). See _spline_fit_from_ensemble's docstring.
+                fit = _spline_fit_from_ensemble(
+                    edps, altitude, hyper_params['grid_file_path'],
+                    topside_H_fit_samples=hyper_params.get('topside_H_fit_samples'),
+                )
+                param_vec = fit.pop('param_vec')
+                hyper_params.update(fit)
+            new_vars['Spline_B'] = (
+                (EDPSamples.DIM_HEIGHT, 'nSpline', EDPSamples.DIM_GEO), hyper_params['Spline_B'],
+            )
+            new_vars['Spline_mean'] = ((EDPSamples.DIM_HEIGHT, EDPSamples.DIM_GEO), hyper_params['Spline_mean'])
+            new_vars['Spline_grid'] = (('nSplineGrid',), hyper_params['Spline_grid'])
+
         parameterization = EDP_Parameterization(style=style, hyper_params=hyper_params)
         alt_arg = altitude if parameterization.needs_altitude else None
         if param_vec is None:
@@ -1595,8 +1822,9 @@ class Parameterized_EDPSamples:
 
         edp.attrs['Parameterization_style'] = style
         for key, value in hyper_params.items():
-            if key not in ('PCA', 'PCA_mean', 'pca_diagnostics'):
-                edp.attrs[f'Parameterization_{key}'] = value
+            if key not in ('PCA', 'PCA_mean', 'pca_diagnostics', 'Spline_B', 'Spline_mean', 'Spline_grid'):
+                if value is not None:
+                    edp.attrs[f'Parameterization_{key}'] = value
 
         self.EDPSamples = edp
         self.style = style
@@ -1642,6 +1870,12 @@ class Parameterized_EDPSamples:
             hyper_params['PCA'] = ds.data_vars['PCA'].to_numpy()
         if 'PCA_mean' in ds.data_vars:
             hyper_params['PCA_mean'] = ds.data_vars['PCA_mean'].to_numpy()
+        if 'Spline_B' in ds.data_vars:
+            hyper_params['Spline_B'] = ds.data_vars['Spline_B'].to_numpy()
+        if 'Spline_mean' in ds.data_vars:
+            hyper_params['Spline_mean'] = ds.data_vars['Spline_mean'].to_numpy()
+        if 'Spline_grid' in ds.data_vars:
+            hyper_params['Spline_grid'] = ds.data_vars['Spline_grid'].to_numpy()
 
         # Reuse the already-fitted param_vec saved in the file instead of
         # re-deriving it from the raw density -- EDPSamples.from_xarray(ds)
@@ -1692,6 +1926,18 @@ class Parameterized_EDPSamples:
         overall RMSE, RMSE vs. altitude, worst-case location, and (style-
         specific) region-broken-out RMSE for ANCHOR or retained-component
         count for the PCA styles.
+
+        For ``'SPLINE'``: the bottom altitude sample (``h0``, the grid
+        file's own lower boundary) is a structural ``Ne(h0)=0`` constraint,
+        not a fit -- it reconstructs as exactly 0 regardless of what the
+        true density there actually is, so ``rmse_overall``/``in_log10``'s
+        residual at that one altitude index is typically huge (dominated by
+        ``log10(0 vs. anything nonzero)``) and tells you nothing about fit
+        quality. The real knot-grid optimizer excludes this same sample
+        from its own objective for the identical reason (confirmed:
+        ``Spline_Basis.spline_fit.prepare_targets`` zero-weights it). Use
+        ``rmse_by_altitude[1:]`` (or ``reconstruction_error`` directly) to
+        see the actual fit quality for this style.
         """
         residual, _ = self.reconstruction_error(in_log10=in_log10)
         altitude = self.EDPSamples.altitude
@@ -1761,10 +2007,12 @@ class Parameterized_EDPSamples:
         altitude = self.EDPSamples.altitude
         edps = self.EDPSamples.edps
 
-        if self.style in ('PCA_3D', 'PCA_3D_10ex', 'PCA_3D_pow'):
-            # PCA_3D's basis mixes altitude and geolocation jointly, so a
-            # single profile can't be encoded/decoded on its own -- run the
-            # whole spatial field for this sample, then slice one geo point.
+        if self.style in ('PCA_3D', 'PCA_3D_10ex', 'PCA_3D_pow', 'SPLINE'):
+            # PCA_3D's basis mixes altitude and geolocation jointly, and
+            # SPLINE's per-column basis varies by column (through each
+            # column's own topside scale height) -- in both cases a single
+            # profile can't be encoded/decoded on its own -- run the whole
+            # spatial field for this sample, then slice one geo point.
             density_block = edps[:, :, sample_idx:sample_idx + 1]
             residual_block, density_hat_block = self.Parameterization.reconstruction_error(density_block)
             density = density_block[:, geo_idx, 0]
