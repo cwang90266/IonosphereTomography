@@ -21,6 +21,11 @@ For each hour, ISR validation stations are selected automatically from
 TRO/SVL/MIL based on whether the station lies inside the configured ROI.
 Only stations with an in-hour ISR profile are used for that hour.
 
+An optional ionosonde calibration overlay (set IONOSONDE_FILES below, one
+entry per site) can be paired with whichever ISR station is selected as
+primary for a given hour -- an independent, different-instrument check on
+that station's own NmF2/hmF2. None (default): no ionosonde overlay.
+
 Hours are assimilated only when BOTH conditions are met:
   - at least one active ISR station has an in-hour profile;
   - the scaled minimum number of accepted RO occultation profiles is available.
@@ -258,6 +263,28 @@ ISR_FILES = {
     "TRO": TRO_ISR_FILE,
     "SVL": SVL_ISR_FILE,
     "MIL": MIL_ISR_FILE,
+}
+
+# Optional ionosonde calibration overlay (CycleConfig.ionosonde_file_path):
+# an independent, different-instrument check on the primary ISR station's
+# own NmF2/hmF2, plotted as red dots on that station's ISR-comparison
+# plots (isr_comparison.load_ionosonde_dataset's schema: nmF2/hmF2/
+# time_utc + the same station_name/station_latitude/station_longitude
+# attrs as an ISR file). Paired with the *primary* active ISR station
+# only -- whichever ISR_FILES entry is first in TRO/SVL/MIL order among
+# those active for the current hour -- never with an
+# additional_isr_file_paths entry (CycleConfig.ionosonde_file_path has no
+# per-tag counterpart). Leave a site's entry as None (default) if you
+# have no ionosonde file for it; a missing/unset file is skipped with a
+# printed warning, never required.
+TRO_IONOSONDE_FILE = None  # === Edit here === e.g. ISR_DIR / "TROIONO....nc"
+SVL_IONOSONDE_FILE = None  # === Edit here ===
+MIL_IONOSONDE_FILE = None  # === Edit here === e.g. ISR_DIR / "MILIONO_Aug2530_2025.nc"
+
+IONOSONDE_FILES = {
+    "TRO": TRO_IONOSONDE_FILE,
+    "SVL": SVL_IONOSONDE_FILE,
+    "MIL": MIL_IONOSONDE_FILE,
 }
 
 # PCA_1D_10ex_ISR training artifacts.
@@ -946,6 +973,7 @@ def make_run_cfg(
     condition: dict,
     active_hour_isr_files: dict[str, Path],
     base_edp_samples_path: Path | None = None,
+    ionosonde_path: Path | None = None,
 ) -> CycleConfig:
     ro_kwargs = dict(RO_KWARGS_TEMPLATE)
     ro_kwargs["podtc_dir"] = str(ro_dir)
@@ -1009,6 +1037,11 @@ def make_run_cfg(
             }
             if len(active_hour_isr_files) > 1
             else {}
+        ),
+        # Independent ionosonde calibration check, paired with the
+        # primary ISR station only (see IONOSONDE_FILES above).
+        ionosonde_file_path=(
+            str(ionosonde_path) if ionosonde_path is not None else None
         ),
         isr_range_percentile=0.0,
         diagonal_boost_amplitude=condition["diagonal_boost_amplitude"],
@@ -1606,6 +1639,21 @@ def main():
                     for code in active_hour_isr
                 }
 
+                # Ionosonde overlay pairs with the primary active ISR
+                # station only -- the same station make_run_cfg uses for
+                # isr_file_path (first entry of active_hour_isr_files).
+                primary_isr_code = next(iter(active_hour_isr_files), None)
+                ionosonde_path = (
+                    IONOSONDE_FILES.get(primary_isr_code)
+                    if primary_isr_code is not None else None
+                )
+                if ionosonde_path is not None and not Path(ionosonde_path).is_file():
+                    print(
+                        f"  {primary_isr_code} ionosonde file not found -> "
+                        f"overlay unavailable ({ionosonde_path})"
+                    )
+                    ionosonde_path = None
+
                 n_isr_stations = len(active_hour_isr)
                 skipped_for_isr = (n_isr_stations == 0)
 
@@ -1756,6 +1804,7 @@ def main():
                         if condition_name == "no_boost"
                         else None
                     ),
+                    ionosonde_path=ionosonde_path,
                 )
 
                 print("\n" + "-" * 96)

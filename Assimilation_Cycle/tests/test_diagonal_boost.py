@@ -255,6 +255,82 @@ class TestReturnType:
         assert boosted.edps.shape == edp.edps.shape
 
 
+class TestInvalidSentinelValues:
+    """IRI2020 marks heights/members it can't compute a valid density for
+    with a -1.0 sentinel rather than omitting them (seen on real data for
+    SPLINE's h0=60km grids, which reach below IRI2020's valid range).
+    Added 2026-11-21 after this caused every boosted (log_space=True) run
+    to fail with ``LinAlgError: SVD did not converge``: log10(-1.0) is
+    NaN, which propagated into the EnKF analysis step far downstream.
+    These entries must be excluded from the std computation and passed
+    through completely unchanged, regardless of log_space."""
+
+    @staticmethod
+    def _with_sentinel_bottom_level(edp, frac_members=1.0, seed=99):
+        """Returns a deep copy with altitude index 0 set to -1.0 for a
+        fraction of members (1.0 == every member, matching the real-data
+        60km level; a fractional value matches the real-data 70km level,
+        where validity is scattered member-by-member rather than
+        all-or-nothing)."""
+        rng = np.random.default_rng(seed)
+        edp = edp.copy(deep=True)
+        var_name = edp.VAR_EDPS
+        edps = edp.edps.copy()
+        n_members = edps.shape[2]
+        n_sentinel = int(round(frac_members * n_members))
+        sentinel_members = rng.choice(n_members, size=n_sentinel, replace=False)
+        edps[0, :, sentinel_members] = -1.0
+        edp[var_name] = (edp[var_name].dims, edps.astype(edp[var_name].dtype))
+        return edp
+
+    def test_sentinel_entries_pass_through_unchanged_log_space(self):
+        edp = self._with_sentinel_bottom_level(_make_synthetic_edp_samples(n_members=400))
+        sentinel_mask = edp.edps == -1.0
+        boosted = apply_diagonal_boost(edp, amplitude=0.5, rng=np.random.default_rng(1), log_space=True)
+        np.testing.assert_array_equal(boosted.edps[sentinel_mask], edp.edps[sentinel_mask])
+
+    def test_sentinel_entries_pass_through_unchanged_linear_space(self):
+        edp = self._with_sentinel_bottom_level(_make_synthetic_edp_samples(n_members=400))
+        sentinel_mask = edp.edps == -1.0
+        boosted = apply_diagonal_boost(edp, amplitude=0.5, rng=np.random.default_rng(1), log_space=False)
+        np.testing.assert_array_equal(boosted.edps[sentinel_mask], edp.edps[sentinel_mask])
+
+    def test_no_nan_or_inf_with_fully_sentinel_level(self):
+        """altitude index 0 all-sentinel (the real-data 60km case) --
+        previously produced NaN end-to-end under log_space=True."""
+        edp = self._with_sentinel_bottom_level(_make_synthetic_edp_samples(n_members=400), frac_members=1.0)
+        boosted = apply_diagonal_boost(edp, amplitude=0.5, rng=np.random.default_rng(1), log_space=True)
+        assert not np.any(np.isnan(boosted.edps))
+        assert not np.any(np.isinf(boosted.edps))
+
+    def test_no_nan_or_inf_with_partially_sentinel_level(self):
+        """altitude index 0 sentinel for roughly half the members (the
+        real-data 70km case) -- mixed valid/invalid members at the same
+        (height, geo) point."""
+        edp = self._with_sentinel_bottom_level(_make_synthetic_edp_samples(n_members=400), frac_members=0.5)
+        boosted = apply_diagonal_boost(edp, amplitude=0.5, rng=np.random.default_rng(1), log_space=True)
+        assert not np.any(np.isnan(boosted.edps))
+        assert not np.any(np.isinf(boosted.edps))
+
+    def test_valid_levels_still_boosted_normally(self):
+        """A sentinel-free level elsewhere in the same ensemble should be
+        boosted exactly as if the sentinel level didn't exist -- the
+        masking must be purely local to the invalid entries."""
+        edp = self._with_sentinel_bottom_level(_make_synthetic_edp_samples(n_members=3000), frac_members=1.0)
+        clean = _make_synthetic_edp_samples(n_members=3000)
+        boosted_with_sentinel = apply_diagonal_boost(edp, amplitude=0.4, rng=np.random.default_rng(2), log_space=True)
+        boosted_clean = apply_diagonal_boost(clean, amplitude=0.4, rng=np.random.default_rng(2), log_space=True)
+        # altitude index 0 is the (all-sentinel vs. normal) level; compare everything above it
+        np.testing.assert_array_equal(boosted_with_sentinel.edps[1:], boosted_clean.edps[1:])
+
+    def test_point_with_no_valid_members_gets_zero_std_not_nan(self):
+        """A degenerate point with every member sentinel should fall back
+        to zero injected spread (handled gracefully), not propagate NaN."""
+        edp = self._with_sentinel_bottom_level(_make_synthetic_edp_samples(n_members=50), frac_members=1.0)
+        boosted = apply_diagonal_boost(edp, amplitude=0.5, rng=np.random.default_rng(1), log_space=True)
+        assert np.all(boosted.edps[0] == -1.0)
+
+
 class TestLogSpace:
     """log_space=True perturbs log10(density) instead of density directly
     -- added after a real-data sweep found linear-space boosting causes

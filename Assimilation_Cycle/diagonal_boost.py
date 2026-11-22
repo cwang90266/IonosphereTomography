@@ -91,6 +91,8 @@ confirmed with the user (default 400/700km, floor 0.1).
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 _EARTH_RADIUS_KM = 6371.0
@@ -211,6 +213,23 @@ def apply_diagonal_boost(
         ``taper_end_km``, or ``taper_start_km`` larger than the grid's own
         max altitude for effectively no taper (full amplitude everywhere).
 
+    Notes
+    -----
+    IRI2020 marks heights/members it can't compute a valid density for
+    (confirmed on real data: below ~80km, scattered member-by-member --
+    not a clean per-altitude cutoff) with a ``-1.0`` sentinel rather than
+    omitting them. Found 2026-11-21: with ``log_space=True``,
+    ``np.log10(-1.0)`` is NaN, which then propagates through the
+    parameterization fit into the EnKF analysis step and surfaces there
+    as ``LinAlgError: SVD did not converge`` -- far from this function,
+    and only when a style's grid reaches down into IRI2020's invalid
+    range (e.g. SPLINE's ``h0=60km`` grids), which is why ``raw``-style,
+    higher-floor-grid runs never hit it. Those entries are excluded
+    entirely here: never contributing to a point's std, never perturbed,
+    and passed through to the output completely unchanged (not even
+    re-clipped), so this function never needs to know IRI2020's exact
+    valid range or sentinel value beyond "not positive".
+
     Returns
     -------
     EDPSamples
@@ -226,8 +245,18 @@ def apply_diagonal_boost(
     altitude = edp_samples.altitude            # (n_height,)
     geo = edp_samples.geolocation              # (n_geo, 2) == [lon, lat] degrees
 
-    base = np.log10(X) if log_space else X
-    std_hg = base.std(axis=2)                  # (n_height, n_geo)
+    valid = X > 0                              # False at IRI2020's invalid/sentinel entries (see Notes)
+
+    base = np.log10(np.where(valid, X, 1.0)) if log_space else X
+    masked_base = np.where(valid, base, np.nan)
+    with warnings.catch_warnings(), np.errstate(invalid="ignore"):
+        # A point with zero valid members (e.g. IRI2020's real-data 60km
+        # level, where every member is invalid) hits nanstd's own
+        # "Degrees of freedom <= 0" warning -- expected and handled by
+        # the nan_to_num below, not a sign of a problem.
+        warnings.filterwarnings("ignore", message="Degrees of freedom <= 0 for slice")
+        std_hg = np.nanstd(masked_base, axis=2)   # (n_height, n_geo); NaN only where a point has zero valid members
+    std_hg = np.nan_to_num(std_hg, nan=0.0)        # no valid members at that point -> no perturbation there
 
     normalized = _smoothed_normalized_noise(
         X.shape, altitude, geo, vertical_scale_km, horizontal_scale_km, rng,
@@ -237,7 +266,10 @@ def apply_diagonal_boost(
     effective_amplitude = amplitude * taper                                        # (n_height,)
     perturbation = effective_amplitude[:, None, None] * std_hg[:, :, None] * normalized
     base_boosted = base + perturbation
-    X_boosted = (10.0 ** base_boosted) if log_space else np.clip(base_boosted, a_min=_DENSITY_FLOOR, a_max=None)
+    X_boosted_candidate = (
+        10.0 ** base_boosted if log_space else np.clip(base_boosted, a_min=_DENSITY_FLOOR, a_max=None)
+    )
+    X_boosted = np.where(valid, X_boosted_candidate, X)   # invalid entries pass through untouched
 
     boosted = edp_samples.copy(deep=True)
     var_name = boosted.VAR_EDPS
