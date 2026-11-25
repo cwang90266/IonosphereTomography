@@ -108,7 +108,9 @@ def main() -> None:
     parser.add_argument("--isr-file", required=True,
                          help="Local, preprocessed ISR netCDF (Ne/Ne_min/Ne_max/profiles_used_per_gate).")
     parser.add_argument("--ionosonde-file", default=None,
-                         help="Local, preprocessed ionosonde netCDF (nmF2/hmF2). Omit to skip the "
+                         help="Local, preprocessed ionosonde netCDF -- either the nmF2/hmF2-only "
+                              "schema or the full vertical-profile schema (altitude/Ne), which "
+                              "also adds a median-EDP curve + range band. Omit to skip the "
                               "ionosonde overlay entirely.")
     parser.add_argument("--center-tolerance-deg", type=float, default=0.5,
                          help="Max |lat|/|lon| difference (degrees) from Millstone Hill's own "

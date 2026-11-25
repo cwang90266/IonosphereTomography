@@ -394,17 +394,23 @@ class CycleConfig:
     dependency on) the topside extension used by the ISR-PCA
     parameterization style."""
     ionosonde_file_path: str | Path | None = None
-    """Path to a preprocessed ionosonde netCDF (e.g.
-    ``MILIONO_Aug2530_2025.nc``'s schema: ``nmF2``/``hmF2``/``time_utc``
-    data variables, same ``station_name``/``station_latitude``/
-    ``station_longitude`` global-attrs convention as ``isr_file_path`` --
-    see ``isr_comparison.load_ionosonde_dataset``). An independent,
+    """Path to a preprocessed ionosonde netCDF, same ``station_name``/
+    ``station_latitude``/``station_longitude`` global-attrs convention as
+    ``isr_file_path`` -- see ``isr_comparison.load_ionosonde_dataset``.
+    Two schemas: ``nmF2``/``hmF2``/``time_utc`` data variables (e.g.
+    ``MILIONO_Aug2530_2025.nc``), or the full vertical-profile schema
+    (``altitude``/``Ne``/``time_utc``, e.g.
+    ``MILIonosonde_Ne_Aug2530_2025.nc``, 2026-11-25 user request), from
+    which ``nmF2``/``hmF2`` are derived automatically. An independent,
     different-instrument calibration check on the primary ISR profile's
     F2-peak density/height, plotted as red ``(nmF2, hmF2)`` dots on the
-    ``isr_file_path`` comparison plots. ``None`` (default): no ionosonde
-    overlay. Paired with the *primary* ``isr_file_path`` station only --
-    not with ``additional_isr_file_paths`` entries, which have no
-    per-tag ionosonde counterpart yet."""
+    ``isr_file_path`` comparison plots -- plus, for the profile schema, a
+    median-EDP curve and min/max range band pooled over the comparison
+    window (one batch's hour for the per-batch plots, the whole cycle's
+    window for the cycle-wide range plot). ``None`` (default): no
+    ionosonde overlay. Paired with the *primary* ``isr_file_path``
+    station only -- not with ``additional_isr_file_paths`` entries, which
+    have no per-tag ionosonde counterpart yet."""
     additional_isr_file_paths: dict[str, str | Path] = field(default_factory=dict)
     """Optional additional ISR validation files, keyed by a short output tag.
 

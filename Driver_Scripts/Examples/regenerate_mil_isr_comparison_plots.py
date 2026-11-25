@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Regenerates every ISR-comparison plot under an existing Millstone Hill
-run tree against the richer ISR file + new ionosonde file (2026-11-19
-user request), with no EnKF/pipeline rerun at all.
+run tree against the richer ISR file + ionosonde file (2026-11-19 user
+request), with no EnKF/pipeline rerun at all. The default ionosonde file
+is now the full vertical-profile schema (2026-11-25 user request --
+``MILIonosonde_Ne_Aug2530_2025.nc``, not just the older ``nmF2``/``hmF2``
+pair), so re-running this script against a previously completed run also
+adds the ionosonde median-EDP curve + range band to its comparison plots
+-- see ``isr_comparison.py``'s module docstring for how that's derived.
 
 The run's forecast/analysis density at the ISR station is fully
 reconstructed from files ``package_run.py`` already saved (each style's
@@ -38,7 +43,7 @@ DEFAULT_ISR_FILE = (
 )
 DEFAULT_IONOSONDE_FILE = (
     "/Users/cwang/Documents/Consulting/PlanetIQ/Data/Tomography_data/Ionosonde_Data/"
-    "MILIONO_Aug2530_2025.nc"
+    "MILIonosonde_Ne_Aug2530_2025.nc"
 )
 
 
@@ -50,8 +55,10 @@ def main() -> None:
     parser.add_argument("--isr-file", default=DEFAULT_ISR_FILE,
                          help="Preprocessed ISR netCDF (Ne/Ne_min/Ne_max/profiles_used_per_gate).")
     parser.add_argument("--ionosonde-file", default=DEFAULT_IONOSONDE_FILE,
-                         help="Preprocessed ionosonde netCDF (nmF2/hmF2). Pass '' to skip the "
-                              "ionosonde overlay entirely.")
+                         help="Preprocessed ionosonde netCDF -- either the nmF2/hmF2-only schema "
+                              "or the full vertical-profile schema (altitude/Ne), which also adds "
+                              "the median-EDP curve + range band. Pass '' to skip the ionosonde "
+                              "overlay entirely.")
     parser.add_argument("--isr-range-percentile", type=float, default=0.0,
                          help="Forwarded to the cycle-wide range plot's old-schema fallback "
                               "(no effect when the ISR file has Ne_min/Ne_max -- see "
