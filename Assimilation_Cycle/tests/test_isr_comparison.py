@@ -90,6 +90,41 @@ def _write_synthetic_ionosonde_file(path, n_time=10, station_name="Test ISR",
     return time, nmF2, hmF2
 
 
+def _write_synthetic_ionosonde_profile_file(path, n_time=10, n_alt=5, station_name="Test ISR",
+                                             station_lat=5.0, station_lon=0.0, start="2026-01-01T00:00:00",
+                                             freq="10min", seed=2):
+    """Writes the full vertical-profile ionosonde schema (``altitude``/
+    ``Ne``/``time_utc`` -- mirrors ``MILIonosonde_Ne_Aug2530_2025.nc``):
+    ``Ne`` increases monotonically up to a per-scan random peak gate
+    (that scan's own hmF2), ``nan`` above it -- the real file's
+    bottomside-only convention. Returns ``(altitude, time, density,
+    peak_idx)`` so a test can hand-compute the expected derived
+    nmF2/hmF2."""
+    rng = np.random.default_rng(seed)
+    altitude = np.linspace(100.0, 500.0, n_alt)
+    time = pd.date_range(start, periods=n_time, freq=freq)
+    density = rng.uniform(1e9, 1e11, size=(n_alt, n_time))
+    peak_idx = rng.integers(1, n_alt, size=n_time)
+    for t in range(n_time):
+        density[: peak_idx[t] + 1, t] = np.sort(density[: peak_idx[t] + 1, t])
+        density[peak_idx[t] + 1:, t] = np.nan
+
+    ds = xr.Dataset(
+        data_vars=dict(
+            altitude=(("altitude_gate",), altitude, {"units": "km"}),
+            Ne=(("altitude_gate", "time"), density, {"units": "m-3"}),
+            time_utc=(("time",), np.array([t.isoformat() for t in time])),
+        ),
+        attrs=dict(
+            station_name=station_name,
+            station_latitude=station_lat,
+            station_longitude=station_lon,
+        ),
+    )
+    ds.to_netcdf(path)
+    return altitude, time, density, peak_idx
+
+
 class TestLoadIsrDataset:
     def test_reads_station_identity_from_attrs(self, tmp_path):
         path = tmp_path / "isr.nc"
@@ -399,6 +434,76 @@ class TestLoadIonosondeDataset:
         iono = isrc.load_ionosonde_dataset(path)
         assert np.isnan(iono.nmF2).any()
 
+    def test_old_schema_leaves_profile_fields_none(self, tmp_path):
+        path = tmp_path / "iono.nc"
+        _write_synthetic_ionosonde_file(path)
+
+        iono = isrc.load_ionosonde_dataset(path)
+        assert iono.profile_altitude is None
+        assert iono.profile_density is None
+
+
+class TestLoadIonosondeDatasetProfile:
+    """The richer, full-vertical-profile schema (2026-11-25 user request;
+    module docstring's "Ionosonde vertical profile overlay" section)."""
+
+    def test_reads_profile_and_sorts_altitude(self, tmp_path):
+        path = tmp_path / "iono_profile.nc"
+        altitude, time, density, peak_idx = _write_synthetic_ionosonde_profile_file(
+            path, n_time=6, n_alt=5,
+        )
+        iono = isrc.load_ionosonde_dataset(path)
+        assert iono.profile_altitude is not None
+        assert iono.profile_density is not None
+        assert iono.profile_density.shape == (5, 6)
+        assert np.all(np.diff(iono.profile_altitude) > 0)
+
+    def test_derives_nmf2_hmf2_as_per_column_peak(self, tmp_path):
+        path = tmp_path / "iono_profile.nc"
+        altitude, time, density, peak_idx = _write_synthetic_ionosonde_profile_file(
+            path, n_time=6, n_alt=5,
+        )
+        iono = isrc.load_ionosonde_dataset(path)
+        expected_nmF2 = np.array([density[peak_idx[t], t] for t in range(6)])
+        expected_hmF2 = np.array([altitude[peak_idx[t]] for t in range(6)])
+        np.testing.assert_allclose(iono.nmF2, expected_nmF2)
+        np.testing.assert_allclose(iono.hmF2, expected_hmF2)
+
+    def test_dedicated_nmf2_hmf2_vars_take_priority_over_derivation(self, tmp_path):
+        """A file carrying both schemas at once reads nmF2/hmF2 directly
+        -- not re-derived from the profile -- while still populating the
+        profile fields."""
+        path = tmp_path / "iono_both.nc"
+        altitude = np.linspace(100.0, 500.0, 3)
+        time = pd.date_range("2026-01-01", periods=2, freq="1h")
+        density = np.array([[1.0, 2.0], [3.0, 4.0], [np.nan, np.nan]])
+        ds = xr.Dataset(
+            data_vars=dict(
+                altitude=(("altitude_gate",), altitude),
+                Ne=(("altitude_gate", "time"), density),
+                nmF2=(("time",), np.array([999.0, 888.0])),
+                hmF2=(("time",), np.array([111.0, 222.0])),
+                time_utc=(("time",), np.array([t.isoformat() for t in time])),
+            ),
+            attrs=dict(station_name="X", station_latitude=0.0, station_longitude=0.0),
+        )
+        ds.to_netcdf(path)
+
+        iono = isrc.load_ionosonde_dataset(path)
+        np.testing.assert_allclose(iono.nmF2, [999.0, 888.0])
+        np.testing.assert_allclose(iono.hmF2, [111.0, 222.0])
+        assert iono.profile_density is not None
+
+    def test_raises_when_neither_schema_present(self, tmp_path):
+        path = tmp_path / "empty.nc"
+        ds = xr.Dataset(
+            data_vars=dict(time_utc=(("time",), np.array(["2026-01-01T00:00:00"]))),
+            attrs=dict(station_name="X", station_latitude=0.0, station_longitude=0.0),
+        )
+        ds.to_netcdf(path)
+        with pytest.raises(ValueError, match="neither nmF2/hmF2 nor"):
+            isrc.load_ionosonde_dataset(path)
+
 
 class TestIonosondePointsInWindow:
     def _dataset(self):
@@ -455,6 +560,92 @@ class TestDrawConfidenceBand:
         assert len(ax.patches) == 0
 
 
+class TestIonosondeProfileWindowStats:
+    def _dataset_with_profile(self):
+        time = pd.DatetimeIndex(pd.date_range("2026-01-01T00:00", periods=4, freq="15min"))
+        altitude = np.array([100.0, 200.0, 300.0])
+        density = np.array([
+            [1.0, 2.0, 3.0, 4.0],
+            [10.0, 20.0, np.nan, 40.0],
+            [np.nan, np.nan, np.nan, np.nan],
+        ])
+        station = isrc.IsrStation(name="X", lat=0.0, lon=0.0)
+        return isrc.IonosondeDataset(
+            station=station, time=time, nmF2=np.array([10.0, 20.0, 3.0, 40.0]),
+            hmF2=np.array([200.0, 200.0, 100.0, 200.0]),
+            profile_altitude=altitude, profile_density=density,
+        )
+
+    def test_pools_median_and_range_within_window(self):
+        iono = self._dataset_with_profile()
+        # window covers columns 0,1,2 (00:00, 00:15, 00:30); 00:45 excluded
+        stats = isrc.ionosonde_profile_window_stats(iono, "2026-01-01T00:00", "2026-01-01T00:30")
+        np.testing.assert_allclose(stats.altitude, [100.0, 200.0, 300.0])
+        np.testing.assert_allclose(stats.median, [2.0, 15.0, np.nan], equal_nan=True)
+        np.testing.assert_allclose(stats.lo, [1.0, 10.0, np.nan], equal_nan=True)
+        np.testing.assert_allclose(stats.hi, [3.0, 20.0, np.nan], equal_nan=True)
+        np.testing.assert_array_equal(stats.n, [3, 2, 0])
+
+    def test_none_dataset_returns_none(self):
+        assert isrc.ionosonde_profile_window_stats(None, "2026-01-01", "2026-01-02") is None
+
+    def test_dataset_without_profile_returns_none(self):
+        iono = isrc.IonosondeDataset(
+            station=isrc.IsrStation(name="X", lat=0.0, lon=0.0),
+            time=pd.DatetimeIndex(pd.date_range("2026-01-01", periods=2, freq="1h")),
+            nmF2=np.array([1.0, 2.0]), hmF2=np.array([200.0, 210.0]),
+        )
+        assert isrc.ionosonde_profile_window_stats(iono, "2026-01-01", "2026-01-02") is None
+
+    def test_no_scan_in_window_returns_none(self):
+        iono = self._dataset_with_profile()
+        assert isrc.ionosonde_profile_window_stats(iono, "2030-01-01", "2030-01-02") is None
+
+    def test_percentile_band_narrower_than_minmax(self):
+        rng = np.random.default_rng(0)
+        n_time = 20
+        time = pd.DatetimeIndex(pd.date_range("2026-01-01", periods=n_time, freq="1min"))
+        altitude = np.array([100.0])
+        density = rng.uniform(0, 100, size=(1, n_time))
+        iono = isrc.IonosondeDataset(
+            station=isrc.IsrStation(name="X", lat=0.0, lon=0.0), time=time,
+            nmF2=np.zeros(n_time), hmF2=np.zeros(n_time),
+            profile_altitude=altitude, profile_density=density,
+        )
+        stats_minmax = isrc.ionosonde_profile_window_stats(iono, time[0], time[-1], percentile=0.0)
+        stats_pct = isrc.ionosonde_profile_window_stats(iono, time[0], time[-1], percentile=10.0)
+        assert (stats_pct.hi[0] - stats_pct.lo[0]) < (stats_minmax.hi[0] - stats_minmax.lo[0])
+
+
+class TestDrawIonosondeProfileOverlay:
+    def test_draws_band_and_median_line(self):
+        _, ax = plt.subplots()
+        profile = isrc.IonosondeProfileWindow(
+            altitude=np.array([100.0, 200.0, 300.0]), median=np.array([1.0, 2.0, 3.0]),
+            lo=np.array([0.5, 1.5, 2.5]), hi=np.array([1.5, 2.5, 3.5]), n=np.array([3, 3, 3]),
+        )
+        isrc._draw_ionosonde_profile_overlay(ax, profile)
+        assert len(ax.patches) == 3   # range band, one bar per gate
+        assert len(ax.lines) == 1     # median curve
+        assert ax.lines[0].get_linestyle() == "--"
+
+    def test_noop_when_profile_none(self):
+        _, ax = plt.subplots()
+        isrc._draw_ionosonde_profile_overlay(ax, None)
+        assert len(ax.patches) == 0
+        assert len(ax.lines) == 0
+
+    def test_skips_median_line_when_all_nan(self):
+        _, ax = plt.subplots()
+        profile = isrc.IonosondeProfileWindow(
+            altitude=np.array([100.0]), median=np.array([np.nan]),
+            lo=np.array([np.nan]), hi=np.array([np.nan]), n=np.array([0]),
+        )
+        isrc._draw_ionosonde_profile_overlay(ax, profile)
+        assert len(ax.patches) == 0
+        assert len(ax.lines) == 0
+
+
 class TestPlotAWithConfidenceBandAndIonosonde:
     def test_nearest_point_plot_draws_band_and_red_dots(self):
         isr_altitude = np.array([100.0, 200.0, 300.0])
@@ -483,6 +674,19 @@ class TestPlotAWithConfidenceBandAndIonosonde:
         assert len(ax.patches) == 0
         # 2 fill_betweenx (forecast/analysis std) remain; no confidence band, no ionosonde scatter
         assert len(ax.collections) == 2
+
+    def test_draws_ionosonde_profile_overlay_when_present(self):
+        isr_altitude = np.array([100.0, 200.0, 300.0])
+        model_altitude = np.linspace(90.0, 400.0, 10)
+        ionosonde_profile = isrc.IonosondeProfileWindow(
+            altitude=np.array([100.0, 200.0]), median=np.array([1e10, 2e10]),
+            lo=np.array([0.8e10, 1.8e10]), hi=np.array([1.2e10, 2.2e10]), n=np.array([3, 3]),
+        )
+        match = _match(0, isr_density=None, n_height=10)
+        match.ionosonde_profile = ionosonde_profile
+        ax = isrc.plot_isr_nearest_point_comparison(match, model_altitude, isr_altitude)
+        assert len(ax.patches) == 2   # ionosonde range band, one bar per gate (no ISR confidence band here)
+        assert any(line.get_linestyle() == "--" for line in ax.lines)
 
 
 def _write_synthetic_run(tmp_path, label="synthrun", styles=("raw",), n_sample=6):
@@ -585,3 +789,39 @@ class TestReplotIsrComparisonTree:
         for batch in (0, 1):
             assert Path(f"synthrun_isr_comparison_cross_style/nearest_point/batch{batch:04d}.png") in written_set
         assert Path("synthrun_isr_comparison_cross_style/range_comparison.png") in written_set
+
+
+class TestReplotIsrComparisonTreeWithIonosondeProfile:
+    """End-to-end: the post-processing path
+    (:func:`isrc.replot_isr_comparison_tree`, the same function
+    ``Postprocessing/regenerate_all_local_mil_isr_comparison_plots.py``
+    calls) against the richer, full-vertical-profile ionosonde schema --
+    confirms the whole wiring (``_build_batch_isr_matches_from_saved`` ->
+    ``ionosonde_profile_window_stats`` -> the plotting functions) works
+    for an already-completed run with no pipeline rerun, not just the
+    individual pieces tested above."""
+
+    def test_writes_plots_with_profile_schema_ionosonde_file(self, tmp_path):
+        altitude, edp = _write_synthetic_run(tmp_path, label="synthrun2", styles=("raw",))
+        isr_path = tmp_path / "isr2.nc"
+        _write_synthetic_isr_file(
+            isr_path, n_time=3, n_alt=5, station_lat=5.0, station_lon=0.0,
+            start="2026-01-01T00:30:00",
+        )
+        with xr.open_dataset(isr_path) as ds:
+            ds = ds.load()
+        ds = ds.assign(altitude=(("altitude_gate",), altitude.copy()))
+        ds.to_netcdf(isr_path, mode="w")
+
+        iono_path = tmp_path / "iono_profile.nc"
+        _write_synthetic_ionosonde_profile_file(
+            iono_path, n_time=6, n_alt=5, station_lat=5.0, station_lon=0.0,
+            start="2026-01-01T00:00:00", freq="20min",
+        )
+
+        written = isrc.replot_isr_comparison_tree(tmp_path, isr_path, ionosonde_file_path=iono_path)
+
+        written_set = {p.relative_to(tmp_path) for p in written}
+        for batch in (0, 1):
+            assert Path(f"synthrun2_isr_comparison/raw/nearest_point/batch{batch:04d}.png") in written_set
+        assert Path("synthrun2_isr_comparison/raw/range_comparison.png") in written_set

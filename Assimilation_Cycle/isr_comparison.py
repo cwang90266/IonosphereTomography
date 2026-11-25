@@ -61,6 +61,25 @@ F2-peak density/height, plotted as red ``(nmF2, hmF2)`` dots wherever a
 record falls inside the window being compared
 (:func:`ionosonde_points_in_window`).
 
+**Ionosonde vertical profile overlay (2026-11-25 user request):** a
+richer ionosonde file (e.g. ``MILIonosonde_Ne_Aug2530_2025.nc``) carries
+the full bottomside ``Ne(altitude, time)`` profile from each individual
+scan, not just the derived ``nmF2``/``hmF2`` pair -- ``load_ionosonde_dataset``
+reads it into ``IonosondeDataset.profile_altitude``/``profile_density``
+when present (``None`` for an older ``nmF2``/``hmF2``-only file, every
+profile-overlay code path below degrading to a no-op in that case), and
+also *derives* ``nmF2``/``hmF2`` from it (the per-scan maximum density
+and its altitude) when the file doesn't carry those directly, so the
+existing red-dot overlay keeps working unchanged. Every scan whose
+timestamp falls in the comparison window being drawn (one batch's
+``[start_time, end_time]`` for the per-batch "nearest point" plots, the
+whole cycle's window for the cycle-wide "range" plots -- in practice
+usually the same one-hour window either way) is pooled into a per-
+altitude-gate median curve and min/max range band
+(:func:`ionosonde_profile_window_stats`,
+:func:`_draw_ionosonde_profile_overlay`), drawn the same way the ISR
+confidence band is (:func:`_draw_isr_confidence_band`, reused directly).
+
 **Post-processing without a pipeline rerun** (bottom of this module):
 ``GenericObservationOperator.decode()`` needs only a parameterization and
 the ensemble's own param-shape state -- no ray geometry/``H_grid`` at all
@@ -79,6 +98,7 @@ EnKF solve at all -- same "save once, replot forever" philosophy as
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -177,22 +197,66 @@ class IonosondeDataset:
     """One ionosonde station's NmF2/hmF2 time series -- an independent
     (different-instrument) calibration check on the ISR profile's F2-peak
     density/height (module docstring). ``nmF2``/``hmF2`` may contain
-    ``nan`` at timestamps with no valid measurement."""
+    ``nan`` at timestamps with no valid measurement.
+
+    ``profile_altitude``/``profile_density`` carry the full bottomside
+    ``Ne(altitude, time)`` profile from a richer file (module docstring's
+    "Ionosonde vertical profile overlay" section) -- ``None`` for an
+    older ``nmF2``/``hmF2``-only file. ``profile_density`` may contain
+    ``nan`` above a given scan's own hmF2 (that scan's profile simply
+    doesn't reach that high -- never interpolated/extrapolated)."""
 
     station: IsrStation
     time: pd.DatetimeIndex   # (n_time,) ascending
     nmF2: np.ndarray          # (n_time,) m^-3, may contain nan
     hmF2: np.ndarray          # (n_time,) km, may contain nan
+    profile_altitude: np.ndarray | None = None   # (n_alt,) native gates, km, ascending
+    profile_density: np.ndarray | None = None    # (n_alt, n_time) m^-3, nan above that scan's own hmF2
+
+
+def _derive_nmf2_hmf2_from_profile(
+    altitude: np.ndarray, density: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(nmF2, hmF2)`` per time column, derived as the column's own
+    maximum (finite) density and the altitude at which it occurs -- valid
+    whenever a profile is built to reach no higher than its
+    own hmF2 (module docstring) -- that maximum *is* the F2 peak.
+    Columns with no finite value at all get ``nan`` for both (rather than
+    raising, since :func:`numpy.nanargmax` can't handle an all-nan
+    column)."""
+    density = np.asarray(density, dtype=float)
+    n_time = density.shape[1]
+    nmF2 = np.full(n_time, np.nan)
+    hmF2 = np.full(n_time, np.nan)
+    has_any = np.isfinite(density).any(axis=0)
+    cols = np.where(has_any)[0]
+    if len(cols):
+        peak_idx = np.nanargmax(density[:, cols], axis=0)
+        nmF2[cols] = density[peak_idx, cols]
+        hmF2[cols] = np.asarray(altitude, dtype=float)[peak_idx]
+    return nmF2, hmF2
 
 
 def load_ionosonde_dataset(path: str | Path) -> IonosondeDataset:
-    """Read a preprocessed ionosonde netCDF (``MILIONO_Aug2530_2025.nc``'s
-    schema: ``nmF2``/``hmF2``/``time_utc`` data variables, same
-    ``station_name``/``station_latitude``/``station_longitude`` global
-    attrs convention as :func:`load_isr_dataset`)."""
+    """Read a preprocessed ionosonde netCDF, same ``station_name``/
+    ``station_latitude``/``station_longitude`` global attrs convention as
+    :func:`load_isr_dataset`. Two schemas, both handled (module
+    docstring):
+
+    - ``nmF2``/``hmF2``/``time_utc`` data variables (e.g.
+      ``MILIONO_Aug2530_2025.nc``) -- read directly,
+      ``profile_altitude``/``profile_density`` come back ``None``.
+    - ``altitude``/``Ne``/``time_utc`` data variables (e.g.
+      ``MILIonosonde_Ne_Aug2530_2025.nc``, the full vertical-profile
+      schema) -- ``profile_altitude``/``profile_density`` are read, and
+      ``nmF2``/``hmF2`` are derived from the profile
+      (:func:`_derive_nmf2_hmf2_from_profile`) since this schema doesn't
+      carry them directly.
+
+    A file carrying both ``nmF2``/``hmF2`` and ``altitude``/``Ne`` reads
+    ``nmF2``/``hmF2`` directly (not re-derived) and still gets the
+    profile fields populated."""
     with xr.open_dataset(path, decode_timedelta=False) as ds:
-        nmF2 = np.asarray(ds["nmF2"].values, dtype=float)
-        hmF2 = np.asarray(ds["hmF2"].values, dtype=float)
         time = pd.to_datetime(np.asarray(ds["time_utc"].values))
         station = IsrStation(
             name=str(ds.attrs.get("station_name", "ionosonde station")),
@@ -200,12 +264,32 @@ def load_ionosonde_dataset(path: str | Path) -> IonosondeDataset:
             lon=float(ds.attrs["station_longitude"]),
         )
 
-    order = np.argsort(np.asarray(time))
+        has_profile = "altitude" in ds.variables and "Ne" in ds.variables
+        if has_profile:
+            profile_altitude = np.asarray(ds["altitude"].values, dtype=float)
+            profile_density = np.asarray(ds["Ne"].values, dtype=float)
+        else:
+            profile_altitude = profile_density = None
+
+        if "nmF2" in ds.data_vars and "hmF2" in ds.data_vars:
+            nmF2 = np.asarray(ds["nmF2"].values, dtype=float)
+            hmF2 = np.asarray(ds["hmF2"].values, dtype=float)
+        elif has_profile:
+            nmF2, hmF2 = _derive_nmf2_hmf2_from_profile(profile_altitude, profile_density)
+        else:
+            raise ValueError(
+                f"{path}: ionosonde file has neither nmF2/hmF2 nor an altitude/Ne profile"
+            )
+
+    time_order = np.argsort(np.asarray(time))
+    alt_order = np.argsort(profile_altitude) if has_profile else None
     return IonosondeDataset(
         station=station,
-        time=pd.DatetimeIndex(time)[order],
-        nmF2=nmF2[order],
-        hmF2=hmF2[order],
+        time=pd.DatetimeIndex(time)[time_order],
+        nmF2=nmF2[time_order],
+        hmF2=hmF2[time_order],
+        profile_altitude=profile_altitude[alt_order] if has_profile else None,
+        profile_density=profile_density[alt_order, :][:, time_order] if has_profile else None,
     )
 
 
@@ -223,6 +307,67 @@ def ionosonde_points_in_window(
     finite = np.isfinite(iono.nmF2) & np.isfinite(iono.hmF2)
     mask = np.asarray(in_window) & finite
     return iono.nmF2[mask], iono.hmF2[mask]
+
+
+@dataclass(frozen=True)
+class IonosondeProfileWindow:
+    """Per-altitude-gate pooled stats of every ionosonde profile scan
+    inside some comparison window (module docstring's "Ionosonde
+    vertical profile overlay" section) -- the median curve + range band
+    :func:`_draw_ionosonde_profile_overlay` draws."""
+
+    altitude: np.ndarray   # (n_alt,) native ionosonde gates, km, ascending
+    median: np.ndarray     # (n_alt,) m^-3, nan where no scan in the window reached that high
+    lo: np.ndarray         # (n_alt,) m^-3
+    hi: np.ndarray         # (n_alt,) m^-3
+    n: np.ndarray          # (n_alt,) int, count of finite scans contributing at that gate
+
+
+def ionosonde_profile_window_stats(
+    iono: IonosondeDataset | None, start_time, end_time, percentile: float = 0.0,
+) -> IonosondeProfileWindow | None:
+    """Pools every ionosonde profile scan whose timestamp falls in
+    ``[start_time, end_time]`` into a per-altitude-gate median + range
+    (module docstring) -- the ionosonde analog of
+    :func:`_isr_window_bounds_and_confidence`, on the ionosonde's own
+    native altitude gates. ``None`` if ``iono`` is ``None``, carries no
+    profile (older ``nmF2``/``hmF2``-only schema), or has no scan at all
+    in the window.
+
+    Parameters
+    ----------
+    percentile : float
+        ``0.0`` (default): ``lo``/``hi`` are the literal min/max across
+        the window's scans. A value in ``(0, 50)`` instead uses the
+        ``[percentile, 100-percentile]`` band, same convention as
+        :func:`plot_isr_range_comparison`'s own ``percentile``.
+    """
+    if iono is None or iono.profile_density is None:
+        return None
+    start, end = pd.Timestamp(start_time), pd.Timestamp(end_time)
+    mask = np.asarray((iono.time >= start) & (iono.time <= end))
+    if not mask.any():
+        return None
+
+    window = iono.profile_density[:, mask]   # (n_alt, n_in_window)
+    n = np.sum(np.isfinite(window), axis=1)
+    if not np.any(n > 0):
+        return None
+
+    with warnings.catch_warnings():
+        # All-nan columns (altitude gates no scan in the window reached)
+        # are expected here, not a sign of a problem -- the resulting nan
+        # is exactly what should be plotted (nothing) at that gate.
+        warnings.filterwarnings("ignore", message="All-NaN slice encountered")
+        median = np.nanmedian(window, axis=1)
+        if percentile > 0:
+            lo = np.nanpercentile(window, percentile, axis=1)
+            hi = np.nanpercentile(window, 100 - percentile, axis=1)
+        else:
+            lo = np.nanmin(window, axis=1)
+            hi = np.nanmax(window, axis=1)
+
+    return IonosondeProfileWindow(altitude=iono.profile_altitude, median=median, lo=lo, hi=hi, n=n)
 
 
 def _confidence(n) -> np.ndarray:
@@ -271,6 +416,27 @@ def _draw_isr_confidence_band(
                     color=colors, linewidth=0, zorder=0)
     if label is not None and len(bars):
         bars[0].set_label(label)
+
+
+def _draw_ionosonde_profile_overlay(
+    ax, profile: IonosondeProfileWindow | None, color: str = "red", label_prefix: str = "ionosonde",
+) -> None:
+    """Draws the ionosonde median EDP curve + range band (module
+    docstring's "Ionosonde vertical profile overlay" section) on ``ax``.
+    The range band reuses :func:`_draw_isr_confidence_band` directly (any
+    ``lo``/``hi``/``n``, any color -- not ISR-specific despite the name).
+    No-op if ``profile`` is ``None`` (no richer-schema ionosonde file, or
+    no scan in this window -- see :func:`ionosonde_profile_window_stats`)."""
+    if profile is None:
+        return
+    _draw_isr_confidence_band(
+        ax, profile.altitude, profile.lo, profile.hi, profile.n,
+        max_alpha=0.3, color=color, label=f"{label_prefix} EDP range (this window)",
+    )
+    valid = np.isfinite(profile.altitude) & np.isfinite(profile.median)
+    if np.any(valid):
+        ax.plot(profile.median[valid], profile.altitude[valid], color=color, linestyle="--",
+                 linewidth=1.5, zorder=6, label=f"{label_prefix} median EDP")
 
 
 def nearest_isr_profile(isr: IsrDataset, target_time) -> tuple[pd.Timestamp, np.ndarray] | None:
@@ -346,11 +512,12 @@ class BatchIsrMatch:
     (lat, lon).
 
     ``isr_density_min``/``isr_density_max``/``isr_n_profiles`` (same
-    native gates as ``isr_density``, same matched time) and
+    native gates as ``isr_density``, same matched time),
     ``ionosonde_nmF2``/``ionosonde_hmF2`` (finite ionosonde records inside
-    this batch's own ``[start_time, end_time]``) are ``None``/empty when
-    the richer ISR file or an ionosonde file wasn't supplied -- see module
-    docstring."""
+    this batch's own ``[start_time, end_time]``), and ``ionosonde_profile``
+    (that same window's pooled median/range, module docstring) are
+    ``None``/empty when the richer ISR file or an ionosonde file wasn't
+    supplied -- see module docstring."""
 
     batch_index: int
     isr_time: pd.Timestamp | None
@@ -362,6 +529,7 @@ class BatchIsrMatch:
     isr_n_profiles: np.ndarray | None = None      # (n_isr_alt,) or None
     ionosonde_nmF2: np.ndarray | None = None      # (n_points,) m^-3, within this batch's window
     ionosonde_hmF2: np.ndarray | None = None      # (n_points,) km, within this batch's window
+    ionosonde_profile: IonosondeProfileWindow | None = None   # pooled over this batch's own window
 
 
 class IsrComparisonCollector:
@@ -404,10 +572,16 @@ class IsrComparisonCollector:
             if self.isr.n_profiles is not None:
                 isr_n_profiles = self.isr.n_profiles[:, t_idx]
 
+        has_batch_window = batch.start_time is not None and batch.end_time is not None
         ionosonde_nmF2, ionosonde_hmF2 = (
             ionosonde_points_in_window(self.ionosonde, batch.start_time, batch.end_time)
-            if self.ionosonde is not None and batch.start_time is not None and batch.end_time is not None
+            if self.ionosonde is not None and has_batch_window
             else (None, None)
+        )
+        ionosonde_profile = (
+            ionosonde_profile_window_stats(self.ionosonde, batch.start_time, batch.end_time)
+            if self.ionosonde is not None and has_batch_window
+            else None
         )
 
         self.matches.append(BatchIsrMatch(
@@ -421,6 +595,7 @@ class IsrComparisonCollector:
             isr_n_profiles=isr_n_profiles,
             ionosonde_nmF2=ionosonde_nmF2,
             ionosonde_hmF2=ionosonde_hmF2,
+            ionosonde_profile=ionosonde_profile,
         ))
 
 
@@ -460,6 +635,7 @@ def plot_isr_nearest_point_comparison(
         ax.text(0.5, 0.02, "no ISR profile near this batch", ha="center", va="bottom",
                  transform=ax.transAxes, fontsize=8)
 
+    _draw_ionosonde_profile_overlay(ax, match.ionosonde_profile)
     if match.ionosonde_nmF2 is not None and len(match.ionosonde_nmF2):
         ax.scatter(match.ionosonde_nmF2, match.ionosonde_hmF2, color="red", marker="o",
                     s=28, zorder=6, label="ionosonde NmF2 @ hmF2")
@@ -489,6 +665,7 @@ def plot_isr_nearest_point_comparison_cross_style(
     isr_density, isr_time, batch_index = None, None, None
     isr_density_min = isr_density_max = isr_n_profiles = None
     ionosonde_nmF2 = ionosonde_hmF2 = None
+    ionosonde_profile = None
     for style, match in matches_by_style.items():
         color = _color_for_style(style)
         a_mean = match.analysis_profile.mean(axis=-1)
@@ -499,6 +676,8 @@ def plot_isr_nearest_point_comparison_cross_style(
             isr_n_profiles = match.isr_n_profiles
         if (ionosonde_nmF2 is None or not len(ionosonde_nmF2)) and match.ionosonde_nmF2 is not None:
             ionosonde_nmF2, ionosonde_hmF2 = match.ionosonde_nmF2, match.ionosonde_hmF2
+        if ionosonde_profile is None and match.ionosonde_profile is not None:
+            ionosonde_profile = match.ionosonde_profile
         batch_index = match.batch_index
 
     _draw_isr_confidence_band(ax, isr_altitude, isr_density_min, isr_density_max, isr_n_profiles)
@@ -510,6 +689,7 @@ def plot_isr_nearest_point_comparison_cross_style(
         ax.text(0.5, 0.02, "no ISR profile near this batch", ha="center", va="bottom",
                  transform=ax.transAxes, fontsize=8)
 
+    _draw_ionosonde_profile_overlay(ax, ionosonde_profile)
     if ionosonde_nmF2 is not None and len(ionosonde_nmF2):
         ax.scatter(ionosonde_nmF2, ionosonde_hmF2, color="red", marker="o",
                     s=28, zorder=6, label="ionosonde NmF2 @ hmF2")
@@ -602,6 +782,8 @@ def plot_isr_range_comparison(
                                    label=f"ISR range (n={window.shape[1]} hours)")
 
     ionosonde_nmF2, ionosonde_hmF2 = ionosonde_points_in_window(ionosonde, cycle_start, cycle_end)
+    ionosonde_profile = ionosonde_profile_window_stats(ionosonde, cycle_start, cycle_end, percentile)
+    _draw_ionosonde_profile_overlay(ax, ionosonde_profile)
     if len(ionosonde_nmF2):
         ax.scatter(ionosonde_nmF2, ionosonde_hmF2, color="red", marker="o",
                     s=20, zorder=6, label="ionosonde NmF2 @ hmF2")
@@ -646,6 +828,8 @@ def plot_isr_range_comparison_cross_style(
                                    label=f"ISR range (n={window.shape[1]} hours)")
 
     ionosonde_nmF2, ionosonde_hmF2 = ionosonde_points_in_window(ionosonde, cycle_start, cycle_end)
+    ionosonde_profile = ionosonde_profile_window_stats(ionosonde, cycle_start, cycle_end, percentile)
+    _draw_ionosonde_profile_overlay(ax, ionosonde_profile)
     if len(ionosonde_nmF2):
         ax.scatter(ionosonde_nmF2, ionosonde_hmF2, color="red", marker="o",
                     s=20, zorder=6, label="ionosonde NmF2 @ hmF2")
@@ -850,10 +1034,16 @@ def _build_batch_isr_matches_from_saved(
             if isr.n_profiles is not None:
                 isr_n_profiles = isr.n_profiles[:, t_idx]
 
+        has_batch_window = start_time is not None and end_time is not None
         ionosonde_nmF2, ionosonde_hmF2 = (
             ionosonde_points_in_window(ionosonde, start_time, end_time)
-            if ionosonde is not None and start_time is not None and end_time is not None
+            if ionosonde is not None and has_batch_window
             else (None, None)
+        )
+        ionosonde_profile = (
+            ionosonde_profile_window_stats(ionosonde, start_time, end_time)
+            if ionosonde is not None and has_batch_window
+            else None
         )
 
         matches.append(BatchIsrMatch(
@@ -862,6 +1052,7 @@ def _build_batch_isr_matches_from_saved(
             isr_density_min=isr_density_min, isr_density_max=isr_density_max,
             isr_n_profiles=isr_n_profiles,
             ionosonde_nmF2=ionosonde_nmF2, ionosonde_hmF2=ionosonde_hmF2,
+            ionosonde_profile=ionosonde_profile,
         ))
 
         forecast_ensemble = analysis_ensemble   # next batch's prior (see docstring)
