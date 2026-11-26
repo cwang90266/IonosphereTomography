@@ -350,7 +350,7 @@ if [[ -z "$DRY_RUN" ]]; then
     cp "$jobfile" "$JOBLIST"
 fi
 
-par_args=(--nice "$NICE" -j "$JOBS" --colsep ' ' --tag -a "$jobfile")
+par_args=(--nice "$NICE" -j "$JOBS" --colsep ' ' --tag -a "$jobfile" --memfree "20G")
 if [[ -z "$DRY_RUN" ]]; then
     # Keep dry runs from overwriting the real job log
     par_args+=(--joblog "$JOBLOG")

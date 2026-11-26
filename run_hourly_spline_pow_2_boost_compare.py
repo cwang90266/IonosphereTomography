@@ -127,7 +127,7 @@ CENTER_SITE = "MIL"  # === Edit here ===  switch between MIL/TRO/SVL
 RUN_DATE_RANGE = ("2025-08-25", "2025-08-29")  # === Edit here ===
 
 # Observation ROI radius, also dynamic to run label and message
-ROI_RADIUS_KM = 2000.0  # === Edit here ===
+ROI_RADIUS_KM = 4000.0  # === Edit here ===
 
 # Diagonal covariance boost amplitude. Example 0.3 becomes "Op3Boost" in the label.
 BOOST_AMPLITUDE = 0.3  # === Edit here ===
@@ -246,6 +246,7 @@ BOOST_TAG = _boost_tag(BOOST_AMPLITUDE)
 LABEL_OF_EACH_RUN = (
     f"{CENTER_SITE}_{RUN_RANGE_TAG}_"
     f"ROI{ROI_RADIUS_KM:g}kmRadius_{BOOST_TAG}Boost"
+    f"_PowerLaw2Spline_500kmHorizontalBoostScale"
 )
 
 # Keep the run message synchronized automatically with the generated label.
@@ -279,7 +280,8 @@ ISR_FILES = {
 # printed warning, never required.
 TRO_IONOSONDE_FILE = None  # === Edit here === e.g. ISR_DIR / "TROIONO....nc"
 SVL_IONOSONDE_FILE = None  # === Edit here ===
-MIL_IONOSONDE_FILE = None  # === Edit here === e.g. ISR_DIR / "MILIONO_Aug2530_2025.nc"
+MIL_IONOSONDE_FILE = ("/home/pyxis/Test/2026-10-13_ionosphere_tomography/ionosonde/" +
+    "MILIONO_Aug2530_2025.nc") # === Edit here === e.g. ISR_DIR / "MILIONO_Aug2530_2025.nc"
 
 IONOSONDE_FILES = {
     "TRO": TRO_IONOSONDE_FILE,
