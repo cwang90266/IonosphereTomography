@@ -322,6 +322,33 @@ class TestObservationsGeolocationPlot:
         ax = output.plot_observations_geolocation(edp, [])
         assert ax.get_title().startswith("Geolocation")
 
+    def test_drops_ro_track_far_outside_the_grid_extent(self):
+        """Regression test for the 2026-11-27 investigation: a tangent
+        point far outside the mapped extent must not reach cartopy's
+        Geodetic-transform line plotting -- dropped before plotting
+        instead of risking a GEOS "Points of LinearRing do not form a
+        closed linestring" failure on an extreme/degenerate track."""
+        pytest.importorskip("cartopy")
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh(altitude)
+        near = _radial_ray_entry(edp, 3.0, 2.0, alt_top_km=500.0, label="near")
+        far = _radial_ray_entry(edp, 80.0, 170.0, alt_top_km=500.0, label="far")
+
+        ax = output.plot_observations_geolocation(edp, [near, far])
+        sc = next(c for c in ax.collections if (c.get_label() or "").startswith("RO tangent points"))
+        assert sc.get_offsets().shape[0] == 1
+
+
+class TestWithinAxesExtent:
+    def test_keeps_points_inside_and_drops_points_far_outside(self):
+        pytest.importorskip("cartopy")
+        altitude = np.linspace(100.0, 500.0, 5)
+        edp = _make_rectangle_with_mesh(altitude)
+        ax = edp.plot_geolocation()
+
+        mask = output._within_axes_extent(ax, np.array([0.0, 170.0]), np.array([5.0, 80.0]))
+        assert list(mask) == [True, False]
+
 
 def _toy_cycle_result_with_obs_type(n_batches=3, n_igs=1, n_ro=2, seed=1):
     """Like _toy_cycle_result, but also sets CycleBatch.obs_type (a mix of

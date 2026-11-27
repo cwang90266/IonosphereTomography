@@ -24,6 +24,7 @@ once their own directories are on ``sys.path`` -- see the package
 from __future__ import annotations
 
 import time
+import traceback
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -68,12 +69,32 @@ class PackageResult:
     """
 
 
+def _safe_plot(make_fig):
+    """Call the zero-arg ``make_fig`` and return its figure/axes, or
+    ``None`` (after printing a warning + traceback) if it raised --
+    diagnostic plots must never fail the run itself (2026-11-27 user
+    report: a cartopy/GEOS ``LinearRing`` exception from an extreme-extent
+    map, e.g. a 4000km-radius ROI's geolocation plot, took down an
+    otherwise-successful hour). ``_savefig`` is a no-op on ``None``, so
+    every call site just wraps its plot-producing expression in
+    ``_safe_plot(lambda: ...)``."""
+    try:
+        return make_fig()
+    except Exception:
+        traceback.print_exc()
+        print("[run_package] WARNING: a diagnostic plot failed; continuing without it.")
+        return None
+
+
 def _savefig(fig_or_ax_or_axes, path: Path) -> None:
     """Accepts a bare ``Figure``, a single ``Axes`` (``.figure`` used), or
     an array/list of ``Axes`` sharing one figure (e.g.
     ``Parameterized_EDPSamples.plot_reconstruction_error_statistics``'s
     ``plt.subplots(1, 2, ...)`` return) -- every plotting function used
-    in this module returns one of these three shapes."""
+    in this module returns one of these three shapes. A no-op when
+    ``fig_or_ax_or_axes`` is ``None`` -- the ``_safe_plot`` failure case."""
+    if fig_or_ax_or_axes is None:
+        return
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     obj = fig_or_ax_or_axes
@@ -199,10 +220,10 @@ def run_package(cfg: CycleConfig) -> PackageResult:
 
     # -- Step 3: input-distribution plot, from the real ensemble's own
     #    sampling_parameters (see note above) -----------------------------
-    _savefig(output.plot_iri_input_distributions(edp_samples.sampling_parameters),
+    _savefig(_safe_plot(lambda: output.plot_iri_input_distributions(edp_samples.sampling_parameters)),
              out / f"{cfg.label}_iri_input_distributions.png")
 
-    _savefig(edp_samples.plot_geolocation(), out / f"{cfg.label}_horizontal_grid.png")
+    _savefig(_safe_plot(edp_samples.plot_geolocation), out / f"{cfg.label}_horizontal_grid.png")
 
     raw_edps = np.asarray(edp_samples.edps)
     for target_alt in (100, 200, 300, 400, 500):
@@ -210,8 +231,9 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         actual_alt = float(edp_samples.altitude[alt_idx])
         mean_density = raw_edps[alt_idx, :, :].mean(axis=1)
         _savefig(
-            output.plot_horizontal(edp_samples, mean_density, target_alt=actual_alt,
-                                    scalar_label=f"mean Ne (m$^{{-3}}$) [{actual_alt:.0f} km]"),
+            _safe_plot(lambda: output.plot_horizontal(
+                edp_samples, mean_density, target_alt=actual_alt,
+                scalar_label=f"mean Ne (m$^{{-3}}$) [{actual_alt:.0f} km]")),
             out / f"{cfg.label}_mean_density_{int(actual_alt)}km.png",
         )
 
@@ -224,7 +246,7 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         pes.saveNetCDF(out / f"{cfg.label}_{style}_parameterized.nc")
         parameterizations[style] = pes
 
-        _savefig(pes.plot_reconstruction_error_statistics(),
+        _savefig(_safe_plot(pes.plot_reconstruction_error_statistics),
                  out / f"{cfg.label}_{style}_reconstruction_error.png")
 
     # -- Step 5: observation preparation + geolocation/obs-operator plots -
@@ -236,7 +258,7 @@ def run_package(cfg: CycleConfig) -> PackageResult:
 
     all_entries = _collect_unique_entries(batches)
 
-    _savefig(output.plot_observations_geolocation(edp_samples, all_entries),
+    _savefig(_safe_plot(lambda: output.plot_observations_geolocation(edp_samples, all_entries)),
              out / f"{cfg.label}_observations_geolocation.png")
 
     ro_entries = [e for e in all_entries if e.obs_type == "RO"]
@@ -245,10 +267,10 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         # plot below defaults it off, since pooling every entry's track
         # gets visually dense fast -- pass overlay_los explicitly to turn
         # it on for a one-off diagnostic.
-        fig = output.plot_observation_operator_sum(edp_samples, entry)
+        fig = _safe_plot(lambda: output.plot_observation_operator_sum(edp_samples, entry))
         _savefig(fig, out / f"{cfg.label}_obs_operator" / f"{entry.label}.png")
     if ro_entries:
-        _savefig(output.plot_observation_operator_sum_combined(edp_samples, ro_entries),
+        _savefig(_safe_plot(lambda: output.plot_observation_operator_sum_combined(edp_samples, ro_entries)),
                  out / f"{cfg.label}_obs_operator_sum_all_ro.png")
 
     # -- Steps 6-8: per-style assimilation, RMSE/rank plots, per-RO -------
@@ -305,31 +327,31 @@ def run_package(cfg: CycleConfig) -> PackageResult:
             iv_dir = style_dir / "impact_vectors" / qp.name
             batch_tag = f"batch{batch.batch_index:04d}"
             _savefig(
-                impact_vectors.plot_impact_vector_heatmap(
+                _safe_plot(lambda: impact_vectors.plot_impact_vector_heatmap(
                     impacts_by_ro, qp.altitudes,
                     title=f"{qp.name} impact vectors ({style}, batch {batch.batch_index})",
-                ),
+                )),
                 iv_dir / f"{batch_tag}_heatmap.png",
             )
             _savefig(
-                impact_vectors.plot_impact_vector_ranking(
+                _safe_plot(lambda: impact_vectors.plot_impact_vector_ranking(
                     impacts_by_ro,
                     title=f"{qp.name} impact ranking ({style}, batch {batch.batch_index})",
-                ),
+                )),
                 iv_dir / f"{batch_tag}_ranking.png",
             )
             _savefig(
-                impact_vectors.plot_impact_vector_ranking_relative_to_norm(
+                _safe_plot(lambda: impact_vectors.plot_impact_vector_ranking_relative_to_norm(
                     impacts_by_ro,
                     title=f"{qp.name} impact ranking, relative to total change ({style}, batch {batch.batch_index})",
-                ),
+                )),
                 iv_dir / f"{batch_tag}_ranking_relative_norm.png",
             )
             _savefig(
-                impact_vectors.plot_impact_vector_ranking_relative_to_local_change(
+                _safe_plot(lambda: impact_vectors.plot_impact_vector_ranking_relative_to_local_change(
                     impacts_by_ro, qp.altitudes,
                     title=f"{qp.name} impact ranking, relative to local change ({style}, batch {batch.batch_index})",
-                ),
+                )),
                 iv_dir / f"{batch_tag}_ranking_relative_local.png",
             )
 
@@ -352,19 +374,19 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                     )
                     forecast_profile_mean = forecast_profile_pt.mean(axis=1)
                     _savefig(
-                        impact_vectors.plot_impact_vector_isr_alignment(
+                        _safe_plot(lambda: impact_vectors.plot_impact_vector_isr_alignment(
                             impacts_by_ro, forecast_profile_mean, isr_density_nearest,
                             isr_dataset_primary.altitude, qp.altitudes,
                             title=f"{qp.name} ISR-alignment ranking ({style}, batch {batch.batch_index})",
-                        ),
+                        )),
                         iv_dir / f"{batch_tag}_isr_alignment.png",
                     )
                     _savefig(
-                        impact_vectors.plot_impact_vector_isr_aligned_heatmap(
+                        _safe_plot(lambda: impact_vectors.plot_impact_vector_isr_aligned_heatmap(
                             impacts_by_ro, forecast_profile_mean, isr_density_nearest,
                             isr_dataset_primary.altitude, qp.altitudes,
                             title=f"{qp.name} ISR-aligned heatmap ({style}, batch {batch.batch_index})",
-                        ),
+                        )),
                         iv_dir / f"{batch_tag}_isr_aligned_heatmap.png",
                     )
                     forecast_profile_for_save = forecast_profile_mean
@@ -458,13 +480,13 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                     y_abel_spherical = obs_operator.forward_from_density(abel_field[..., 0])[ray_slice]
 
                 _savefig(
-                    output.plot_tec_edp_profile_comparison(
+                    _safe_plot(lambda: output.plot_tec_edp_profile_comparison(
                         entry, y_forecast, y_analysis, y_measured,
                         edp_samples, decoded_forecast, decoded_analysis,
                         style=_style, boost_label=boost_label,
                         y_forecast_ensemble=y_forecast_ensemble,
                         y_abel_spherical=y_abel_spherical,
-                    ),
+                    )),
                     _style_dir / "profiles" / f"batch{batch.batch_index:04d}_{entry.label}.png",
                 )
 
@@ -484,10 +506,10 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                             on_batch=_on_batch)
         wall_time_s = time.time() - t0
 
-        _savefig(output.plot_rmse_reduction(result), style_dir / "rmse_reduction.png")
-        _savefig(output.plot_rank_histogram(result), style_dir / "rank_histogram.png")
-        _savefig(output.plot_effective_rank_series(result), style_dir / "effective_rank.png")
-        _savefig(output.plot_igs_tec_scatter(batches, result, style_label=style),
+        _savefig(_safe_plot(lambda: output.plot_rmse_reduction(result)), style_dir / "rmse_reduction.png")
+        _savefig(_safe_plot(lambda: output.plot_rank_histogram(result)), style_dir / "rank_histogram.png")
+        _savefig(_safe_plot(lambda: output.plot_effective_rank_series(result)), style_dir / "effective_rank.png")
+        _savefig(_safe_plot(lambda: output.plot_igs_tec_scatter(batches, result, style_label=style)),
                  style_dir / "igs_tec_scatter.png")
 
         # -- Per-style ISR comparison for every configured ISR station. --
@@ -508,18 +530,18 @@ def run_package(cfg: CycleConfig) -> PackageResult:
 
             for match in isr_collector.matches:
                 _savefig(
-                    isr_comparison.plot_isr_nearest_point_comparison(
+                    _safe_plot(lambda: isr_comparison.plot_isr_nearest_point_comparison(
                         match,
                         model_altitude,
                         isr_dataset.altitude,
                         station_name=isr_dataset.station.name,
                         style=style,
-                    ),
+                    )),
                     isr_dir / "nearest_point" / f"batch{match.batch_index:04d}.png",
                 )
 
             _savefig(
-                isr_comparison.plot_isr_range_comparison(
+                _safe_plot(lambda: isr_comparison.plot_isr_range_comparison(
                     isr_collector.matches,
                     isr_dataset,
                     cfg.start_time,
@@ -528,7 +550,7 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                     percentile=cfg.isr_range_percentile,
                     style=style,
                     ionosonde=ionosonde_dataset if isr_tag == "" else None,
-                ),
+                )),
                 isr_dir / "range_comparison.png",
             )
 
@@ -539,7 +561,7 @@ def run_package(cfg: CycleConfig) -> PackageResult:
             )
             _save_csv(rmse_df, isr_dir / "pooled_rmse.csv")
             _savefig(
-                isr_comparison.plot_pooled_isr_rmse(rmse_df, style=style),
+                _safe_plot(lambda: isr_comparison.plot_pooled_isr_rmse(rmse_df, style=style)),
                 isr_dir / "pooled_rmse.png",
             )
 
@@ -569,19 +591,19 @@ def run_package(cfg: CycleConfig) -> PackageResult:
             alt_idx = int(np.argmin(np.abs(edp_samples.altitude - target_alt)))
             actual_alt = float(edp_samples.altitude[alt_idx])
             _savefig(
-                output.plot_horizontal(
+                _safe_plot(lambda: output.plot_horizontal(
                     edp_samples, analysis_mean_density[alt_idx, :], target_alt=actual_alt,
                     scalar_label=f"analysis mean Ne (m$^{{-3}}$) [{actual_alt:.0f} km]",
-                ),
+                )),
                 style_dir / f"{cfg.label}_{style}_analysis_mean_density_{int(actual_alt)}km.png",
             )
             abs_max = float(np.abs(diff_density[alt_idx, :]).max()) or 1.0
             _savefig(
-                output.plot_horizontal(
+                _safe_plot(lambda: output.plot_horizontal(
                     edp_samples, diff_density[alt_idx, :], target_alt=actual_alt,
                     scalar_label=f"analysis - forecast mean Ne (m$^{{-3}}$) [{actual_alt:.0f} km]",
                     cmap="RdBu_r", vmin=-abs_max, vmax=abs_max,
-                ),
+                )),
                 style_dir / f"{cfg.label}_{style}_analysis_minus_forecast_density_{int(actual_alt)}km.png",
             )
 
@@ -593,10 +615,10 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     altitude = np.asarray(edp_samples.altitude)
     for (batch_index, entry_label), slot in cross_style_data.items():
         _savefig(
-            output.plot_cross_style_tec_edp_comparison(
+            _safe_plot(lambda: output.plot_cross_style_tec_edp_comparison(
                 slot["entry"], slot["tec"], slot["edp"], altitude,
                 boost_label=boost_label,
-            ),
+            )),
             out / f"{cfg.label}_cross_style_profiles" / f"batch{batch_index:04d}_{entry_label}.png",
         )
 
@@ -604,10 +626,10 @@ def run_package(cfg: CycleConfig) -> PackageResult:
     #    only populated when cfg.compute_impact_vectors was set. -----------
     for (batch_index, point_name), impacts_by_ro_by_style in impact_vector_cross_style_data.items():
         _savefig(
-            impact_vectors.plot_impact_vector_ranking_cross_style(
+            _safe_plot(lambda: impact_vectors.plot_impact_vector_ranking_cross_style(
                 impacts_by_ro_by_style,
                 title=f"{point_name} impact ranking, batch {batch_index} (all styles)",
-            ),
+            )),
             out / f"{cfg.label}_impact_vectors_cross_style" / point_name / f"batch{batch_index:04d}_ranking.png",
         )
 
@@ -645,17 +667,17 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                 continue
 
             _savefig(
-                isr_comparison.plot_isr_nearest_point_comparison_cross_style(
+                _safe_plot(lambda: isr_comparison.plot_isr_nearest_point_comparison_cross_style(
                     matches_for_batch,
                     model_altitude,
                     isr_dataset.altitude,
                     station_name=isr_dataset.station.name,
-                ),
+                )),
                 isr_cross_dir / "nearest_point" / f"batch{batch_index:04d}.png",
             )
 
         _savefig(
-            isr_comparison.plot_isr_range_comparison_cross_style(
+            _safe_plot(lambda: isr_comparison.plot_isr_range_comparison_cross_style(
                 matches_by_style,
                 isr_dataset,
                 cfg.start_time,
@@ -663,7 +685,7 @@ def run_package(cfg: CycleConfig) -> PackageResult:
                 model_altitude,
                 percentile=cfg.isr_range_percentile,
                 ionosonde=ionosonde_dataset if isr_tag == "" else None,
-            ),
+            )),
             isr_cross_dir / "range_comparison.png",
         )
 
@@ -674,12 +696,12 @@ def run_package(cfg: CycleConfig) -> PackageResult:
         )
         _save_csv(rmse_cross_df, isr_cross_dir / "pooled_rmse.csv")
         _savefig(
-            isr_comparison.plot_pooled_isr_rmse_cross_style(rmse_cross_df),
+            _safe_plot(lambda: isr_comparison.plot_pooled_isr_rmse_cross_style(rmse_cross_df)),
             isr_cross_dir / "pooled_rmse.png",
         )
 
     # -- Step 9: cross-style comparison ------------------------------------
-    _savefig(output.plot_style_comparison_summary(results_by_style),
+    _savefig(_safe_plot(lambda: output.plot_style_comparison_summary(results_by_style)),
              out / f"{cfg.label}_style_comparison.png")
 
     return PackageResult(
