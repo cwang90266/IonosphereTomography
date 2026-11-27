@@ -795,6 +795,45 @@ def plot_style_comparison_summary(results_by_style: dict, fig=None, figsize=(11,
     return fig
 
 
+def _within_axes_extent(ax, lon: np.ndarray, lat: np.ndarray, pad_frac: float = 1.0) -> np.ndarray:
+    """Boolean mask of which ``(lon, lat)`` points (degrees, Plate Carree)
+    fall within ``ax``'s own already-set extent, padded by ``pad_frac``
+    times that extent's width/height on each side -- generous enough to
+    keep a track that merely runs a bit past the visible frame, but drops
+    points that are wildly outside it.
+
+    Works for any ``ax.projection`` (polar-stereographic or Plate Carree)
+    by projecting the candidate points into the axes' own native
+    coordinates (``ax.get_xlim()``/``ax.get_ylim()`` are in that same
+    space once ``set_extent`` has run) rather than special-casing lon/lat
+    bounds -- a degrees-based bound would be meaningless for a polar
+    projection anyway.
+
+    Guards :func:`plot_observations_geolocation`'s RO tangent-point
+    overlay (2026-11-27 user report): an extreme/far-outside point handed
+    to a ``transform=ccrs.Geodetic()`` line plot forces cartopy to clip a
+    geodesic against the axes boundary, which is exactly the kind of GEOS
+    ring operation that can raise ``IllegalArgumentException: Points of
+    LinearRing do not form a closed linestring`` on a degenerate case.
+    Dropping far-outside points before plotting avoids handing cartopy
+    that geometry in the first place, rather than trying to catch the
+    failure after the fact.
+    """
+    lon = np.asarray(lon, dtype=float)
+    lat = np.asarray(lat, dtype=float)
+    xy = ax.projection.transform_points(ccrs.PlateCarree(), lon, lat)[:, :2]
+    x, y = xy[:, 0], xy[:, 1]
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    pad_x = pad_frac * (x1 - x0)
+    pad_y = pad_frac * (y1 - y0)
+    return (
+        np.isfinite(x) & np.isfinite(y)
+        & (x >= x0 - pad_x) & (x <= x1 + pad_x)
+        & (y >= y0 - pad_y) & (y <= y1 + pad_y)
+    )
+
+
 def plot_observations_geolocation(edp_samples, entries, ax=None, figsize=(10, 8)):
     """
     RO tangent-point tracks (colored by tangent altitude) + IGS pierce
@@ -841,6 +880,8 @@ def plot_observations_geolocation(edp_samples, entries, ax=None, figsize=(10, 8)
                    if e.tangent_alt_km is not None else np.full(lat.shape, np.nan))
             valid = np.isfinite(lat) & np.isfinite(lon)
             if np.any(valid):
+                valid = valid & _within_axes_extent(ax, lon, lat)
+            if np.any(valid):
                 ax.plot(lon[valid], lat[valid], transform=ccrs.Geodetic(),
                         color="red", linewidth=1.0, alpha=0.6, zorder=3)
             lat_parts.append(lat)
@@ -849,6 +890,8 @@ def plot_observations_geolocation(edp_samples, entries, ax=None, figsize=(10, 8)
 
         cat_lat, cat_lon, cat_alt = np.concatenate(lat_parts), np.concatenate(lon_parts), np.concatenate(alt_parts)
         valid = np.isfinite(cat_lat) & np.isfinite(cat_lon) & np.isfinite(cat_alt)
+        if np.any(valid):
+            valid = valid & _within_axes_extent(ax, cat_lon, cat_lat)
         if np.any(valid):
             sc = ax.scatter(cat_lon[valid], cat_lat[valid], transform=ccrs.PlateCarree(),
                              c=cat_alt[valid], s=10, zorder=4, label=f"RO tangent points (n={len(ro_entries)})")
